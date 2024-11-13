@@ -1,7 +1,6 @@
-# TERP Oline - Run Terp Network Nodes on Akash
+# TERP O-Line - Run Terp Network Nodes on Akash
 
-This is a meta package of [cosmos-sdk](https://github.com/cosmos/cosmos-sdk)-based
-docker images and configuration meant to make deploying onto [Akash](//github.com/akash-network/node)
+Make deploying Terp Network nodes onto [Akash](//github.com/akash-network/node)
 easy and standardized.
 
 The goal is to have a simple way to launch with a variety of different bootstrapping options.
@@ -25,12 +24,12 @@ O-line has a generic base image which can download the required binary at runtim
 
 This generic image provides the O-line scripts and configuration helpers, and nothing else. Set the `BINARY_URL` environment variable to a `.zip`, `.tar` or `.tar.gz` URL, and configure `PROJECT`, `PROJECT_DIR` and `PROJECT_BIN`. Alternatively provide a [Chain Registry](https://github.com/cosmos/chain-registry) `CHAIN_JSON` to configure everything automatically (where data is available).
 
-Image URL: `ghcr.io/akash-network/cosmos-omnibus:v0.4.18-generic`
+Image URL: `ghcr.io/terp-network/o-line:v0.0.1-generic`
 
 ```yaml
 services:
   node:
-    image: ghcr.io/akash-network/cosmos-omnibus:v0.4.18-generic
+    image: ghcr.io/terpnetwork/o-line:v0.0.1-generic
     env:
       - MONIKER=my-moniker-1
       - CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/refs/heads/master/terpnetwork/chain.json
@@ -41,7 +40,7 @@ More information on the generic image can be found at [/generic](./generic/), an
 
 ## Networks (pre-built images)
 
-The available docker images can be found [here](https://github.com/orgs/akash-network/packages/container/package/cosmos-omnibus).  They are
+The available docker images can be found [here](https://github.com/terpnetwork/o-line/pkgs/container/o-line).  They are
 tagged with the form `$COSMOS_OMNIBUS_VERSION-$PROJECT-$PROJECT_VERSION`.
 
 |Project|Version|Image| |
@@ -85,7 +84,7 @@ Every chain has its own prefix, but the format of the configuration is the same.
 For example to configure the `seeds` option in the `p2p` section of `config.toml`, for the Akash blockchain:
 
 ```
-AKASH_P2P_SEEDS=id@node:26656
+TERP_P2P_SEEDS=id@node:26656
 ```
 
 The namespace for each of the supported chains in the cosmos omnibus can be found in the `README` in each project directory.
@@ -98,9 +97,9 @@ Chain config can be sourced from a `chain.json` file [as seen in the Cosmos Chai
 
 |Variable|Description|Default|Examples|
 |---|---|---|---|
-|`CHAIN_JSON`|URL to a `chain.json` file detailing the chain meta| |`https://github.com/cosmos/chain-registry/blob/master/akash/chain.json`
+|`CHAIN_JSON`|URL to a `chain.json` file detailing the chain meta| |`https://raw.githubusercontent.com/terpnetwork/networks/main/mainnet/morocco-1/genesis.json`
 |`CHAIN_ID`|The cosmos chain ID| |`akashnet-2`
-|`GENESIS_URL`|URL to the genesis file in `.gz`, `.tar.gz`, or `.zip` format. Can be set by CHAIN_JSON| |`https://raw.githubusercontent.com/akash-network/net/main/mainnet/genesis.json`
+|`GENESIS_URL`|URL to the genesis file in `.gz`, `.tar.gz`, or `.zip` format. Can be set by CHAIN_JSON| |`https://raw.githubusercontent.com/terp/net/main/mainnet/genesis.json`
 |`DOWNLOAD_GENESIS`|Force download of genesis file. If unset the node will only download if the genesis file is missing| |`1`|
 |`VALIDATE_GENESIS`|Set to 1 to enable validation of genesis file|`0`|`1`
 
@@ -118,7 +117,7 @@ See [Cosmos docs](https://docs.tendermint.com/master/nodes/configuration.html#p2
 |---|---|---|---|
 |`P2P_SEEDS`|Seed nodes. Can be set by CHAIN_JSON or GENESIS_URL| |`id@node:26656`|
 |`P2P_PERSISTENT_PEERS`|Persistent peers. Can be set by CHAIN_JSON or GENESIS_URL| |`id@node:26656`|
-|`ADDRBOOK_URL`|URL to an addrbook.json file| |`https://quicksync.io/addrbook.terra.json`
+|`ADDRBOOK_URL`|URL to an addrbook.json file| |`https://server-3.itrocket.net/mainnet/terp/addrbook.json`
 
 ### Private key backup/restore
 
@@ -254,6 +253,7 @@ See [Cosmos docs](https://docs.tendermint.com/master/nodes/configuration.html) f
 |`FASTSYNC_VERSION`|The fastsync version| |`v0`|
 |`MINIMUM_GAS_PRICES`|Minimum gas prices| |`0.025uthiol`|
 |`PRUNING`|How much of the chain to prune| |`nothing`|
+|`PRUNING_CUSTOM`|custom pruning options| |`1`|
 |`DEBUG`|Set to `1` to output all environment variables on boot. Set to `2` to debug shell scripts.| |`1`, `2`|
 
 ## Contributing
@@ -262,6 +262,6 @@ See [Cosmos docs](https://docs.tendermint.com/master/nodes/configuration.html) f
 
 - Ideally source or setup a `chain.json` to provide a single source of truth for chain info
 - Add a project directory based on the existing projects
-- Update the [github workflow](https://github.com/akash-network/cosmos-omnibus/blob/master/.github/workflows/publish.yaml) to create an image for your chain
+- Update the [github workflow](https://github.com/terpnetwork/o-line/blob/master/.github/workflows/publish.yaml) to create an image for your chain
 
 Submit a PR or an issue if you want to see any specific chains. -->
