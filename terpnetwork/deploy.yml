@@ -10,7 +10,7 @@ services:
       - GENESIS_URL=https://raw.githubusercontent.com/terpnetwork/networks/main/mainnet/morocco-1/genesis.json
       # state-sync 
       - FASTSYNC_VERSION=v0 
-      - STATESYNC_RPC_SERVERS=<https://terp-mainnet-rpc.itrocket.net:443> 
+      - STATESYNC_RPC_SERVERS=<https://terp-mainnet-rpc.itrocket.net:443,https://terp.rpc.m.anode.team:443> 
       # pruning options
       - PRUNING_CUSTOM=1
       - PRUNING_KEEP_RECENT=100000
