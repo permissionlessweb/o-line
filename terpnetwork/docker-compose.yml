@@ -2,11 +2,12 @@ version: '3.4'
 
 services:
   node_1:
-    image: ghcr.io/akash-network/cosmos-omnibus:v0.3.27-terpnetwork-v4.2.2
+    image: terpnetwork/o-line:v0.0.1
     ports:
-      - '26656:26656'
-      - '26657:26657'
-      - '1317:1317'
+      - '26656:26656' # peer
+      - '26657:26657' # rpc 
+      - '1317:1317'   # api
+      - '9090:9090'   # grpc
     environment:
       - MONIKER=node_1
       - CHAIN_ID=morocco-1

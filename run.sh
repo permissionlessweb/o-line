@@ -127,41 +127,41 @@ export "${NAMESPACE}_RPC_LADDR"="${RPC_LADDR:-tcp://0.0.0.0:26657}"
 [ -n "$PRUNING_KEEP_RECENT" ] && export "${NAMESPACE}_PRUNING_KEEP_RECENT"=$PRUNING_KEEP_RECENT
 
 # Polkachu
-if [[ -n "$P2P_POLKACHU" || -n "$STATESYNC_POLKACHU"  ]]; then
-  export POLKACHU_CHAIN_ID="${POLKACHU_CHAIN_ID:-$PROJECT}"
-  POLKACHU_CHAIN=`curl -Ls https://polkachu.com/api/v2/chains/$POLKACHU_CHAIN_ID | jq .`
-  if [ -z "$POLKACHU_CHAIN" ]; then
-    echo "Polkachu chain not recognised (POLKACHU_CHAIN_ID might need to be set)"
-  else
-    [ "$DEBUG" == "1" ] && echo $POLKACHU_CHAIN
-    # Polkachu statesync
-    if [ -n "$STATESYNC_POLKACHU" ]; then
-      export POLKACHU_STATESYNC_ENABLED=$(echo $POLKACHU_CHAIN | jq -r '.polkachu_services.state_sync.active')
-      if [ $POLKACHU_STATESYNC_ENABLED = true ]; then
-        export POLKACHU_RPC_SERVER=$(echo $POLKACHU_CHAIN | jq -r '.polkachu_services.state_sync.node')
-        export STATESYNC_RPC_SERVERS="$POLKACHU_RPC_SERVER,$POLKACHU_RPC_SERVER"
-      else
-        echo "Polkachu statesync is not active for this chain"
-      fi
-    fi
+# if [[ -n "$P2P_POLKACHU" || -n "$STATESYNC_POLKACHU"  ]]; then
+#   export POLKACHU_CHAIN_ID="${POLKACHU_CHAIN_ID:-$PROJECT}"
+#   POLKACHU_CHAIN=`curl -Ls https://polkachu.com/api/v2/chains/$POLKACHU_CHAIN_ID | jq .`
+#   if [ -z "$POLKACHU_CHAIN" ]; then
+#     echo "Polkachu chain not recognised (POLKACHU_CHAIN_ID might need to be set)"
+#   else
+#     [ "$DEBUG" == "1" ] && echo $POLKACHU_CHAIN
+#     # Polkachu statesync
+#     if [ -n "$STATESYNC_POLKACHU" ]; then
+#       export POLKACHU_STATESYNC_ENABLED=$(echo $POLKACHU_CHAIN | jq -r '.polkachu_services.state_sync.active')
+#       if [ $POLKACHU_STATESYNC_ENABLED = true ]; then
+#         export POLKACHU_RPC_SERVER=$(echo $POLKACHU_CHAIN | jq -r '.polkachu_services.state_sync.node')
+#         export STATESYNC_RPC_SERVERS="$POLKACHU_RPC_SERVER,$POLKACHU_RPC_SERVER"
+#       else
+#         echo "Polkachu statesync is not active for this chain"
+#       fi
+#     fi
 
-    # Polkachu live peers
-    if [ "$P2P_POLKACHU" == "1" ]; then
-      export POLKACHU_SEED_ENABLED=$(echo $POLKACHU_CHAIN | jq -r '.polkachu_services.seed.active')
-      if [ $POLKACHU_SEED_ENABLED ]; then
-        export POLKACHU_SEED=$(echo $POLKACHU_CHAIN | jq -r '.polkachu_services.seed.seed')
-        if [ -n "$P2P_SEEDS" ]; then
-            export P2P_SEEDS="$POLKACHU_SEED,$P2P_SEEDS"
-        else
-            export P2P_SEEDS="$POLKACHU_SEED"
-        fi
-      else
-        echo "Polkachu seed is not active for this chain"
-      fi
-    fi
+#     # Polkachu live peers
+#     if [ "$P2P_POLKACHU" == "1" ]; then
+#       export POLKACHU_SEED_ENABLED=$(echo $POLKACHU_CHAIN | jq -r '.polkachu_services.seed.active')
+#       if [ $POLKACHU_SEED_ENABLED ]; then
+#         export POLKACHU_SEED=$(echo $POLKACHU_CHAIN | jq -r '.polkachu_services.seed.seed')
+#         if [ -n "$P2P_SEEDS" ]; then
+#             export P2P_SEEDS="$POLKACHU_SEED,$P2P_SEEDS"
+#         else
+#             export P2P_SEEDS="$POLKACHU_SEED"
+#         fi
+#       else
+#         echo "Polkachu seed is not active for this chain"
+#       fi
+#     fi
 
-  fi
-fi
+#   fi
+# fi
 
 # Peers
 [ -n "$P2P_SEEDS" ] && [ "$P2P_SEEDS" != '0' ] && export "${NAMESPACE}_P2P_SEEDS=${P2P_SEEDS}"
@@ -213,6 +213,18 @@ fi
 # Overwrite seeds in config.toml for chains that are not using the env variable correctly
 if [ "$OVERWRITE_SEEDS" == "1" ]; then
     sed -i "s/seeds = \"\"/seeds = \"$P2P_SEEDS\"/" $CONFIG_PATH/config.toml
+fi
+
+# Enable custom pruning options in app.toml if PRUNING_CUSTOM is set to "1"
+if [ "$PRUNING_CUSTOM" == "1" ]; then
+  # Set pruning strategy to "custom"
+  sed -i "s/pruning = \"[a-zA-Z]*\"/pruning = \"custom\"/" $CONFIG_PATH/app.toml
+  
+  # Update pruning-keep-recent to the value of PRUNING_KEEP_RECENT
+  sed -i "s/pruning-keep-recent = \"[0-9]*\"/pruning-keep-recent = \"$PRUNING_KEEP_RECENT\"/" $CONFIG_PATH/app.toml
+  
+  # Update pruning-interval to the value of PRUNING_INTERVAL
+  sed -i "s/pruning-interval = \"[0-9]*\"/pruning-interval = \"$PRUNING_INTERVAL\"/" $CONFIG_PATH/app.toml
 fi
 
 # Restore keys

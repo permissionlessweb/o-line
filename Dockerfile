@@ -42,15 +42,6 @@ WORKDIR $BUILD_DIR
 RUN git checkout $VERSION
 
 #
-# Optional build environment for Starport chains
-#
-FROM build_source AS build_starport
-
-ARG BUILD_CMD="starport chain build"
-
-RUN curl https://get.starport.network/starport! | bash
-
-#
 # Optional build environment for Skip support
 #
 FROM build_source AS build_skip
@@ -114,24 +105,6 @@ RUN if [ -n "$BINARY_ZIP_PATH" ]; then \
 RUN chmod +x /bin/$PROJECT_BIN
 
 #
-# Custom image for injective
-#
-FROM debian:buster AS injective
-
-ARG VERSION
-
-RUN apt-get update && \
-  apt-get install --no-install-recommends --assume-yes ca-certificates curl unzip && \
-  apt-get clean
-
-WORKDIR /data
-RUN curl -Lo /data/release.zip https://github.com/InjectiveLabs/injective-chain-releases/releases/download/$VERSION/linux-amd64.zip
-RUN unzip -oj /data/release.zip
-RUN mv injectived /bin
-RUN mv libwasmvm.x86_64.so /usr/lib
-RUN chmod +x /bin/injectived
-
-#
 # ZSTD build
 #
 FROM gcc:12 AS zstd_build
@@ -165,7 +138,7 @@ RUN apt-get update && \
 # Note optional `BUILD_IMAGE` argument controls the base image
 #
 FROM ${BUILD_IMAGE} AS omnibus
-LABEL org.opencontainers.image.source https://github.com/akash-network/cosmos-omnibus
+LABEL org.opencontainers.image.source https://github.com/terpnetwork/o-line
 
 RUN apt-get update && \
   apt-get install --no-install-recommends --assume-yes ca-certificates curl wget file unzip liblz4-tool gnupg2 jq pv && \

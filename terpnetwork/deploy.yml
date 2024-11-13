@@ -3,17 +3,30 @@ version: "2.0"
 
 services:
   node:
-    image: ghcr.io/akash-network/cosmos-omnibus:v0.3.27-terpnetwork-v4.2.2
+    image: terpnetwork/o-line:v0.0.1
     env:
       - MONIKER=my-moniker-1
       - CHAIN_ID=morocco-1
       - GENESIS_URL=https://raw.githubusercontent.com/terpnetwork/networks/main/mainnet/morocco-1/genesis.json
+      # state-sync 
+      - FASTSYNC_VERSION=v0 
+      - STATESYNC_RPC_SERVERS=<https://terp-mainnet-rpc.itrocket.net:443> 
+      # pruning options
+      - PRUNING_CUSTOM=1
+      - PRUNING_KEEP_RECENT=100000
+      - PRUNING_INTERVAL=100
     expose:
-      - port: 26657
+      - port: 26657 # rpc
         as: 80
         to:
           - global: true
-      - port: 26656
+      - port: 26656 # peer
+        to:
+          - global: true
+      - port: 8080 # grpc
+        to:
+          - global: true
+      - port: 1317 # api 
         to:
           - global: true
     # params:
