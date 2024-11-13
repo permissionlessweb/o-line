@@ -42,15 +42,6 @@ WORKDIR $BUILD_DIR
 RUN git checkout $VERSION
 
 #
-# Optional build environment for Starport chains
-#
-FROM build_source AS build_starport
-
-ARG BUILD_CMD="starport chain build"
-
-RUN curl https://get.starport.network/starport! | bash
-
-#
 # Optional build environment for Skip support
 #
 FROM build_source AS build_skip
@@ -112,24 +103,6 @@ RUN if [ -n "$BINARY_ZIP_PATH" ]; then \
       mv /bin/${BINARY_ZIP_PATH} /bin; \
     fi
 RUN chmod +x /bin/$PROJECT_BIN
-
-#
-# Custom image for injective
-#
-FROM debian:buster AS injective
-
-ARG VERSION
-
-RUN apt-get update && \
-  apt-get install --no-install-recommends --assume-yes ca-certificates curl unzip && \
-  apt-get clean
-
-WORKDIR /data
-RUN curl -Lo /data/release.zip https://github.com/InjectiveLabs/injective-chain-releases/releases/download/$VERSION/linux-amd64.zip
-RUN unzip -oj /data/release.zip
-RUN mv injectived /bin
-RUN mv libwasmvm.x86_64.so /usr/lib
-RUN chmod +x /bin/injectived
 
 #
 # ZSTD build
