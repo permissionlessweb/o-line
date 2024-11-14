@@ -8,9 +8,10 @@ services:
       - MONIKER=my-moniker-1
       - CHAIN_ID=morocco-1
       - GENESIS_URL=https://raw.githubusercontent.com/terpnetwork/networks/main/mainnet/morocco-1/genesis.json
+      - P2P_SEEDS=d8256642afae77264bcce1631d51233a9d00249b@terp-mainnet-seed.itrocket.net:13656 
       # state-sync 
       - FASTSYNC_VERSION=v0 
-      - STATESYNC_RPC_SERVERS=<https://terp-mainnet-rpc.itrocket.net:443,https://terp.rpc.m.anode.team:443> 
+      - STATESYNC_RPC_SERVERS=<https://terp-mainnet-rpc.itrocket.net:443,https://terp.rpc.m.anode.team:443,https://rpc.terp.aknodes.net:443> 
       # pruning options
       - PRUNING_CUSTOM=1
       - PRUNING_KEEP_RECENT=100000

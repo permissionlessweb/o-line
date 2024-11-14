@@ -57,7 +57,7 @@ See the `deploy.yml` example file in each chain directory which details the mini
 
 ### Running locally/any docker host
 
-See the `docker-compose.yml` example file in each chain directory to run each node using `docker-compose up`.
+See the `docker-compose.yml` example file in each chain directory to run each node using `docker-compose up`. Note that the release images only supports amd64 platforms. You will have to manually compile the o-line image for the arm64 platform.
 
 ## Snapshots
 
@@ -81,13 +81,13 @@ See the [_examples](./_examples) directory for some common setups, including:
 Cosmos blockchains can be configured entirely using environment variables instead of the config files.
 Every chain has its own prefix, but the format of the configuration is the same.
 
-For example to configure the `seeds` option in the `p2p` section of `config.toml`, for the Akash blockchain:
+For example to configure the `seeds` option in the `p2p` section of `config.toml`, for Terp Network:
 
-```
+```yml
 TERP_P2P_SEEDS=id@node:26656
 ```
 
-The namespace for each of the supported chains in the cosmos omnibus can be found in the `README` in each project directory.
+<!-- The namespace for each of the supported chains in the cosmos omnibus can be found in the `README` in each project directory. -->
 
 The omnibus images allow some specific variables and shortcuts to configure extra functionality, detailed below.
 
