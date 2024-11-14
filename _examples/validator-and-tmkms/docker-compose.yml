@@ -1,6 +1,6 @@
 services:
   stunnel:
-    image: ghcr.io/ovrclk/stunnel-proxy:v0.0.6
+    image: ghcr.io/ovrclk/stunnel-proxy:v0.07
     environment:
       - PSK=DmtaC6N3HOWFkJZpNZs2dkabFT5yQONw # must match PSK in Stunnel server
       - STUNNEL_SVC_RPC_CLIENT=yes # client mode - we are sending connections from this proxy
