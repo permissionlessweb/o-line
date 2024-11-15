@@ -23,7 +23,7 @@ RUN apt-get update && \
 #
 FROM build_base AS build_wasmvm
 
-ARG WASMVM_VERSION=v0.16.7
+ARG WASMVM_VERSION=v1.5.4
 ARG WASMVM_URL=https://raw.githubusercontent.com/CosmWasm/wasmvm/${WASMVM_VERSION}/api/libwasmvm.so
 ADD ${WASMVM_URL} /lib/libwasmvm.so
 

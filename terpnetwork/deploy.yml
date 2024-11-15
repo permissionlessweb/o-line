@@ -3,20 +3,24 @@ version: "2.0"
 
 services:
   node:
-    image: ghcr.io/terpnetwork/o-line:v0.07-terpnetwork-v4.2.2
+    image: ghcr.io/terpnetwork/o-line:v0.0.8-terpnetwork-v4.2.2
     env:
       - MONIKER=my-moniker-1
       - CHAIN_ID=morocco-1
+      - CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/master/terpnetwork/chain.json
       - GENESIS_URL=https://raw.githubusercontent.com/terpnetwork/networks/main/mainnet/morocco-1/genesis.json
+      # peers
       - P2P_SEEDS=d8256642afae77264bcce1631d51233a9d00249b@terp-mainnet-seed.itrocket.net:13656 
       - P2P_PERSISTENT_PEERS=a81dc3bf1bb1c3837b768eeb82659eecc971890b@terp-mainnet-peer.itrocket.net:13656
+      # snapshot
+      - SNAPSHOT_URL=https://snapshots.nodejumper.io/terp/terp_latest.tar.lz4
       # state-sync 
-      - FASTSYNC_VERSION=v0 
-      - STATESYNC_RPC_SERVERS=<https://terp-mainnet-rpc.itrocket.net:443,https://terp.rpc.m.anode.team:443,https://rpc.terp.aknodes.net:443> 
+      # - FASTSYNC_VERSION=v0 
+      # - STATESYNC_RPC_SERVERS=<https://terp-mainnet-rpc.itrocket.net:443,https://terp.rpc.m.anode.team:443,https://rpc.terp.aknodes.net:443> 
       # pruning options
-      - PRUNING_CUSTOM=1
-      - PRUNING_KEEP_RECENT=100000
-      - PRUNING_INTERVAL=100
+      # - PRUNING_CUSTOM=1
+      # - PRUNING_KEEP_RECENT=100000
+      # - PRUNING_INTERVAL=100
     expose:
       - port: 26657 # rpc
         as: 80

@@ -24,12 +24,12 @@ O-line has a generic base image which can download the required binary at runtim
 
 This generic image provides the O-line scripts and configuration helpers, and nothing else. Set the `BINARY_URL` environment variable to a `.zip`, `.tar` or `.tar.gz` URL, and configure `PROJECT`, `PROJECT_DIR` and `PROJECT_BIN`. Alternatively provide a [Chain Registry](https://github.com/cosmos/chain-registry) `CHAIN_JSON` to configure everything automatically (where data is available).
 
-Image URL: `ghcr.io/terp-network/o-line:v0.07-generic`
+Image URL: `ghcr.io/terp-network/o-line:v0.0.8-generic`
 
 ```yaml
 services:
   node:
-    image: ghcr.io/terpnetwork/o-line:v0.07-generic
+    image: ghcr.io/terpnetwork/o-line:v0.0.8-generic
     env:
       - MONIKER=my-moniker-1
       - CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/refs/heads/master/terpnetwork/chain.json
@@ -45,7 +45,7 @@ tagged with the form `$COSMOS_OMNIBUS_VERSION-$PROJECT-$PROJECT_VERSION`.
 
 |Project|Version|Image| |
 |---|---|---|---|
-|[terp-network](https://github.com/terpnetwork/terp-core)|`v4.2.2`|`terpnetwork/o-line:v0.07`|[Example](./terpnetwork)|
+|[terp-network](https://github.com/terpnetwork/terp-core)|`v4.2.2`|`terpnetwork/o-line:v0.0.8`|[Example](./terpnetwork)|
 
 ## Example configurations
 
@@ -260,7 +260,7 @@ See [Cosmos docs](https://docs.tendermint.com/master/nodes/configuration.html) f
 
 ### Creating New ghcr.io image:
 ```sh
-git tag v0.07 && git push --tags
+git tag v0.0.8 && git push --tags
 ```
 
 <!-- Adding a new chain is easy:
