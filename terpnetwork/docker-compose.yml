@@ -2,7 +2,7 @@ version: '3.4'
 
 services:
   node_1:
-    image: ghcr.io/terpnetwork/o-line:v0.0.10-terpnetwork-v4.2.2
+    image: ghcr.io/terpnetwork/o-line:v0.0.11-terpnetwork-v4.2.2
     ports:
       - '26656:26656' # peer
       - '26657:26657' # rpc 
