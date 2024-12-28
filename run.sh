@@ -476,3 +476,21 @@ else
   echo "Running '$START_CMD'..."
   exec $START_CMD
 fi
+
+# create systemctl for caddy 
+cat > /etc/systemd/system/caddy.service <<EOF
+[Unit]
+Description=Caddy Web Server
+After=network.target
+
+[Service]
+User=root
+ExecStart=/usr/bin/caddy start --config /etc/caddy/Caddyfile
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable caddy.service

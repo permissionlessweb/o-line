@@ -39,6 +39,20 @@ fi
 TIME=$(date -u +%T)
 DOW=$(date +%u)
 
+# create new caddy file 
+echo "Creating new Caddy file"
+cat > /etc/caddy/Caddyfile <<EOF
+:80 {
+    root * ${SNAPSHOT_PATH}
+    file_server {
+        browse
+    }
+     rewrite /terp_latest.tar.gz {
+        to /${SNAPSHOT_PREFIX}_latest.tar.gz
+    }
+}
+EOF
+
 echo "$TIME: Starting server"
 echo "$TIME: Snapshot will run at $SNAPSHOT_TIME on day $SNAPSHOT_DAY"
 exec $SNAPSHOT_CMD &
@@ -48,66 +62,29 @@ while true; do
     TIME=$(date -u +%T)
     DOW=$(date +%u)
     if [[ ($SNAPSHOT_DAY == "*") || ($SNAPSHOT_DAY == $DOW) ]] && [[ $SNAPSHOT_TIME == $TIME ]]; then
-        echo "$TIME: Stopping server"
+        get block height 
+        echo "$TIME: Stopping terp node"
         kill -15 $PID
         wait
 
-        echo "$TIME: Running snapshot"
-        timestamp=$(date +"%Y-%m-%dT%H:%M:%S")
+        echo "$TIME: Stopping caddy"
+        systemctl stop caddy.service
 
+        echo "$TIME: Creating snapshot"
+        timestamp=$(date +"%Y-%m-%dT%H:%M:%S")
         SNAPSHOT_SIZE=$(du -sb $SNAPSHOT_DIR | cut -f1)
 
+        mkdir -p "${SNAPSHOT_PATH}"
+        tar -czf "${SNAPSHOT_PATH}/${SNAPSHOT_PREFIX}_${timestamp}.tar.gz" -C "${SNAPSHOT_DIR}" .
+        ln -sf "${SNAPSHOT_PATH}/${SNAPSHOT_PREFIX}_${timestamp}.tar.gz" "${SNAPSHOT_PATH}/terp_latest.tar.gz"
 
-
-        # compress snapshot_path to tarball 
-        log_this "Creating new snapshot"
-        time tar cf ${HOME}/${SNAP_NAME} -C ${SNAPSHOT_DIR} . &>>${LOG_PATH}
-
-        # move compress image to snapshot folder 
-        log_this "Moving new snapshot to ${SNAP_PATH}"
-        mv ${HOME}/${CHAIN_ID}*tar ${SNAP_PATH} &>>${LOG_PATH}
-
-
+        # Serve snapshot via caddy
+        log_this "Serving new snapshot"
+        systemctl start caddy.service &
+        caddy_pid=$!
+        echo "$TIME: Snapshot available at http://localhost:80/terp_latest.tar.gz"
     fi
-        if [[ $SNAPSHOT_RETAIN != "0" || $SNAPSHOT_METADATA != "0" ]]; then
-            fi
-            snapshots=()
-            for line in "${s3Files[@]}"; do
-                createDate=`echo $line|awk {'print $1" "$2'}`
-                createDate=`date -d"$createDate" +%s`
-                fileName=`echo $line|awk '{$1=$2=$3=""; print $0}' | sed 's/^[ \t]*//'`
-                if [[ -n $SNAPSHOT_METADATA_URL && $SNAPSHOT_METADATA_URL != */ ]]; then
-                    fileUrl="${SNAPSHOT_METADATA_URL}/${fileName}"
-                else
-                    fileUrl="${SNAPSHOT_METADATA_URL}${fileName}"
-                fi
-                ## prune any snapshots if configured
-                if [ "$SNAPSHOT_RETAIN" != "0" ]; then
-                    olderThan=`date -d"-$SNAPSHOT_RETAIN" +%s`
-                    if [[ $createDate -lt $olderThan ]]; then
-                        if [[ $fileName != "" ]]; then
-                            echo "$TIME: Deleting snapshot $fileName"
-                        fi
-                    else
-                        snapshots+=("$fileUrl")
-                    fi
-                else
-                    snapshots+=("$fileUrl")
-                fi
-            done;
-
-            if [ "$SNAPSHOT_METADATA" != "0" ]; then
-                echo "$TIME: Uploading metadata"
-                snapshotJson="[]"
-                for url in ${snapshots[@]}; do
-                    snapshotJson="$(echo $snapshotJson | jq ".+[\"$url\"]")"
-                done
-                else
-                fi
-            fi
-        fi
-
-        echo "$TIME: Restarting server"
+        echo "$TIME: Restarting terpd"
         exec $SNAPSHOT_CMD &
         PID=$!
         sleep 1s
@@ -118,3 +95,5 @@ while true; do
         fi
     fi
 done
+
+# todo: after n snapshots created prune k # of snapshots by saving to jackal storage provider

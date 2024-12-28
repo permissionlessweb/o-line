@@ -141,8 +141,12 @@ FROM ${BUILD_IMAGE} AS omnibus
 LABEL org.opencontainers.image.source https://github.com/terpnetwork/o-line
 
 RUN apt-get update && \
-  apt-get install --no-install-recommends --assume-yes ca-certificates curl wget file unzip liblz4-tool gnupg2 jq pv && \
+  apt-get install --no-install-recommends --assume-yes ca-certificates apt-transport-https curl wget file unzip liblz4-tool gnupg2 jq pv && \
   apt-get clean
+
+# install caddy 
+RUN echo "deb [trusted=yes] https://apt.fury.io/caddy/ /" | tee -a /etc/apt/sources.list.d/caddy-fury.list
+RUN apt-get update && apt-get install -y caddy
 
 COPY --from=zstd_build /usr/local/bin/zstd /bin/
 
