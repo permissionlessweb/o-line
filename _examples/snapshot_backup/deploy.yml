@@ -3,18 +3,18 @@ version: "2.0"
 
 services:
   node:
-    image: ghcr.io/terpnetwork/o-line:v0.0.9-terpnetwork-v4.2.2
+    image: ghcr.io/terpnetwork/o-line:v0.0.10-terpnetwork-v4.2.2
     env:
       - MONIKER=my-moniker-1
       - CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/refs/heads/master/terpnetwork/chain.json
       - MINIMUM_GAS_PRICES=0.05uthiol
       - FASTSYNC_VERSION=v0
-      # - P2P_POLKACHU=1
-      - STATESYNC_RPC_SERVERS=<publicnode1:26657,publicnode2:26657>
       - SNAPSHOT_PATH=<bucket/path>
       - SNAPSHOT_TIME=00:00:00
       # - SNAPSHOT_DAY=* #(1-7)
       - SNAPSHOT_SIZE=214748364800 # 200GB in bytes
+      - ADDRBOOK_URL=https://server-3.itrocket.net/mainnet/terp/addrbook.json
+      - SNAPSHOT_URL=https://snapshots.nodejumper.io/terp/terp_latest.tar.lz4
     expose:
       - port: 26657
         to:

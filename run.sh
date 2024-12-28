@@ -274,7 +274,7 @@ if [ -n "$STATESYNC_RPC_SERVERS" ]; then
   fi
 fi
 
-if [[ -z $DOWNLOAD_SNAPSHOT && ( -n $SNAPSHOT_URL || -n $SNAPSHOT_BASE_URL || -n $SNAPSHOT_JSON || -n $SNAPSHOT_QUICKSYNC ) && ! -f "$PROJECT_ROOT/data/priv_validator_state.json" ]]; then
+if [[ -z $DOWNLOAD_SNAPSHOT && ( -n $SNAPSHOT_URL || -n $SNAPSHOT_BASE_URL || -n $SNAPSHOT_JSON) && ! -f "$PROJECT_ROOT/data/priv_validator_state.json" ]]; then
   export DOWNLOAD_SNAPSHOT="1"
 fi
 
