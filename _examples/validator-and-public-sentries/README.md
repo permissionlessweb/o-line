@@ -1,7 +1,5 @@
 # Validator and Public Sentries
 
-> You can replace Akash with any other chain supported by the cosmos-omnibus project https://github.com/terpnetwork/o-line or is available via meta.json (see https://github.com/cosmos/chain-registry )
-
 Sentry node is the internet facing node which serves the blocks to the validator as well as distributes them from the validator when validator signs them upon its turn in the tendermint consensus.  
 
 Validator does not announce its existence to the network (`pex=false` /& `private_peer_ids`) and gets connected only to the sentry nodes.  
