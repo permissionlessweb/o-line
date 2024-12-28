@@ -1,0 +1,24 @@
+(spa-def) {
+    tls /etc/caddy/certificate.pem /etc/caddy/key.pem
+        encode gzip
+}
+
+(cors-and-tls) {
+    tls /etc/caddy/certificate.pem /etc/caddy/key.pem
+        header {
+                Access-Control-Allow-Origin *
+                Access-Control-Allow-Credentials true
+                Access-Control-Allow-Methods *
+                Access-Control-Allow-Headers *
+                defer
+        }
+
+<your-rpc-dns-endpoint>, www.<your-rpc-dns-endpoint> {
+        import cors-and-tls
+        reverse_proxy  localhost:<rpc_port>
+}
+<your-api-dns-endpoint>, www.<your-api-dns-endpoint> {
+        import cors-and-tls
+        reverse_proxy  localhost:<api_port>
+}
+}
