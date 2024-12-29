@@ -83,17 +83,18 @@ while true; do
         systemctl start caddy.service &
         caddy_pid=$!
         echo "$TIME: Snapshot available at http://localhost:80/terp_latest.tar.gz"
-    fi
+
         echo "$TIME: Restarting terpd"
         exec $SNAPSHOT_CMD &
         PID=$!
-        sleep 1s
     else
         if ! kill -0 $PID; then
             echo "$TIME: Process has died. Exiting"
             break;
         fi
     fi
+
+    sleep 1s
 done
 
 # todo: after n snapshots created prune k # of snapshots by saving to jackal storage provider
