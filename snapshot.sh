@@ -39,19 +39,8 @@ fi
 TIME=$(date -u +%T)
 DOW=$(date +%u)
 
-# create new caddy file 
-echo "Creating new Caddy file"
-cat > /etc/caddy/Caddyfile <<EOF
-:80 {
-    root * ${SNAPSHOT_PATH}
-    file_server {
-        browse
-    }
-     rewrite /terp_latest.tar.gz {
-        to /${SNAPSHOT_PREFIX}_latest.tar.gz
-    }
-}
-EOF
+create_caddy_config()
+take_snapshot()
 
 echo "$TIME: Starting server"
 echo "$TIME: Snapshot will run at $SNAPSHOT_TIME on day $SNAPSHOT_DAY"
@@ -62,39 +51,51 @@ while true; do
     TIME=$(date -u +%T)
     DOW=$(date +%u)
     if [[ ($SNAPSHOT_DAY == "*") || ($SNAPSHOT_DAY == $DOW) ]] && [[ $SNAPSHOT_TIME == $TIME ]]; then
-        get block height 
-        echo "$TIME: Stopping terp node"
-        kill -15 $PID
-        wait
-
-        echo "$TIME: Stopping caddy"
-        systemctl stop caddy.service
-
-        echo "$TIME: Creating snapshot"
-        timestamp=$(date +"%Y-%m-%dT%H:%M:%S")
-        SNAPSHOT_SIZE=$(du -sb $SNAPSHOT_DIR | cut -f1)
-
-        mkdir -p "${SNAPSHOT_PATH}"
-        tar -czf "${SNAPSHOT_PATH}/${SNAPSHOT_PREFIX}_${timestamp}.tar.gz" -C "${SNAPSHOT_DIR}" .
-        ln -sf "${SNAPSHOT_PATH}/${SNAPSHOT_PREFIX}_${timestamp}.tar.gz" "${SNAPSHOT_PATH}/terp_latest.tar.gz"
-
-        # Serve snapshot via caddy
-        log_this "Serving new snapshot"
-        systemctl start caddy.service &
-        caddy_pid=$!
-        echo "$TIME: Snapshot available at http://localhost:80/terp_latest.tar.gz"
-
-        echo "$TIME: Restarting terpd"
-        exec $SNAPSHOT_CMD &
-        PID=$!
+        kill_services()
+        take_snapshot()
     else
         if ! kill -0 $PID; then
             echo "$TIME: Process has died. Exiting"
             break;
         fi
     fi
-
     sleep 1s
 done
 
+function create_caddy_config() {
+echo "Creating new Caddy file"
+cat > /etc/caddy/Caddyfile <<EOF
+:3000 {
+    root * ${SNAPSHOT_PATH}
+    file_server {
+        browse
+    }
+     rewrite /terp_latest.tar.gz {
+        to /${SNAPSHOT_PREFIX}_latest.tar.gz
+    }
+}
+EOF
+}
+
+function take_snapshot() {
+echo "$TIME: Creating snapshot"
+timestamp=$(date +"%Y-%m-%dT%H:%M:%S")
+SNAPSHOT_SIZE=$(du -sb $SNAPSHOT_DIR | cut -f1)
+mkdir -p "${SNAPSHOT_PATH}"
+tar -czf "${SNAPSHOT_PATH}/${SNAPSHOT_PREFIX}_${timestamp}.tar.gz" -C "${SNAPSHOT_DIR}" .
+ln -sf "${SNAPSHOT_PATH}/${SNAPSHOT_PREFIX}_${timestamp}.tar.gz" "${SNAPSHOT_PATH}/terp_latest.tar.gz" &&
+log_this "Serving first snapshot"
+systemctl start caddy.service &
+caddy_pid=$!
+echo "$TIME: Snapshot available at http://localhost:80/terp_latest.tar.gz"
+
+}
+
+function kill_services() {
+echo "$TIME: Stopping terp node"
+kill -15 $PID
+wait
+echo "$TIME: Stopping caddy"
+systemctl stop caddy.service
+}
 # todo: after n snapshots created prune k # of snapshots by saving to jackal storage provider

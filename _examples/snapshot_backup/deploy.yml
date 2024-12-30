@@ -11,12 +11,19 @@ services:
       - FASTSYNC_VERSION=v0
       - SNAPSHOT_PATH=snapshots
       - SNAPSHOT_TIME=00:00:10
-      # - SNAPSHOT_DAY=* #(1-7)
+      - SNAPSHOT_DAY=* #(1-7)
       - SNAPSHOT_SIZE=214748364800 # 200GB in bytes
       - ADDRBOOK_URL=https://server-3.itrocket.net/mainnet/terp/addrbook.json
       - SNAPSHOT_URL=https://snapshots.nodejumper.io/terp/terp_latest.tar.lz4
     expose:
       - port: 26657
+        accept:
+          - rpc.permissionless.money
+          - www.rpc.permissionless.money
+      - port: 3000
+        accept:
+          - snapshots.permissionless.money
+          - www.snapshots.permissionless.money
         to:
           - global: true
     # params:
@@ -33,7 +40,7 @@ profiles:
         memory:
           size: 8Gi
         storage:
-          size: 100Gi
+          size: 1000Gi
           # - size: 100Mi
           # - name: data
           #   size: 400Gi
