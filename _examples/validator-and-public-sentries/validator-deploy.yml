@@ -3,7 +3,7 @@ version: "2.0"
 
 services:
   validator:
-    image: ghcr.io/terpnetwork/o-line:v0.0.12-terpnetwork-v4.2.2
+    image: ghcr.io/terpnetwork/o-line:v0.0.13-terpnetwork-v4.2.2
     env:
       - MONIKER=validator
       - CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/refs/heads/master/terpnetwork/chain.json
@@ -24,6 +24,23 @@ services:
         as: 80
         to:
           - global: true # debug
+        accept:
+        - rpc.permissionless.money
+        - www.rpc.permissionless.money
+      - port: 26656
+        as: 80
+        to:
+          - global: true # debug
+        accept:
+        - peer.permissionless.money
+        - seed.permissionless.money
+      - port: 1317
+        as: 80
+        to:
+          - global: true # debug
+        accept:
+        - api.permissionless.money
+        - www.api.permissionless.money
     # params:
     #   storage:
     #     data:
