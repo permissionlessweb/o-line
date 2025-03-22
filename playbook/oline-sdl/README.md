@@ -221,7 +221,7 @@ See [Cosmos docs](https://docs.tendermint.com/master/nodes/configuration.html) f
 
 ### Creating New ghcr.io image:
 ```sh
-git tag v0.0.12 && git push --tags
+git tag v0.1.0-rc && git push --tags
 ```
 
 <!-- Adding a new chain is easy:
