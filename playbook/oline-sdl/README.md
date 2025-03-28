@@ -29,7 +29,7 @@ Image URL: `ghcr.io/terp-network/o-line:v0.0.12-generic` -->
 <!-- ```yaml
 services:
   node:
-    image: ghcr.io/permissionlessweb/o-line:v0.0.5-terpnetwork-v4.2.2:v0.0.12-generic
+    image: ghcr.io/akash-network/cosmos-omnibus:v1.2.11-generic:v0.0.12-generic
     env:
       - MONIKER=my-moniker-1
       - CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/refs/heads/master/terpnetwork/chain.json

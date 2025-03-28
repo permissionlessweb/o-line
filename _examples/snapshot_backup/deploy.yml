@@ -3,7 +3,7 @@ version: "2.0"
 
 services:
   node:
-    image:  ghcr.io/permissionlessweb/o-line:v0.1.3-terpnetwork-v4.2.2
+    image:  ghcr.io/akash-network/cosmos-omnibus:v1.2.11-generic
     env:
       - MONIKER=my-moniker-1
       - CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/refs/heads/master/terpnetwork/chain.json
@@ -13,7 +13,7 @@ services:
       - SNAPSHOT_TIME=00:00:10
       - SNAPSHOT_DAY=* #(1-7)
       - SNAPSHOT_SIZE=214748364800 # 200GB in bytes
-      - ADDRBOOK_URL=https://server-3.itrocket.net/mainnet/terp/addrbook.json
+      - ADDRBOOK_URL=https://raw.githubusercontent.com/111STAVR111/props/main/Terp/addrbook.json
       - SNAPSHOT_URL=https://snapshots.nodejumper.io/terp/terp_latest.tar.lz4
     expose:
       - port: 26657

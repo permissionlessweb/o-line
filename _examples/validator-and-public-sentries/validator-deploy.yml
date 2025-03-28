@@ -3,7 +3,7 @@ version: "2.0"
 
 services:
   validator:
-    image:  ghcr.io/permissionlessweb/o-line:v0.0.5-terpnetwork-v4.2.2
+    image:  ghcr.io/akash-network/cosmos-omnibus:v1.2.11-generic
     env:
       - MONIKER=validator
       - CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/refs/heads/master/terpnetwork/chain.json
