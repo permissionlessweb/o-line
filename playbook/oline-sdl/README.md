@@ -15,18 +15,18 @@ Additional features are included to make running a node as simple as possible
 
 1. [Chain configuration can be sourced from a remote JSON file](#chain-configuration)
 1. [Genesis file can be downloaded and unzipped in various ways](#chain-configuration)
-1. [Private keys can be backed up and restored](#private-key-backuprestore) from any S3 compatible storage provider, such as Sia or Storj via [Filebase](https://filebase.com/).
+<!-- 1. [Private keys can be backed up and restored](#private-key-backuprestore) from any S3 compatible storage provider, such as Sia or Storj via [Filebase](https://filebase.com/). -->
 1. [Snapshots of a nodes data directory](#snapshot-backup) can be created at a certain time or day and uploaded to an S3 storage provider
 
-## Generic image (binary downloaded at runtime)
+<!-- ## Generic image (binary downloaded at runtime)
 
 O-line has a generic base image which can download the required binary at runtime. This is useful for chain upgrades, testnets, or using a different version than O-Line primarily supports.
 
 This generic image provides the O-line scripts and configuration helpers, and nothing else. Set the `BINARY_URL` environment variable to a `.zip`, `.tar` or `.tar.gz` URL, and configure `PROJECT`, `PROJECT_DIR` and `PROJECT_BIN`. Alternatively provide a [Chain Registry](https://github.com/cosmos/chain-registry) `CHAIN_JSON` to configure everything automatically (where data is available).
 
-Image URL: `ghcr.io/terp-network/o-line:v0.0.12-generic`
+Image URL: `ghcr.io/terp-network/o-line:v0.0.12-generic` -->
 
-```yaml
+<!-- ```yaml
 services:
   node:
     image: ghcr.io/terpnetwork/o-line:v0.0.12-generic
@@ -36,12 +36,12 @@ services:
       - BINARY_ZIP_PATH=terp_core_linux_amd64
 ```
 
-More information on the generic image can be found at [/generic](./generic/), and configuration is detailed in depth below.
+More information on the generic image can be found at [/generic](./generic/), and configuration is detailed in depth below. -->
 
 ## Networks (pre-built images)
 
 The available docker images can be found [here](https://github.com/terpnetwork/o-line/pkgs/container/o-line).  They are
-tagged with the form `$COSMOS_OMNIBUS_VERSION-$PROJECT-$PROJECT_VERSION`.
+tagged with the form `$OLINE_VERSION-$PROJECT-$PROJECT_VERSION`.
 
 |Project|Version|Image| |
 |---|---|---|---|
@@ -221,7 +221,7 @@ See [Cosmos docs](https://docs.tendermint.com/master/nodes/configuration.html) f
 
 ### Creating New ghcr.io image:
 ```sh
-git tag v0.1.0-rc && git push --tags
+git tag v0.1.3 && git push --tags
 ```
 
 <!-- Adding a new chain is easy:

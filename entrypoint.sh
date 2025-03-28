@@ -68,8 +68,9 @@ export WASM_PATH="${WASM_PATH:-$PROJECT_ROOT/$WASM_DIR}"
 export NAMESPACE="${NAMESPACE:-$(echo ${PROJECT_BIN} | tr '[:lower:]' '[:upper:]' | tr '-' '_')}"
 export VALIDATE_GENESIS="${VALIDATE_GENESIS:-0}"
 export MONIKER="${MONIKER:-Terp Oline Node}"
-
 [ -z "$CHAIN_ID" ] && echo "ERROR: CHAIN_ID not found" && exit
+
+echo "$NAMESPACE"
 
 if [[ -n "$BINARY_URL" && ! -f "/bin/$PROJECT_BIN" ]]; then
   echo "Download binary $PROJECT_BIN from $BINARY_URL"
@@ -293,13 +294,13 @@ if [ "$INIT_CONFIG" == "1" ]; then
   if [ -n "$INIT_CMD" ]; then
     $INIT_CMD
   else
-    $PROJECT_BIN init "$MONIKER" --chain-id ${CHAIN_ID}
+    $PROJECT_BIN init "$MONIKER" --chain-id "${CHAIN_ID}"
   fi
 fi
 
 # Overwrite seeds in config.toml for chains that are not using the env variable correctly
 if [ "$OVERWRITE_SEEDS" == "1" ]; then
-    sed -i "s/seeds = \"\"/seeds = \"$P2P_SEEDS\"/" $CONFIG_PATH/config.toml
+    sed -i "s/seeds = \"\"/seeds = \"$P2P_SEEDS\"/" "$CONFIG_PATH"/config.toml
 fi
 
 # Restore keys
@@ -317,7 +318,7 @@ fi
 # Addressbook
 if [ -n "$ADDRBOOK_URL" ]; then
   echo "Downloading addrbook from $ADDRBOOK_URL..."
-  curl -sfL $ADDRBOOK_URL > $CONFIG_PATH/addrbook.json
+  curl -sfL "$ADDRBOOK_URL" > "$CONFIG_PATH"/addrbook.json
 fi
 
 # Download genesis
@@ -325,13 +326,13 @@ if [ "$DOWNLOAD_GENESIS" == "1" ]; then
   GENESIS_FILENAME="${GENESIS_FILENAME:-genesis.json}"
 
   echo "Downloading genesis $GENESIS_URL"
-  curl -sfL $GENESIS_URL > genesis.json
+  curl -sfL "$GENESIS_URL" > genesis.json
   file genesis.json | grep -q 'gzip compressed data' && mv genesis.json genesis.json.gz && gzip -d genesis.json.gz
   file genesis.json | grep -q 'tar archive' && mv genesis.json genesis.json.tar && tar -xf genesis.json.tar && rm genesis.json.tar
   file genesis.json | grep -q 'Zip archive data' && mv genesis.json genesis.json.zip && unzip -o genesis.json.zip
 
-  mkdir -p $CONFIG_PATH
-  mv $GENESIS_FILENAME $CONFIG_PATH/genesis.json
+  mkdir -p "$CONFIG_PATH"
+  mv "$GENESIS_FILENAME" "$CONFIG_PATH"/genesis.json
 fi
 
 # Snapshot
@@ -339,17 +340,17 @@ if [ "$DOWNLOAD_SNAPSHOT" == "1" ]; then
 
   if [ -z "${SNAPSHOT_URL}" ] && [ -n "${SNAPSHOT_BASE_URL}" ]; then
     SNAPSHOT_PATTERN="${SNAPSHOT_PATTERN:-$CHAIN_ID.*$SNAPSHOT_FORMAT}"
-    SNAPSHOT_URL=$SNAPSHOT_BASE_URL/$(curl -Ls $SNAPSHOT_BASE_URL/ | egrep -o ">$SNAPSHOT_PATTERN" | tr -d ">");
+    SNAPSHOT_URL=$SNAPSHOT_BASE_URL/$(curl -Ls "$SNAPSHOT_BASE_URL"/ | grep -E -o ">$SNAPSHOT_PATTERN" | tr -d ">");
   fi
 
   if [ -z "${SNAPSHOT_URL}" ] && [ -n "${SNAPSHOT_JSON}" ]; then
-    SNAPSHOT_URL="$(curl -Ls $SNAPSHOT_JSON | jq -r .latest)"
+    SNAPSHOT_URL="$(curl -Ls "$SNAPSHOT_JSON" | jq -r .latest)"
   fi
 
   if [ -z "${SNAPSHOT_URL}" ] && [ -n "${SNAPSHOT_QUICKSYNC}" ]; then
     SNAPSHOT_PRUNING="${SNAPSHOT_PRUNING:-pruned}"
     SNAPSHOT_DATA_PATH="data"
-    SNAPSHOT_URL=`curl -Ls $SNAPSHOT_QUICKSYNC | jq -r --arg FILE "$CHAIN_ID-$SNAPSHOT_PRUNING"  'first(.[] | select(.file==$FILE)) | .url'`
+    SNAPSHOT_URL=$(curl -Ls "$SNAPSHOT_QUICKSYNC" | jq -r --arg FILE "$CHAIN_ID-$SNAPSHOT_PRUNING"  'first(.[] | select(.file==$FILE)) | .url')
   fi
 
   # SNAPSHOT_FORMAT default value generation via SNAPSHOT_URL
@@ -367,9 +368,9 @@ if [ "$DOWNLOAD_SNAPSHOT" == "1" ]; then
 
   if [ -n "${SNAPSHOT_URL}" ]; then
     echo "Downloading snapshot from $SNAPSHOT_URL..."
-    rm -rf $PROJECT_ROOT/snapshot;
-    mkdir -p $PROJECT_ROOT/snapshot;
-    cd $PROJECT_ROOT/snapshot;
+    rm -rf "$PROJECT_ROOT"/snapshot;
+    mkdir -p "$PROJECT_ROOT"/snapshot;
+    cd "$PROJECT_ROOT"/snapshot;
 
     tar_cmd="tar xf -"
     # case insensitive match
@@ -380,7 +381,7 @@ if [ "$DOWNLOAD_SNAPSHOT" == "1" ]; then
     # Detect content size via HTTP header `Content-Length`
     # Note that the server can refuse to return `Content-Length`, or the URL can be incorrect
     pv_extra_args=""
-    snapshot_size_in_bytes=$(wget $SNAPSHOT_URL --spider --server-response -O - 2>&1 | sed -ne '/Content-Length/{s/.*: //;p}')
+    snapshot_size_in_bytes=$(wget "$SNAPSHOT_URL" --spider --server-response -O - 2>&1 | sed -ne '/Content-Length/{s/.*: //;p}')
     case "$snapshot_size_in_bytes" in
       # Value cannot be started with `0`, and must be integer
       [1-9]*[0-9]) pv_extra_args="-s $snapshot_size_in_bytes";;
@@ -401,17 +402,17 @@ if [ "$DOWNLOAD_SNAPSHOT" == "1" ]; then
 
     if [ -n "${SNAPSHOT_DATA_PATH}" ]; then
       rm -rf ../$DATA_DIR
-      mv ./${SNAPSHOT_DATA_PATH} ../$DATA_DIR
+      mv ./"${SNAPSHOT_DATA_PATH}" ../$DATA_DIR
     fi
 
     if [ -n "${SNAPSHOT_WASM_PATH}" ]; then
-      rm -rf ../$WASM_DIR
-      mv ./${SNAPSHOT_WASM_PATH} ../$WASM_DIR
+      rm -rf ../"$WASM_DIR"
+      mv ./"${SNAPSHOT_WASM_PATH}" ../"$WASM_DIR"
     fi
 
     if [ -z "${SNAPSHOT_DATA_PATH}" ]; then
-      rm -rf ../$DATA_DIR && mkdir -p ../$DATA_DIR
-      mv ./* ../$DATA_DIR
+      rm -rf ../"$DATA_DIR" && mkdir -p ../"$DATA_DIR"
+      mv ./* ../"$DATA_DIR"
     fi
 
     cd ../ && rm -rf ./snapshot
@@ -433,7 +434,7 @@ if [ "$COSMOVISOR_ENABLED" == "1" ]; then
     echo "Downloading Cosmovisor from $COSMOVISOR_URL..."
     mkdir -p cosmovisor_temp
     cd cosmovisor_temp
-    curl -Ls $COSMOVISOR_URL | tar zx
+    curl -Ls "$COSMOVISOR_URL" | tar zx
     cp cosmovisor /bin/cosmovisor
     cd ..
     rm -r cosmovisor_temp
@@ -445,9 +446,9 @@ if [ "$COSMOVISOR_ENABLED" == "1" ]; then
   export DAEMON_SHUTDOWN_GRACE="${DAEMON_SHUTDOWN_GRACE:-15s}"
 
   # Setup Folder Structure
-  mkdir -p $PROJECT_ROOT/cosmovisor/upgrades
-  mkdir -p $PROJECT_ROOT/cosmovisor/genesis/bin
-  cp "/bin/$PROJECT_BIN" $PROJECT_ROOT/cosmovisor/genesis/bin/
+  mkdir -p "$PROJECT_ROOT"/cosmovisor/upgrades
+  mkdir -p "$PROJECT_ROOT"/cosmovisor/genesis/bin
+  cp "/bin/$PROJECT_BIN" "$PROJECT_ROOT"/cosmovisor/genesis/bin/
 fi
 
 # preseed priv_validator_state.json if missing

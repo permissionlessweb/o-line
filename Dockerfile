@@ -1,5 +1,5 @@
 ARG DEBIAN_VERSION=bookworm
-ARG GOLANG_VERSION=1.21
+ARG GOLANG_VERSION=1.23
 ARG BUILD_IMAGE=golang:${GOLANG_VERSION}-${DEBIAN_VERSION}
 ARG BUILD_METHOD=source
 ARG BASE_IMAGE=debian:${DEBIAN_VERSION}-slim
@@ -91,6 +91,7 @@ RUN apt-get update && apt-get install -y caddy
 #     unzip -o uplink_linux_amd64.zip && \
 #     install uplink /usr/bin/uplink && \
 #     rm -f uplink uplink_linux_amd64.zip
+# TODO: Jackal Pin API
 
 # Copy scripts
 COPY entrypoint.sh snapshot.sh /usr/bin/
@@ -101,10 +102,8 @@ RUN chmod +x /usr/bin/entrypoint.sh /usr/bin/snapshot.sh
 #
 FROM base AS copy_build
 
-
 ARG BUILD_PATH=$GOPATH/bin
 RUN $BUILD_CMD
-
 
 ARG PROJECT
 ARG PROJECT_BIN=$PROJECT
@@ -126,7 +125,7 @@ ARG START_CMD
 ARG INIT_CMD
 ARG VERSION
 ARG REPOSITORY
-# ARG NAMESPACE
+ARG NAMESPACE
 # ARG POLKACHU_CHAIN_ID
 
 ENV PROJECT=$PROJECT
@@ -137,7 +136,7 @@ ENV START_CMD=$START_CMD
 ENV INIT_CMD=$INIT_CMD
 ENV VERSION=$VERSION
 ENV REPOSITORY=$REPOSITORY
-# ENV NAMESPACE=$NAMESPACE
+ENV NAMESPACE=$NAMESPACE
 # ENV POLKACHU_CHAIN_ID=$POLKACHU_CHAIN_ID
 
 EXPOSE 26656 \
