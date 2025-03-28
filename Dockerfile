@@ -112,9 +112,9 @@ COPY --from=build /bin/$PROJECT_BIN /bin/$PROJECT_BIN
 COPY --from=build /data/deps/ /
 
 #
-# Final Omnibus image
+# Final Oline image
 #
-FROM ${BUILD_IMAGE} AS omnibus
+FROM ${BUILD_IMAGE} AS oline
 LABEL org.opencontainers.image.source https://github.com/permissionlessweb/o-line
  
 ARG PROJECT
