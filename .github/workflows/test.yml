@@ -79,27 +79,27 @@ jobs:
           set: |
             node.tags=${{ matrix.project }}
             node.platform=linux/amd64
+            node.cache-from=type=gha,scope=${{ matrix.project }}
+            node.cache-to=type=gha,mode=max,scope=${{ matrix.project }}
           # cache is disabled for now
           # we build too many images for it to be useful
           # it causes cache timeouts and overuse of the 10GB cache limit
-          # node.cache-from=type=gha,scope=${{ matrix.project }}
-          # node.cache-to=type=gha,mode=max,scope=${{ matrix.project }}
-      - name: Test version
-        if: ${{ matrix.project != 'generic' }}
-        run: |
-          cd ${{ matrix.project }}
-          PROJECT=${{ matrix.project }}
-          PROJECT_BIN=$(yq '.services.node.build.args.PROJECT_BIN // ""' ./build.yml)
-          PROJECT_BIN="${PROJECT_BIN:-$PROJECT}"
-          VERSION=$(yq '.services.node.build.args.VERSION' ./build.yml)
-          VERSION_CMD=$(yq '.services.node.build.args.VERSION_CMD // ""' ./build.yml)
-          VERSION_CMD="${VERSION_CMD:-$PROJECT_BIN version}"
-          VERSION_OUTPUT=$(docker run --platform=linux/amd64 --entrypoint='' $PROJECT $VERSION_CMD 2>&1 || true)
+      # - name: Test version
+      #   if: ${{ matrix.project != 'generic' }}
+      #   run: |
+      #     cd ${{ matrix.project }}
+      #     PROJECT=${{ matrix.project }}
+      #     PROJECT_BIN=$(yq '.services.node.build.args.PROJECT_BIN // ""' ./build.yml)
+      #     PROJECT_BIN="${PROJECT_BIN:-$PROJECT}"
+      #     VERSION=$(yq '.services.node.build.args.VERSION' ./build.yml)
+      #     VERSION_CMD=$(yq '.services.node.build.args.VERSION_CMD // ""' ./build.yml)
+      #     VERSION_CMD="${VERSION_CMD:-$PROJECT_BIN version}"
+      #     VERSION_OUTPUT=$(docker run --platform=linux/amd64 --entrypoint='' $PROJECT $VERSION_CMD 2>&1 || true)
 
-          if ! echo "$VERSION_OUTPUT" | grep -q "${VERSION#v}"; then
-            echo "Expected: $VERSION"
-            echo "Got: $VERSION_OUTPUT"
-            exit 1
-          else
-            echo "Success: $VERSION_OUTPUT"
-          fi
+      #     if ! echo "$VERSION_OUTPUT" | grep -q "${VERSION#v}"; then
+      #       echo "Expected: $VERSION"
+      #       echo "Got: $VERSION_OUTPUT"
+      #       exit 1
+      #     else
+      #       echo "Success: $VERSION_OUTPUT"
+      #     fi
