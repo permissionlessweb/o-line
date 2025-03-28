@@ -115,7 +115,7 @@ COPY --from=build /data/deps/ /
 # Final Omnibus image
 #
 FROM ${BUILD_IMAGE} AS omnibus
-LABEL org.opencontainers.image.source https://github.com/terpnetwork/o-line
+LABEL org.opencontainers.image.source https://github.com/permissionlessweb/o-line
  
 ARG PROJECT
 ARG PROJECT_BIN

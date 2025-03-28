@@ -29,7 +29,7 @@ Image URL: `ghcr.io/terp-network/o-line:v0.0.12-generic` -->
 <!-- ```yaml
 services:
   node:
-    image: ghcr.io/terpnetwork/o-line:v0.0.12-generic
+    image: ghcr.io/permissionlessweb/o-line:v0.0.1-terpnetwork-v4.2.2:v0.0.12-generic
     env:
       - MONIKER=my-moniker-1
       - CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/refs/heads/master/terpnetwork/chain.json
@@ -40,12 +40,12 @@ More information on the generic image can be found at [/generic](./generic/), an
 
 ## Networks (pre-built images)
 
-The available docker images can be found [here](https://github.com/terpnetwork/o-line/pkgs/container/o-line).  They are
+The available docker images can be found [here](https://github.com/permissionlessweb/o-line/pkgs/container/o-line).  They are
 tagged with the form `$OLINE_VERSION-$PROJECT-$PROJECT_VERSION`.
 
 |Project|Version|Image| |
 |---|---|---|---|
-|[terp-network](https://github.com/terpnetwork/terp-core)|`v4.2.2`|`terpnetwork/o-line:v0.0.12`|[Example](./terpnetwork)|
+|[terp-network](https://github.com/terpnetwork/terp-core)|`v4.2.2`|`permissionlessweb/o-line:v0.0.12`|[Example](./terpnetwork)|
 
 ## Example configurations
 
@@ -228,6 +228,6 @@ git tag v0.1.3 && git push --tags
 
 - Ideally source or setup a `chain.json` to provide a single source of truth for chain info
 - Add a project directory based on the existing projects
-- Update the [github workflow](https://github.com/terpnetwork/o-line/blob/master/.github/workflows/publish.yaml) to create an image for your chain
+- Update the [github workflow](https://github.com/permissionlessweb/o-line/blob/master/.github/workflows/publish.yaml) to create an image for your chain
 
 Submit a PR or an issue if you want to see any specific chains. -->

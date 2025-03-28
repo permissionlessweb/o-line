@@ -78,7 +78,7 @@ $ curl -s http://gjmpnp4ag5e8v14rubecqafvt4.ingress.sandbox.ny.aksh.pw/net_info 
 ## Additional information
 
 - [Sentry node architecture overview](https://forum.cosmos.network/t/sentry-node-architecture-overview/454)
-- [Validator and Private Sentries](https://github.com/terpnetwork/o-line/tree/master/_examples/validator-and-private-sentries)
-- [Validator and Public Sentries](https://github.com/terpnetwork/o-line/tree/master/_examples/validator-and-public-sentries)
+- [Validator and Private Sentries](https://github.com/permissionlessweb/o-line/tree/master/_examples/validator-and-private-sentries)
+- [Validator and Public Sentries](https://github.com/permissionlessweb/o-line/tree/master/_examples/validator-and-public-sentries)
 - [Sentry Nodes (DDOS Protection)](https://hub.cosmos.network/main/validators/security.html#sentry-nodes-ddos-protection)
 
