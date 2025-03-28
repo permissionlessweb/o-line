@@ -3,7 +3,7 @@ version: "2.0"
 
 services:
   node1:
-    image:  ghcr.io/permissionlessweb/o-line:v0.0.1-terpnetwork-v4.2.2
+    image:  ghcr.io/permissionlessweb/o-line:v0.0.2-terpnetwork-v4.2.2
     env:
       - MONIKER=private_node_1
       - CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/refs/heads/master/terpnetwork/chain.json

@@ -29,7 +29,7 @@ Image URL: `ghcr.io/terp-network/o-line:v0.0.12-generic` -->
 <!-- ```yaml
 services:
   node:
-    image: ghcr.io/permissionlessweb/o-line:v0.0.1-terpnetwork-v4.2.2:v0.0.12-generic
+    image: ghcr.io/permissionlessweb/o-line:v0.0.2-terpnetwork-v4.2.2:v0.0.12-generic
     env:
       - MONIKER=my-moniker-1
       - CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/refs/heads/master/terpnetwork/chain.json
@@ -221,7 +221,7 @@ See [Cosmos docs](https://docs.tendermint.com/master/nodes/configuration.html) f
 
 ### Creating New ghcr.io image:
 ```sh
-git tag v0.1.3 && git push --tags
+git tag v0.0.2 && git push --tags
 ```
 
 <!-- Adding a new chain is easy:
