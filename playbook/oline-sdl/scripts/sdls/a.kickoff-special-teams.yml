@@ -1,0 +1,100 @@
+---
+version: "2.0"
+services:
+  oline--special--snapshot:
+    image: ghcr.io/akash-network/cosmos-omnibus:v1.2.11-generic
+    expose:
+      - port: 26656
+        as: 80
+        to:
+          - global: true
+    env:
+      - MONIKER=oline::special::snapshot-node
+      # default chain cfg
+      - CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/refs/heads/master/terpnetwork/chain.json
+      - MINIMUM_GAS_PRICES=0.05uthiol
+      - FASTSYNC_VERSION=v0
+      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - PRUNING=nothing
+      # peer exchange disabled
+      - TERPD_P2P_PEX=false
+      # public address book & snapshot
+      - ADDRBOOK_URL=https://raw.githubusercontent.com/111STAVR111/props/main/Terp/addrbook.json
+      - SNAPSHOT_URL=https://snapshots.nodejumper.io/terp/terp_latest.tar.lz4
+      # s3 API bucket auth
+      # - S3_KEY=
+      # - S3_SECRET=
+      # - S3_HOST=https://s3.filebase.com
+      # - SNAPSHOT_PATH=snapshots/terpnetwork
+      # - SNAPSHOT_TIME=22:45:00
+      # - SNAPSHOT_SIZE=214748364800
+      # - SNAPSHOT_DIR=/root/.terp
+      # - SNAPSHOT_METADATA=0
+      # - SNAPSHOT_SAVE_FORMAT=tar.gz
+  oline--special--seed-node:
+    image: ghcr.io/akash-network/cosmos-omnibus:v1.2.11-generic
+    expose:
+      - port: 26657
+        as: 80
+        to:
+          - global: true
+      # DNS for <id>@seed.terp.network:26656
+      - port: 26656
+        as: 80
+        accept:
+          - seed.terp.network
+          - www.seed.terp.network
+        to:
+          - global: true
+    env:
+      - MONIKER=oline::special::snapshot-node
+      # default chain cfg
+      - CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/refs/heads/master/terpnetwork/chain.json
+      - MINIMUM_GAS_PRICES=0.05uthiol
+      - PRUNING=default
+      # peer exchange enabled
+      - TERPD_P2P_PEX=true
+      # public address book & snapshot
+      - SNAPSHOT_URL=https://snapshots.nodejumper.io/terp/terp_latest.tar.lz4
+      - ADDRBOOK_URL=https://raw.githubusercontent.com/111STAVR111/props/main/Terp/addrbook.json
+profiles:
+  compute:
+    oline--special--snapshot:
+      resources:
+        cpu:
+          units: 4
+        memory:
+          size: 16Gi
+        storage:
+          - size: 497Gi
+    oline--special--seed-node:
+      resources:
+        cpu:
+          units: 2
+        memory:
+          size: 8Gi
+        storage:
+          - size: 50Gi
+  placement:
+    dcloud:
+      pricing:
+        oline--special--snapshot:
+          denom: uakt
+          amount: 1000
+        oline--special--seed-node:
+          denom: uakt
+          amount: 1000
+      signedBy:
+        anyOf:
+          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
+      attributes:
+        host: akash
+deployment:
+  oline--special--snapshot:
+    dcloud:
+      profile: oline--special--snapshot
+      count: 1
+  oline--special--seed-node:
+    dcloud:
+      profile: oline--special--seed-node
+      count: 1

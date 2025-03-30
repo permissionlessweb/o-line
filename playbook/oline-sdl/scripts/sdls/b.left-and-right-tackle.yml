@@ -1,0 +1,87 @@
+---
+version: "2.0"
+services:
+  oline--tackle--left-node:
+    image: ghcr.io/akash-network/cosmos-omnibus:v1.2.11-generic
+    expose:
+      - port: 26656
+        as: 80
+        to:
+          - global: true
+    env:
+      - MONIKER=terp-node
+      # default chain cfg
+      - CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/refs/heads/master/terpnetwork/chain.json
+      - MINIMUM_GAS_PRICES=0.05uthiol
+      - PRUNING=default
+      # peer exchange disabled
+      - TERPD_P2P_PEX=false
+      # TODO: grab self-contained snapshot
+      - SNAPSHOT_URL=https://snapshots.nodejumper.io/terp/terp_latest.tar.lz4
+      # validator is private peer & unconditional
+      - TERPD_P2P_PRIVATE_PEER_IDS=
+      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=
+      # oline::special-teams::snapshot as peer (pex should be disabled)
+      - TERPD_P2P_PERSISTENT_PEERS=<>
+  oline--tackle--right-node:
+    image: ghcr.io/akash-network/cosmos-omnibus:v1.2.11-generic
+    expose:
+      - port: 26656
+        as: 80
+        to:
+          - global: true
+    env:
+      - MONIKER=terp-node
+      # default chain cfg
+      - CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/refs/heads/master/terpnetwork/chain.json
+      # peer exchange disabled
+      - TERPD_P2P_PEX=false
+      # TODO: grab self-contained snapshot
+      - SNAPSHOT_URL=https://snapshots.nodejumper.io/terp/terp_latest.tar.lz4
+      - MINIMUM_GAS_PRICES=0.05uthiol
+      # validator private peer 
+      - TERPD_P2P_PRIVATE_PEER_IDS=
+      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=
+      # oline::special-teams::snapshot as peer (pex should be disabled)
+      - TERPD_P2P_PERSISTENT_PEERS=<>
+profiles:
+  compute:
+    oline--tackle--left-node:
+      resources:
+        cpu:
+          units: 4
+        memory:
+          size: 16Gi
+        storage:
+          - size: 60Gi
+    oline--tackle--right-node:
+      resources:
+        cpu:
+          units: 4
+        memory:
+          size: 16Gi
+        storage:
+          - size: 60Gi
+  placement:
+    dcloud:
+      pricing:
+        oline--tackle--left-node:
+          denom: uakt
+          amount: 1000
+        oline--tackle--right-node:
+          denom: uakt
+          amount: 1000
+      signedBy:
+        anyOf:
+          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
+      attributes:
+        host: akash
+deployment:
+  oline--tackle--left-node:
+    dcloud:
+      profile: oline--tackle--left-node
+      count: 1
+  oline--tackle--right-node:
+    dcloud:
+      profile: oline--tackle--right-node
+      count: 1

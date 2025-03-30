@@ -9,9 +9,9 @@ services:
   #     - CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/refs/heads/master/terpnetwork/chain.json
   #     - MINIMUM_GAS_PRICES=0.05uthiol
   #     - FASTSYNC_VERSION=v0
-  #     - TERP_P2P_PEX=false
-  #     - TERP_P2P_UNCONDITIONAL_PEER_IDS=<node-1-id>,<node-2-id>...
-  #     - TERP_P2P_ADDR_BOOK_STRICT=false
+  #     - TERPD_P2P_PEX=false
+  #     - TERPD_P2P_UNCONDITIONAL_PEER_IDS=<node-1-id>,<node-2-id>...
+  #     - TERPD_P2P_ADDR_BOOK_STRICT=false
   #     - TERP_CONSENSUS_DOUBLE_SIGN_CHECK_HEIGHT=10
   #     - P2P_PERSISTENT_PEERS=<id@node1:port,id@node2:port>
   #     - STATESYNC_RPC_SERVERS=<node1:80>,<node2:80>
@@ -40,10 +40,10 @@ services:
       - CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/refs/heads/master/terpnetwork/chain.json
       - MINIMUM_GAS_PRICES=0.05uthiol
       - FASTSYNC_VERSION=v0
-      - TERP_P2P_PEX=true
-      - TERP_P2P_PRIVATE_PEER_IDS=562319f62773ecb4542450ceba80cb0db3303875@137.184.225.11:26656
-      - TERP_P2P_UNCONDITIONAL_PEER_IDS=562319f62773ecb4542450ceba80cb0db3303875@137.184.225.11:26656
-      - TERP_P2P_ADDR_BOOK_STRICT=false
+      - TERPD_P2P_PEX=true
+      - TERPD_P2P_PRIVATE_PEER_IDS=
+      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=
+      - TERPD_P2P_ADDR_BOOK_STRICT=false
       - ADDRBOOK_URL=https://raw.githubusercontent.com/111STAVR111/props/main/Terp/addrbook.json
       - SNAPSHOT_URL=https://snapshots.nodejumper.io/terp/terp_latest.tar.lz4
       - STATESYNC_SNAPSHOT_INTERVAL=500
@@ -69,10 +69,10 @@ services:
       - CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/refs/heads/master/terpnetwork/chain.json
       - MINIMUM_GAS_PRICES=0.05uthiol
       - FASTSYNC_VERSION=v0
-      - TERP_P2P_PEX=true
-      - TERP_P2P_PRIVATE_PEER_IDS=<validatorid>
-      - TERP_P2P_UNCONDITIONAL_PEER_IDS=<validatorid>
-      - TERP_P2P_ADDR_BOOK_STRICT=false
+      - TERPD_P2P_PEX=true
+      - TERPD_P2P_PRIVATE_PEER_IDS=<validatorid>
+      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=<validatorid>
+      - TERPD_P2P_ADDR_BOOK_STRICT=false
       - STATESYNC_RPC_SERVERS=<publicnode1:26657,publicnode2:26657>
       - STATESYNC_SNAPSHOT_INTERVAL=500
     expose:

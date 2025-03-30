@@ -9,9 +9,9 @@ services:
       - CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/refs/heads/master/terpnetwork/chain.json
       - MINIMUM_GAS_PRICES=0.05uthiol
       - FASTSYNC_VERSION=v0
-      - TERP_P2P_PEX=false
-      - TERP_P2P_UNCONDITIONAL_PEER_IDS=<node-1-id>,<node-2-id>...
-      - TERP_P2P_ADDR_BOOK_STRICT=false
+      - TERPD_P2P_PEX=false
+      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=<node-1-id>,<node-2-id>...
+      - TERPD_P2P_ADDR_BOOK_STRICT=false
       - TERP_CONSENSUS_DOUBLE_SIGN_CHECK_HEIGHT=10
       - P2P_PERSISTENT_PEERS=<id@node1:port,id@node2:port>
       - STATESYNC_RPC_SERVERS=<node1:80>,<node2:80>
