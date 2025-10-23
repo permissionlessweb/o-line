@@ -3,7 +3,7 @@
 
 .DS_Store
 .vim
-.env
+*.env
 */node-data
 node-data
 

@@ -1,39 +1,47 @@
 ---
 version: "2.0"
 services:
-  oline--forward--left-node:
-    image: ghcr.io/akash-network/cosmos-omnibus:v1.2.11-generic
+  oline-forward-left-node:
+    image: ghcr.io/akash-network/cosmos-omnibus:v1.2.28-generic
     expose:
       - port: 26656
-        as: 80
+        as: 26656
+        to:
+          - global: true
+      - port: 26657
+        as: 26657
         to:
           - global: true
     env:
       - MONIKER=terp-node
       # default chain cfg
-      - >-
-        CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/refs/heads/master/terpnetwork/chain.json
+      - CHAIN_JSON=https://raw.githubusercontent.com/hard-nett/chain-registry-1/refs/heads/v5.0.1/terpnetwork/chain.json
       - MINIMUM_GAS_PRICES=0.05uthiol
       # use our seed & snapshot
       - TERPD_P2P_SEEDS=<>
-      - SNAPSHOT_URL=https://snapshots.nodejumper.io/terp/terp_latest.tar.lz4
+      # - SNAPSHOT_URL=https://snapshots.nodejumper.io/terp/terp_latest.tar.lz4
+      - FASTSYNC_VERSION=v0
+      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - STATESYNC_RPC_SERVERS=<https://statesync-a.terp.network:443,https://statesync-b.terp.network:443>
+      - ADDRBOOK_URL=https://raw.githubusercontent.com/111STAVR111/props/main/Terp/addrbook.json
       # default pruning
       - PRUNING=default
       # enable peer exchange
       - TERPD_P2P_PEX=true
       # left & right tackles are private & unconditional peers
-      - >-
-        TERPD_P2P_PRIVATE_PEER_IDS=<>
-      - >-
-        TERPD_P2P_UNCONDITIONAL_PEER_IDS=
+      - TERPD_P2P_PRIVATE_PEER_IDS=<>
+      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=
       # our snapshot as persistent peer
-      - >-
-        TERPD_P2P_PERSISTENT_PEERS=<>
-  oline--forward--right-node:
-    image: ghcr.io/akash-network/cosmos-omnibus:v1.2.11-generic
+      - TERPD_P2P_PERSISTENT_PEERS=<>
+  oline-forward-right-node:
+    image: ghcr.io/akash-network/cosmos-omnibus:v1.2.28-generic
     expose:
       - port: 26656
-        as: 80
+        as: 26656
+        to:
+          - global: true
+      - port: 26657
+        as: 26657
         to:
           - global: true
     env:
@@ -43,23 +51,24 @@ services:
         CHAIN_JSON=https://raw.githubusercontent.com/cosmos/chain-registry/refs/heads/master/terpnetwork/chain.json
       - MINIMUM_GAS_PRICES=0.05uthiol
       # use our seed & snapshot
+      - FASTSYNC_VERSION=v0
+      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - STATESYNC_RPC_SERVERS=<https://statesync-a.terp.network:443,https://statesync-b.terp.network:443>
+      - ADDRBOOK_URL=https://raw.githubusercontent.com/111STAVR111/props/main/Terp/addrbook.json
       - TERPD_P2P_SEEDS=<>
-      - SNAPSHOT_URL=https://snapshots.nodejumper.io/terp/terp_latest.tar.lz4
+      # - SNAPSHOT_URL=https://snapshots.nodejumper.io/terp/terp_latest.tar.lz4
       # default pruning
       - PRUNING=default
       # enable peer exchange
       - TERPD_P2P_PEX=true
       # left & right tackles are private & unconditional peers
-      - >-
-        TERPD_P2P_PRIVATE_PEER_IDS=<>
-      - >-
-        TERPD_P2P_UNCONDITIONAL_PEER_IDS=<>
+      - TERPD_P2P_PRIVATE_PEER_IDS=<>
+      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=<>
       # our snapshot as persistent peer 
-      - >-
-        TERPD_P2P_PERSISTENT_PEERS=<>
+      - TERPD_P2P_PERSISTENT_PEERS=<>
 profiles:
   compute:
-    oline--forward--left-node:
+    oline-forward-left-node:
       resources:
         cpu:
           units: 4
@@ -67,7 +76,7 @@ profiles:
           size: 16Gi
         storage:
           - size: 60Gi
-    oline--forward--right-node:
+    oline-forward-right-node:
       resources:
         cpu:
           units: 4
@@ -78,10 +87,10 @@ profiles:
   placement:
     dcloud:
       pricing:
-        oline--forward--left-node:
+        oline-forward-left-node:
           denom: uakt
           amount: 1000
-        oline--forward--right-node:
+        oline-forward-right-node:
           denom: uakt
           amount: 1000
       signedBy:
@@ -90,11 +99,11 @@ profiles:
       attributes:
         host: akash
 deployment:
-  oline--forward--left-node:
+  oline-forward-left-node:
     dcloud:
-      profile: oline--forward--left-node
+      profile: oline-forward-left-node
       count: 1
-  oline--forward--right-node:
+  oline-forward-right-node:
     dcloud:
-      profile: oline--forward--right-node
+      profile: oline-forward-right-node
       count: 1
