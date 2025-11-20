@@ -40,7 +40,7 @@ LOG_FILES=(
 SDL_FILES=(
     # Add more SDL files as needed
     "sdls/a.kickoff-special-teams.yml"
-    "sdls/b.left-and-right-tackles.yml"
+    "sdls/b.left-and-right-tackle.yml"
     "sdls/c.left-and-right-forwards.yml"
 )
 

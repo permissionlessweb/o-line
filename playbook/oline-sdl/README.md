@@ -1,103 +1,129 @@
-# TERP O-Line - Run Terp Network Nodes on Akash
+# Akash Deployment Script for Terp Network O-Line
 
-Make deploying Terp Network nodes onto [Akash](//github.com/akash-network/node)
-easy and standardized.
+This README describes the Bash scripting library (`a.deploy-oline.sh`) for deploying Terp Network nodes on the Akash Network. The script automates the setup of a structured node deployment following an "O-Line" analogy, deploying snapshot, seed, tackle, and forward nodes in sequence. It handles key setup, certificate management, provider selection from trusted lists, and sequential deployments using SDL (Service Definition Language) files.
 
-## Step 1: O-line coach & center
+## Overview
 
-```mermaid
-graph LR
-    A[snapshot-node] -->|Syncs via public snapshot & addrbook| Network[(Public Network)]
-    B[seed-node] -->|Syncs via public snapshot & addrbook| Network
+The script (`a.deploy-oline.sh`) is designed to deploy a set of Terp Network nodes on Akash in a phased manner:
+- **Step 1: Kickoff (Snapshot and Seed Nodes)**: Deploys a snapshot node for state synchronization and a seed node for peer discovery.
+- **Step 2: Tackles (Left and Right Sentry Nodes)**: Deploys sentry nodes that connect privately to the snapshot and each other.
+- **Step 3: Forwards (Left and Right Public Nodes)**: Deploys public-facing nodes that use the previous nodes for synchronization and peering.
 
-    A -->|Exports snapshots| Storage[(External Bucket)]
-    A -.->|Persistent Peer| B
+Key features:
+- Uses trusted Akash providers for deployments.
+- Automates bid selection based on lowest price from trusted providers.
+- Updates SDL files dynamically with node peer IDs.
+- Checks for existing deployments and allows closure.
+- Installs dependencies like `provider-services` if needed.
 
-    subgraph Step1 ["Step 1: O-line Coach & Center"]
-        direction LR
-        A & B
-    end
+The script relies on predefined SDL files in `sdls/` and logs progress.
 
-    classDef node fill:#b4582c,stroke:#1e88e5,px,font-size:14px;
-    class A,B node
-```
+## Prerequisites
 
-- 1 snapshot node + 1 seed node
-- snapshot: syncs to untrusted peers via public snapshot & addrbook
-- snapshot: maintains/creates snapshots for public to use
-- snapshot: export snapshots to external buckets once created
-- snapshot: PEX disabled
-- snapshot: statesync enabled
-- snapshot: set private peers as local nodes (becomes centry node)
-- seed: sync to network via public snapshot & addrbook
-- seed: PEX enabled
-- seed: statesync enabled
-- seed: swag enabled
-- seed: prune everything
+- **Akash CLI**: Ensure `provider-services` is installed (script can auto-install on macOS/Linux).
+- **Dependencies**: `jq` for JSON parsing, `yq` for YAML modifications (warns if missing).
+- **Akash Account**: Funded with uAKT (script checks balance).
+- **Environment**: macOS or Linux (script detects OS for installation).
+- **Trusted Providers**: Predefined list in the script; modify `TRUSTED_PROVIDERS` array as needed.
 
-## Step 2: Left & Right tackles
+## Usage
 
-```mermaid
-graph LR
-    LT[lt-node] -->|Persistent peer| S[snapshot-node
-    *PEX-disabled*]
-    RT[rt-node] -->|Persistent peer| S
+1. **Set Environment Variables** (optional, defaults are set):
+   - `AKASH_KEY_NAME`: Key name (default: `test1`).
+   - `AKASH_NODE`: RPC node (default: `https://rpc-akash.ecostake.com:443`).
+   - `AKASH_CHAIN_ID`: Chain ID (fetched from network).
+   - Customize gas fees, providers, etc., in the script.
 
-    LT -->|Private peer| RT
-    RT -->|Private peer| LT
+2. **Run the Script**:
+   ```bash
+   bash a.deploy-oline.sh
+   ```
 
-    subgraph Step2 ["Step 2: Left & Right Tackles"]
-        direction LR
-        LT & RT
-    end
+3. **Process**:
+   - Checks dependencies and installs if needed.
+   - Sets up keys and certificates.
+   - Checks/closes existing deployments (interactive).
+   - Deploys in sequence: Kickoff → Tackles → Forwards.
+   - Saves deployment info to `deployment_uris.env`.
 
-    classDef tackler fill:#2c50b4,stroke:#e65100,font-size:14px;
-    class LT,RT tackler
-```
+4. **Example Output**:
+   The script logs info, warnings, and errors in color-coded format.
 
-- lt: syncs to network via snapshot node
-- lt: default pruning strategy
-- lt: statesync enabled
-- lt: PEX disabled
-- lt: set private peers as local nodes (becomes centry node)
-- lt: snaspshot-node is persistent peer
-- rt: same configuration as lt
+## Deployment Flow
 
-## Step 3: Left & Right Forwards
+The deployment follows a football "O-Line" structure for node protection and efficiency.
 
 ```mermaid
 graph LR
-    %% Nodes placed in visual order (left to right)
-    LT[lt-node] -->|Unconditional peer| LF[lf-node]
-    RT[rt-node] -->|Unconditional peer| RF[rf-node]
-
-    LF -->|StateSync| S[snapshot-node]
-    LF -->|Discovers peers| SD[seed-node]
-
-    RF -->|StateSync| S
-    RF -->|Discovers peers| SD
-
-    %% Subgraph to group and control layout
-    subgraph Step3 ["Step 3: Left & Right Forwards"]
-        direction LR
-        LT & RT & LF & RF
+    subgraph "Step 1: Kickoff (Snapshot & Seed)"
+        Snapshot[Snapshot Node] -->|Persistent Peer| Seed[Seed Node]
+        Snapshot -->|Exports Snapshots| Bucket[(External Bucket)]
     end
 
-    classDef forward fill:#862cb4,stroke:#43a047,font-size:14px;
-    classDef tackle fill:#2c50b4,stroke:#e65100,font-size:14px;
-    classDef snapshot fill:#b4582c,stroke:#1e88e5,px,font-size:14px;
+    subgraph "Step 2: Left & Right Tackles"
+        LT[Left Tackle] -->|Persistent Peer| Snapshot
+        RT[Right Tackle] -->|Persistent Peer| Snapshot
+        LT -->|Private Peer| RT
+    end
 
-    class LF,RF forward
-    class LT,RT tackle
-    class S,SD snapshot
+    subgraph "Step 3: Left & Right Forwards"
+        LF[Left Forward] -->|StateSync| Snapshot
+        LF -->|Discovers Peers| Seed
+        LF -->|Unconditional Peer| LT
+        RF[Right Forward] -->|StateSync| Snapshot
+        RF -->|Discovers Peers| Seed
+        RF -->|Unconditional Peer| RT
+    end
 
+    Network[(Public Network)] <--> LF
+    Network <--> RF
+
+    classDef snapshot fill:#b4582c,stroke:#1e88e5;
+    classDef seed fill:#b4582c,stroke:#1e88e5;
+    classDef tackle fill:#2c50b4,stroke:#e65100;
+    classDef forward fill:#862cb4,stroke:#43a047;
+    class Snapshot,Seed snapshot;
+    class LT,RT tackle;
+    class LF,RF forward;
 ```
 
-- lf: sync to network via our seed & snapshots
-- lf: statesync enabled
-- lf: use public addrbook
-- lf: PEX enabled
-- lf: left & right tackles are private & unconditional peers
-- lf: snapshot node is persistent peer
-- syncs to latest height via public (untrusted) snapshots/peers
-- rf: identical to left foraward
+## Script Structure
+
+- **Variables**: Defines services, logs, SDL files, trusted providers.
+- **Functions**:
+  - `install_provider_services`: Installs Akash provider tools.
+  - `check_dependencies`: Verifies tools like `jq`, `yq`.
+  - `setup_keys`: Manages Akash keys and checks balance.
+  - `setup_certificate`: Creates/publishes client certificate.
+  - `check_existing_deployments`: Lists and optionally closes active deployments.
+  - `wait_for_bids`: Polls for bids on a deployment.
+  - `deploy_sdl`: Deploys an SDL file, selects provider, creates lease, sends manifest.
+  - `get_node_peer_id`: Retrieves node ID via RPC.
+  - `update_sdl_with_node_info`: Updates SDL env vars with peer IDs.
+  - `main`: Orchestrates the full deployment.
+
+## Troubleshooting and Known Issues
+
+- **No Bids Received**: If no bids after 12 attempts, check trusted providers list or network status. Increase `max_attempts` or adjust `wait_time`.
+- **Lease Not Active**: Verify gas fees and account balance. Retry with higher gas adjustment.
+- **Dependency Installation Fails**: On Linux, ensure Go >=1.21 is installed. On macOS, Homebrew must be available.
+- **YAML Modification Errors**: Install `yq` for dynamic SDL updates.
+- **RPC Connection Issues**: Ensure the `AKASH_NODE` URL is valid and accessible.
+- **Provider Selection**: If no trusted providers bid, expand `TRUSTED_PROVIDERS` or handle manually.
+- **Snapshot Time**: Script sets snapshot time 10 mins ahead; adjust if needed.
+
+For errors, check logs in defined `LOG_FILES` or script output.
+
+## TODO: System Improvements
+
+To make the system more generic and modular:
+
+- [ ] Refactor into Rust for better performance, error handling, and cross-platform support.
+- [ ] Define Protocol Buffers (protobuf) schemas for key values (e.g., peer IDs, deployment info) to enable interoperability with Rust, Go, and Python crates.
+- [ ] Create modular crates/libraries in Rust/Go/Python for reusable components (e.g., provider selection, SDL updates).
+- [ ] Add support for other chains beyond Terp Network (generic chain config loading).
+- [ ] Implement automated Cloudflare DNS updates (uncomment and complete the function).
+- [ ] Add unit tests for functions like bid selection and peer ID retrieval.
+- [ ] Support for multiple deployment environments (testnet/mainnet).
+
+Contributions welcome!
