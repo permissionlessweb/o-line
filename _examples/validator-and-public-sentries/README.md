@@ -4,22 +4,22 @@ Sentry node is the internet facing node which serves the blocks to the validator
 
 Validator does not announce its existence to the network (`pex=false` /& `private_peer_ids`) and gets connected only to the sentry nodes.  
 And ideally:
+
 - validator should not be exposed on any other port than the P2P - 26656/tcp (default);
 - the network link between sentries and validator should be in a private network;  
 
 Sentry nodes always letting validator connect to them, unconditionally (`unconditional_peer_ids`).  
 Sentry nodes can optionally expose additional ports, say RPC (26657/tcp), ideally you should place it behind the load balancer and throttle so to lower the usage / reduce possibility of DoS attack.  
 
-This example shows 2 sentry nodes [statesynced from other nodes](../statesync), 
-with a single private validator node which only connects to the sentries. 
+This example shows 2 sentry nodes [statesynced from other nodes](../statesync),
+with a single private validator node which only connects to the sentries.
 
-You should know your sentry and validator node IDs beforehand, which involves controlling a `node_key.json` for each. 
+You should know your sentry and validator node IDs beforehand, which involves controlling a `node_key.json` for each.
 The first time you run a node, if the `KEY_PATH` is set but doesn't exist on the storage provider, the `node_key.json` and `priv_validator_key.json` will be uploaded. You can use this method to obtain the private keys easily before re-configuring the nodes.
 
 You should wait for the sentries to get up to date before running the validator, as it will statesync from those sentries. You can expand the sentry setup to as many nodes as required. Ideally some would be on other clouds for redundancy.
 
-Akash is also very new - you should be prepared to run your validator on another cloud entirely at a moments notice. You should also setup a lot of monitoring. 
-
+Akash is also very new - you should be prepared to run your validator on another cloud entirely at a moments notice. You should also setup a lot of monitoring.
 
 ## Deployment process
 
@@ -46,6 +46,7 @@ $ curl -s http://mtaphuelj1bft4g83pg2d4onsg.ingress.europlots.com/net_info | jq 
 ```
 
 This is why it is important to:
+
 - have more than 1 sentry node to avoid SPOF;
 - monitor your sentry nodes are caught up with the tip of the chain;
 - your validator is validating the blocks;
@@ -81,4 +82,3 @@ $ curl -s http://gjmpnp4ag5e8v14rubecqafvt4.ingress.sandbox.ny.aksh.pw/net_info 
 - [Validator and Private Sentries](https://github.com/permissionlessweb/o-line/tree/master/_examples/validator-and-private-sentries)
 - [Validator and Public Sentries](https://github.com/permissionlessweb/o-line/tree/master/_examples/validator-and-public-sentries)
 - [Sentry Nodes (DDOS Protection)](https://hub.cosmos.network/main/validators/security.html#sentry-nodes-ddos-protection)
-

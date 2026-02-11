@@ -4,20 +4,15 @@ Useful scripts & configurations for setting up public RPC nodes.
 
 ## What's Included?
 
-### Reverse Proxy
-
-- **Custom Node Images:** Docker image source code for deploying full-nodes, sentry-nodes, indexer & validator setups, *fork of [cosmos-omnibus](https://github.com/akash-network/cosmos-omnibus)*.
-- **Nginx Template:** RPC,API,GRPC,SEED reverse proxy configuration & guide.
-- **Caddy Template:** RPC,API,GRPC,SEED reverse proxy confugration & guide.
-
-### Relayer
-
+- **[0-line](./playbook/oline-sdl/README.md):** Sentry node array deployment runtime for protecting at home validators.
+- **[Reverse Proxy Template](./playbook/reverse-proxy/README.md):** RPC,API,GRPC,SEED reverse proxy configuration & guide.
 - [**Keep Alive**](./relayer/keepalive/README.md): Relayer service monitoring script, developed by [DAO DAO](https://github.com/DA0-DA0/)
 
 ## TODO
 
 - add bootstrapping of indexer support
 - add archive node bootstrapping support
+- utitize load-balancing for frontward facing rpcs (need templatize lb-deploy.yaml)
 - custom node image for ipfs pin on snapshot
 - tmkms step by step
 - special teams: vpn oline for oline
