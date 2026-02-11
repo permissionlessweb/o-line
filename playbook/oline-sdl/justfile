@@ -1,0 +1,41 @@
+# O-Line SDL Deployer
+
+# Check compilation without building
+check:
+    cargo check
+
+# Build debug binary
+build:
+    cargo build
+
+# Build optimized release binary
+release:
+    cargo build --release
+
+# Install to ~/.cargo/bin
+install:
+    cargo install --path .
+
+# Dry run: encrypt + deploy with --raw (no .env needed)
+dry-run:
+    cargo run -- deploy --raw
+
+# Run deploy using encrypted mnemonic from .env
+deploy:
+    cargo run -- deploy
+
+# Encrypt mnemonic and store in .env
+encrypt:
+    cargo run -- encrypt
+
+# Run clippy lints
+lint:
+    cargo clippy -- -D warnings
+
+# Format code
+fmt:
+    cargo fmt
+
+# Clean build artifacts
+clean:
+    cargo clean

@@ -2,7 +2,7 @@
 version: "2.0"
 services:
   oline-a-snapshot:
-    image: ghcr.io/akash-network/cosmos-omnibus:v1.2.28-generic
+    image: ghcr.io/akash-network/cosmos-omnibus:v1.2.37-generic
     expose:
       - port: 26656
         as: 26656
@@ -27,9 +27,9 @@ services:
       - TERPD_P2P_PEX=false
       # public address book & snapshot
       - ADDRBOOK_URL=https://raw.githubusercontent.com/111STAVR111/props/main/Terp/addrbook.json
-      - SNAPSHOT_URL=https://server-4.itrocket.net/mainnet/terp/terp_2025-10-23_14746539_snap.tar.lz4
+      - SNAPSHOT_URL=${SNAPSHOT_URL}
       - SNAPSHOT_FORMAT=tar.lz4
-      - TERPD_P2P_PRIVATE_PEER_IDS=0a56999f4f22a72234bed90e0beb7dcab26df331@100.16.250.228:26657
+      - TERPD_P2P_PRIVATE_PEER_IDS=${TERPD_P2P_PRIVATE_PEER_IDS}
       - WASMVM_PATH=/lib/libwasmvm.x86_64.so
       - WASMVM_VERSION=v3.0.2
       - WASMVM_URL=https://github.com/CosmWasm/wasmvm/releases/download/v3.0.2/libwasmvm.x86_64.so
@@ -70,7 +70,7 @@ services:
       # peer exchange enabled
       - TERPD_P2P_PEX=true
       # public address book & snapshot
-      - SNAPSHOT_URL=https://server-4.itrocket.net/mainnet/terp/terp_2025-10-23_14746539_snap.tar.lz4
+      - SNAPSHOT_URL=${SNAPSHOT_URL}
       - SNAPSHOT_FORMAT=tar.lz4
       - FASTSYNC_VERSION=v0
       - STATESYNC_SNAPSHOT_INTERVAL=500

@@ -1,17 +1,28 @@
 #!/usr/bin/env bash
 
+## TODO
+## - set min-gas-prices in provider services on install 
+## - check current provider-service version with latest, update and install if not accurate
+## - use test keyring-backend to avoid password
+
 AKASH_KEY_NAME=test1
 AKASH_KEYRING_BACKEND=os
 AKASH_NET="https://raw.githubusercontent.com/akash-network/net/main/mainnet"
+PROVIDER_REPO="https://github.com/akash-network/provider"
 AKASH_VERSION="$(curl -s https://api.github.com/repos/akash-network/provider/releases/latest | jq -r '.tag_name')"
-export AKASH_CHAIN_ID="$(curl -s "$AKASH_NET/chain-id.txt")"
-# export AKASH_NODE="$(curl -s "$AKASH_NET/rpc-nodes.txt" | shuf -n 1)"
+AKASH_CHAIN_ID=$(curl -s "$AKASH_NET/chain-id.txt")
+AKASH_HOME="$HOME/.akash"
+AKASH_CONFIG="$AKASH_HOME/config/app.toml"
+export AKASH_CHAIN_ID
 export AKASH_NODE="https://rpc-akash.ecostake.com:443"
-echo $AKASH_NODE $AKASH_CHAIN_ID $AKASH_KEYRING_BACKEND
-AKASH_GAS=auto
-AKASH_GAS_ADJUSTMENT=1.3
-AKASH_GAS_PRICES=0.0025uakt
-AKASH_SIGN_MODE=amino-json
+export AKASH_GAS=auto
+export AKASH_GAS_ADJUSTMENT=1.3
+export AKASH_GAS_PRICES="0.0025uakt"
+echo $AKASH_NODE "$AKASH_CHAIN_ID" "$AKASH_KEYRING_BACKEND" "$AKASH_HOME"
+
+FLAGS="--keyring-backend $AKASH_KEYRING_BACKEND --home $AKASH_HOME"
+
+PS="provider-services"
 
 
 CURRENT_IP=$(curl -s https://api.ipify.org)DEFAULT_LOADABLE_BUILTINS_PATH
@@ -93,13 +104,10 @@ function install_provider_services() {
             git fetch --all
         else
             mkdir -p "$provider_dir"
-            git clone https://github.com/akash-network/provider "$provider_dir"
+            git clone $PROVIDER_REPO "$provider_dir"
             cd "$provider_dir" || { log_error "Failed to enter $provider_dir"; exit 1; }
         fi
 
-        # Set network and fetch latest version
-        export AKASH_NET="https://raw.githubusercontent.com/akash-network/net/main/mainnet"
-        export AKASH_VERSION="$(curl -s https://api.github.com/repos/akash-network/provider/releases/latest | jq -r '.tag_name')"
 
         log_info "Checking out Akash provider version: $AKASH_VERSION"
         git checkout "v$AKASH_VERSION" || { log_error "Failed to checkout v$AKASH_VERSION"; exit 1; }
@@ -115,19 +123,19 @@ function install_provider_services() {
     fi
 
     # Verify installation
-    if ! command -v provider-services &> /dev/null; then
+    if ! command -v $PS &> /dev/null; then
         log_error "provider-services binary not found in PATH after installation."
         exit 1
     fi
 
-    log_info "provider-services version: $(provider-services version)"
+    log_info "$PS version: $($PS version)"
 }
 
 function check_dependencies() {
     log_info "Checking dependencies..."
     
     # Check for provider-services
-    if ! command -v provider-services &> /dev/null; then
+    if ! command -v $PS &> /dev/null; then
         install_provider_services
         log_error "provider-services is not installed. Please install it before proceeding: https://akash.network/docs/deployments/akash-cli/installation/"
         exit 1
@@ -149,30 +157,32 @@ function check_dependencies() {
 
 function setup_keys() {
     log_info "Setting up keys..."
-    
-    SOCK_CHECK=$(provider-services keys list $AKASH_KEY_NAME --output json)
+
+    # Minimum gas prices update
+    perl -i -pe 's/minimum-gas-prices = ""/minimum-gas-prices = "0.0025uakt"/' "$AKASH_CONFIG"
+    SOCK_CHECK=$($PS keys list $AKASH_KEY_NAME --output json)
     if [ "$SOCK_CHECK" = "[]" ]; then
         log_info "No key found with name '$AKASH_KEY_NAME', creating key..."
-        provider-services keys add $AKASH_KEY_NAME
+        $PS keys add $AKASH_KEY_NAME
     else
         log_info "Key '$AKASH_KEY_NAME' already exists."
     fi
     
     # Set account address
-    export AKASH_ACCOUNT_ADDRESS="$(provider-services keys show $AKASH_KEY_NAME -a)"
+    AKASH_ACCOUNT_ADDRESS=$($PS keys show $AKASH_KEY_NAME -a)
     log_info "Using account address: $AKASH_ACCOUNT_ADDRESS"
     
     ## confirm balance exists 
     log_info "Checking account balance..."
-    BALANCE_CHECK=$(provider-services query bank balances --node $AKASH_NODE $AKASH_ACCOUNT_ADDRESS -o json)
+    BALANCE_CHECK=$($PS query bank balances --node $AKASH_NODE "$AKASH_ACCOUNT_ADDRESS" -o json)
     
     AKT_BALANCE=$(echo "$BALANCE_CHECK" | jq -r '.balances[] | select(.denom == "uakt") | .amount // "0"')
     if [ -z "$AKT_BALANCE" ]; then AKT_BALANCE="0"; fi
     
     if [ "$AKT_BALANCE" -gt 0 ]; then
-        log_info "Account has $AKT_BALANCE uakt."
+        log_info "Account $AKASH_ACCOUNT_ADDRESS has $AKT_BALANCE uakt."
     else
-        log_error "Account has no uakt. Please fund your account before proceeding."
+        log_error "Account $AKASH_ACCOUNT_ADDRESS has no uakt. Please fund your account before proceeding."
         exit 1
     fi
 }
@@ -183,17 +193,17 @@ function setup_certificate() {
     log_info "Setting up certificate..."
     
     # Check if certificate already exists
-    CERT_CHECK=$(provider-services query cert list --owner $AKASH_ACCOUNT_ADDRESS --node $AKASH_NODE -o json)
+    CERT_CHECK=$($PS query cert list --owner $AKASH_ACCOUNT_ADDRESS --node $AKASH_NODE -o json)
     CERT_COUNT=$(echo "$CERT_CHECK" | jq -r '.certificates | length')
     
     if [ "$CERT_COUNT" -gt 0 ]; then
         log_info "Certificate already exists."
     else
         log_info "Generating new certificate..."
-        provider-services tx cert generate client --from $AKASH_KEY_NAME
+        $PS tx cert generate client --from $AKASH_KEY_NAME
 
         log_info "Publishing certificate..."
-        provider-services tx cert publish client --from $AKASH_KEY_NAME --fees 5000uakt
+        $PS tx cert publish client --from $AKASH_KEY_NAME --fees 5000uakt
     fi
 }
  
@@ -202,7 +212,7 @@ function check_existing_deployments() {
   
   # Query deployments
   local deployments_json
-  deployments_json=$(provider-services query deployment list --owner "$AKASH_ACCOUNT_ADDRESS" --state active --output json) || {
+  deployments_json=$($PS query deployment list --owner "$AKASH_ACCOUNT_ADDRESS" --state active --output json) || {
     log_error "Failed to query deployments"
     return 1
   }
@@ -294,7 +304,7 @@ function check_existing_deployments() {
   # Close selected deployments
   for dseq in "${to_close[@]}"; do
     log_info "Closing deployment DSEQ=$dseq"
-    provider-services tx deployment close --dseq "$dseq" --owner "$AKASH_ACCOUNT_ADDRESS" --from "$AKASH_KEY_NAME" --gas auto --gas-adjustment 1.3 --fees 10000uakt \
+    $PS tx deployment close --dseq "$dseq" --owner "$AKASH_ACCOUNT_ADDRESS" --from "$AKASH_KEY_NAME" --gas auto --gas-adjustment 1.3 --fees 10000uakt \
       -y || {
         log_error "Failed to close DSEQ $dseq"
         continue
@@ -314,7 +324,7 @@ function wait_for_bids() {
     local wait_time=5
     
     for ((attempt=1; attempt<=max_attempts; attempt++)); do
-        local bids_output=$(provider-services query market bid list --owner=$owner --node $AKASH_NODE --dseq $dseq --state=open -o json)
+        local bids_output=$($PS query market bid list --owner=$owner --node $AKASH_NODE --dseq $dseq --state=open -o json)
         local bid_count=$(echo "$bids_output" | jq -r '.bids | length')
         
         if [ "$bid_count" -gt 0 ]; then
@@ -344,7 +354,7 @@ function deploy_sdl() {
     fi
 
     log_info "Creating deployment..."
-    DEPLOY_OUTPUT=$(provider-services tx deployment create "$SDL_FILE" --from $AKASH_KEY_NAME --fees 5000uakt -y --output json)
+    DEPLOY_OUTPUT=$($PS tx deployment create "$SDL_FILE" --from $AKASH_KEY_NAME --fees 5000uakt -y --output json)
     sleep 7
 
     # Parse deployment info
@@ -366,7 +376,7 @@ function deploy_sdl() {
     
     # Get bids
     log_info "Fetching bids..."
-    BIDS_OUTPUT=$(provider-services query market bid list --owner=$AKASH_ACCOUNT_ADDRESS --node $AKASH_NODE --dseq $AKASH_DSEQ --state=open -o json)
+    BIDS_OUTPUT=$($PS query market bid list --owner=$AKASH_ACCOUNT_ADDRESS --node $AKASH_NODE --dseq $AKASH_DSEQ --state=open -o json)
     
     ## determine cheapest bid from trusted providers
     ## monthly cost == (Xuakt) * # of blocks in a month (6.098sec blocks) == (9.84 blocks/min) == (590.4 blocks/hour) == (14169.6 blocks/day) == 425,088 blocks/month
@@ -399,12 +409,12 @@ function deploy_sdl() {
 
     ## 3.c Create the lease 
     log_info "Creating lease with provider $LOWEST_PROVIDER..."
-    LEASE_OUTPUT=$(provider-services tx market lease create --dseq "$AKASH_DSEQ" --provider "$LOWEST_PROVIDER" --from $AKASH_KEY_NAME --fees 5000uakt --gas 1000000 --gas-adjustment 1.3  --fees 25000uakt -y --output json)
+    LEASE_OUTPUT=$($PS tx market lease create --dseq "$AKASH_DSEQ" --provider "$LOWEST_PROVIDER" --from $AKASH_KEY_NAME --fees 5000uakt --gas 1000000 --gas-adjustment 1.3  --fees 25000uakt -y --output json)
     sleep 10
 
     #### verify lease was created 
     log_info "Verifying lease..."
-    LEASE_CHECK=$(provider-services query market lease list --owner "$AKASH_ACCOUNT_ADDRESS" --node $AKASH_NODE --dseq "$AKASH_DSEQ" -o json)
+    LEASE_CHECK=$($PS query market lease list --owner "$AKASH_ACCOUNT_ADDRESS" --node $AKASH_NODE --dseq "$AKASH_DSEQ" -o json)
     LEASE_STATE=$(echo "$LEASE_CHECK" | jq -r ".leases[0].lease.state")
     
     if [ "$LEASE_STATE" != "active" ]; then
@@ -416,14 +426,14 @@ function deploy_sdl() {
 
     ## 3.d Send Manifest To Provider
     log_info "Sending manifest to provider..."
-    MANIFEST_OUTPUT=$(provider-services send-manifest "$SDL_FILE" --dseq "$AKASH_DSEQ" --provider "$LOWEST_PROVIDER" --from $AKASH_KEY_NAME)
+    MANIFEST_OUTPUT=$($PS send-manifest "$SDL_FILE" --dseq "$AKASH_DSEQ" --provider "$LOWEST_PROVIDER" --from $AKASH_KEY_NAME)
     
     log_info "Manifest sent, waiting for deployment to be ready..."
     sleep 30
 
     ## 4. Confirm the URL & obtain DNS for deployments 
     log_info "Checking lease status..."
-    STATUS_OUTPUT=$(provider-services lease-status --dseq "$AKASH_DSEQ" --from $AKASH_KEY_NAME --provider "$LOWEST_PROVIDER")
+    STATUS_OUTPUT=$($PS lease-status --dseq "$AKASH_DSEQ" --from $AKASH_KEY_NAME --provider "$LOWEST_PROVIDER")
     log_info "lease status: $STATUS_OUTPUT"
 
     ## Collect DNS URI:
@@ -640,8 +650,8 @@ function log_error() {
 main
 
 ## more tools
-# - closing lease: provider-services tx deployment close --dseq $AKASH_DSEQ  --owner $AKASH_ACCOUNT_ADDRESS --from $AKASH_KEY_NAME
-# - updating lease: provider-services tx deployment update deploy.yml --dseq $AKASH_DSEQ --from $AKASH_KEY_NAME
+# - closing lease: $PS tx deployment close --dseq $AKASH_DSEQ  --owner $AKASH_ACCOUNT_ADDRESS --from $AKASH_KEY_NAME
+# - updating lease: $PS tx deployment update deploy.yml --dseq $AKASH_DSEQ --from $AKASH_KEY_NAME
 
 ## todo:
 ## automate cloudflare DNS api update

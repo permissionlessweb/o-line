@@ -4,9 +4,12 @@
 .DS_Store
 .vim
 *.env
-*/node-data
-node-data
-
 *.tar.gz
 
+*/node-data
+node-data
 node_modules
+
+
+target
+vendor

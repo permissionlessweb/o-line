@@ -27,8 +27,8 @@ services:
       - STATESYNC_RPC_SERVERS=<https://statesync-a.terp.network:443,https://statesync-b.terp.network:443>
       - ADDRBOOK_URL=https://raw.githubusercontent.com/111STAVR111/props/main/Terp/addrbook.json
       # validator is private peer & unconditional
-      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=
-      - TERPD_P2P_PERSISTENT_PEERS=<>
+      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${TERPD_P2P_UNCONDITIONAL_PEER_IDS}
+      - TERPD_P2P_PERSISTENT_PEERS=${TERPD_P2P_PERSISTENT_PEERS}
       - WASMVM_PATH=/lib/libwasmvm.x86_64.so
       - WASMVM_VERSION=v3.0.2
       - WASMVM_URL=https://github.com/CosmWasm/wasmvm/releases/download/v3.0.2/libwasmvm.x86_64.so
@@ -52,9 +52,9 @@ services:
       - SNAPSHOT_FORMAT=tar.lz4
       - MINIMUM_GAS_PRICES=0.05uthiol
       # validator private peer 
-      - TERPD_P2P_PRIVATE_PEER_IDS=
-      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=
-      - TERPD_P2P_PERSISTENT_PEERS=<>
+      - TERPD_P2P_PRIVATE_PEER_IDS=${TERPD_P2P_PRIVATE_PEER_IDS}
+      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${TERPD_P2P_UNCONDITIONAL_PEER_IDS}
+      - TERPD_P2P_PERSISTENT_PEERS=${TERPD_P2P_PERSISTENT_PEERS}
       - WASMVM_PATH=/lib/libwasmvm.x86_64.so
       - WASMVM_VERSION=v3.0.2
       - WASMVM_URL=https://github.com/CosmWasm/wasmvm/releases/download/v3.0.2/libwasmvm.x86_64.so
