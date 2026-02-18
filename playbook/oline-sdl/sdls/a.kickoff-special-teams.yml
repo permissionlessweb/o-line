@@ -1,8 +1,8 @@
 ---
 version: "2.0"
 services:
-  oline-a-snapshot:
-    image: ghcr.io/akash-network/cosmos-omnibus:v1.2.37-generic
+  ${SNAPSHOT_SVC}:
+    image: ${OMNIBUS_IMAGE}
     expose:
       - port: 26656
         as: 26656
@@ -13,38 +13,41 @@ services:
         to:
           - global: true
         accept:
-          - statesync-a.terp.network # ← only for RPC, not P2P
+          - statesync.terp.network # ← only for RPC, not P2P
     env:
-      - MONIKER=terp-node
-      - CHAIN_JSON=https://raw.githubusercontent.com/hard-nett/chain-registry-1/refs/heads/v5.0.1/terpnetwork/chain.json
+      - MONIKER=${SNAPSHOT_MONIKER}
+      - CHAIN_JSON=${CHAIN_JSON}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - FASTSYNC_VERSION=v0
+      # keep full state for statesync serving
+      - PRUNING=nothing
       - STATESYNC_SNAPSHOT_INTERVAL=500
-      # - COSMOVISOR_ENABLED=1
-      # - STATESYNC_RPC_SERVERS=<https://terp.rpc.m.anode.team:443,rpc.terp.aknodes.net:443>
-      # - PRUNING=nothing
+      - COSMOVISOR_ENABLED=1
       # peer exchange disabled
       - TERPD_P2P_PEX=false
       # public address book & snapshot
-      - ADDRBOOK_URL=https://raw.githubusercontent.com/111STAVR111/props/main/Terp/addrbook.json
+      - ADDRBOOK_URL=${ADDRBOOK_URL}
       - SNAPSHOT_URL=${SNAPSHOT_URL}
       - SNAPSHOT_FORMAT=tar.lz4
       - TERPD_P2P_PRIVATE_PEER_IDS=${TERPD_P2P_PRIVATE_PEER_IDS}
       - WASMVM_PATH=/lib/libwasmvm.x86_64.so
       - WASMVM_VERSION=v3.0.2
       - WASMVM_URL=https://github.com/CosmWasm/wasmvm/releases/download/v3.0.2/libwasmvm.x86_64.so
-      # s3 API bucket auth
-      # - S3_KEY=
-      # - S3_SECRET=
-      # - S3_HOST=https://s3.filebase.com
-      # - SNAPSHOT_PATH=snapshots/terpnetwork
-      # - SNAPSHOT_TIME=22:45:00
-      # - SNAPSHOT_SIZE=214748364800
-      # - SNAPSHOT_DIR=/root/.terp
-      # - SNAPSHOT_METADATA=0
-      # - SNAPSHOT_SAVE_FORMAT=tar.gz
-  oline-a-seed:
-    image: ghcr.io/akash-network/cosmos-omnibus:v1.2.28-generic
+      # s3 snapshot export
+      - S3_KEY=${S3_KEY}
+      - S3_SECRET=${S3_SECRET}
+      - S3_HOST=${S3_HOST}
+      - SNAPSHOT_PATH=${SNAPSHOT_PATH}
+      - SNAPSHOT_TIME=${SNAPSHOT_TIME}
+      - SNAPSHOT_DIR=/root/.terp
+      - SNAPSHOT_METADATA=1
+      - SNAPSHOT_METADATA_URL=${SNAPSHOT_METADATA_URL}
+      - SNAPSHOT_SAVE_FORMAT=${SNAPSHOT_SAVE_FORMAT}
+      - SNAPSHOT_RETAIN=${SNAPSHOT_RETAIN}
+      - SNAPSHOT_KEEP_LAST=${SNAPSHOT_KEEP_LAST}
+      - SNAPSHOT_ON_START=1
+  ${SEED_SVC}:
+    image: ${OMNIBUS_IMAGE}
     expose:
       - port: 26657
         as: 26657
@@ -62,9 +65,9 @@ services:
         to:
           - global: true
     env:
-      - MONIKER=oline::special::seed-node
+      - MONIKER=${SEED_MONIKER}
       # default chain cfg
-      - CHAIN_JSON=https://raw.githubusercontent.com/hard-nett/chain-registry-1/refs/heads/v5.0.1/terpnetwork/chain.json
+      - CHAIN_JSON=${CHAIN_JSON}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - PRUNING=default
       # peer exchange enabled
@@ -79,10 +82,10 @@ services:
       - WASMVM_VERSION=v3.0.2
       - WASMVM_URL=https://github.com/CosmWasm/wasmvm/releases/download/v3.0.2/libwasmvm.x86_64.so
       # - STATESYNC_RPC_SERVERS=<mainnet-terp-rpc.konsortech.xyz:443,rpc.terp.aknodes.net:443>
-      - ADDRBOOK_URL=https://raw.githubusercontent.com/111STAVR111/props/main/Terp/addrbook.json
+      - ADDRBOOK_URL=${ADDRBOOK_URL}
 profiles:
   compute:
-    oline-a-snapshot:
+    ${SNAPSHOT_SVC}:
       resources:
         cpu:
           units: 4
@@ -90,7 +93,7 @@ profiles:
           size: 16Gi
         storage:
           - size: 250Gi
-    oline-a-seed:
+    ${SEED_SVC}:
       resources:
         cpu:
           units: 2
@@ -101,10 +104,10 @@ profiles:
   placement:
     dcloud:
       pricing:
-        oline-a-snapshot:
+        ${SNAPSHOT_SVC}:
           denom: uakt
           amount: 1000
-        oline-a-seed:
+        ${SEED_SVC}:
           denom: uakt
           amount: 1000
       signedBy:
@@ -113,11 +116,11 @@ profiles:
       attributes:
         host: akash
 deployment:
-  oline-a-snapshot:
+  ${SNAPSHOT_SVC}:
     dcloud:
-      profile: oline-a-snapshot
+      profile: ${SNAPSHOT_SVC}
       count: 1
-  oline-a-seed:
+  ${SEED_SVC}:
     dcloud:
-      profile: oline-a-seed
+      profile: ${SEED_SVC}
       count: 1

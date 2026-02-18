@@ -8,12 +8,13 @@ name = "oline"
 path = "src/main.rs"
 
 [dependencies]
-akash-deploy-rs = { version = "0.0.5", features = ["default-client", "sdl-templates"] }
-# akash-deploy-rs = { path = "/Users/returniflost/akash-deploy-rs", features = ["default-client", "sdl-templates"] }
+# akash-deploy-rs = { version = "0.0.5", features = ["default-client", "sdl-templates"] }
+akash-deploy-rs = { path = "/Users/returniflost/akash-deploy-rs", features = ["default-client", "sdl-templates", "file-storage"] }
 tokio = { version = "1.40", features = ["rt-multi-thread", "macros"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
+rustls = { version = "0.23", features = ["ring"] }
 aes-gcm = "0.10"
 argon2 = "0.5"
 base64 = "0.22"

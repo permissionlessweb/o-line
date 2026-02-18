@@ -87,7 +87,7 @@ Select provider (1-3) or 'a' to auto-select cheapest:
 
 Provider details (name, website, region) are queried from Akash Network using `query_provider_info`.
 
-3. Enter the number (1-3) or `a` to auto-select the cheapest bid
+1. Enter the number (1-3) or `a` to auto-select the cheapest bid
 
 ## Advanced: Raw Mode
 
@@ -160,10 +160,10 @@ graph LR
         RF[Right Forward]
     end
 
-    LF -->|Unconditional Peer| LT
-    LF -->|Unconditional Peer| RT
-    RF -->|Unconditional Peer| LT
-    RF -->|Unconditional Peer| RT
+    LF -->|Private + Unconditional| LT
+    LF -->|Private + Unconditional| RT
+    RF -->|Private + Unconditional| LT
+    RF -->|Private + Unconditional| RT
 
     subgraph "Phase B: Tackles"
         LT[Left Tackle]
@@ -185,9 +185,22 @@ graph LR
 
 ## TODO
 
+### WORKFLOW
+
+- select which workflow to deploy (just one, or all of them )
+
+### SNAPSHOTS
+
+- tune snapshot nodes to prune only the snapshot intervals, allowing us to lose no data
 - offload snapshot to jackal storage/s3 storage
+- s3 secrets inputs hidden in terminal
+
+### FEATURES
+
+- relayer and indexer deployment:
+  - <https://github.com/noahsaso/rly-docker>
+  - <https://github.com/noahsaso/argus>
 - load-balanced RPC
-- automate rotation of
 - cloudflare api for dns mapping
 - helpful communication tips during each step
 - web-ui

@@ -16,14 +16,23 @@ use std::io::{self, BufRead, Write};
 use std::path::Path;
 
 // Embed SDLs at compile time
-const SDL_A: &str = include_str!("../scripts/sdls/a.kickoff-special-teams.yml");
-const SDL_A2: &str = include_str!("../scripts/sdls/a2.kickoff-backup.yml");
-const SDL_B: &str = include_str!("../scripts/sdls/b.left-and-right-tackle.yml");
-const SDL_C: &str = include_str!("../scripts/sdls/c.left-and-right-forwards.yml");
+const SDL_A: &str = include_str!("../sdls/a.kickoff-special-teams.yml");
+const SDL_B: &str = include_str!("../sdls/b.left-and-right-tackle.yml");
+const SDL_C: &str = include_str!("../sdls/c.left-and-right-forwards.yml");
 
 const ENV_KEY: &str = "OLINE_ENCRYPTED_MNEMONIC";
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
+
+// Snapshot & SDL defaults
+const ITROCKET_STATE_URL: &str =
+    "https://server-4.itrocket.net/mainnet/terp/.current_state.json";
+const ITROCKET_SNAPSHOT_BASE: &str = "https://server-4.itrocket.net/mainnet/terp/";
+const DEFAULT_CHAIN_JSON: &str =
+    "https://raw.githubusercontent.com/permissionlessweb/chain-registry/refs/heads/terpnetwork%40v5.0.2/terpnetwork/chain.json";
+const DEFAULT_ADDRBOOK_URL: &str =
+    "https://raw.githubusercontent.com/111STAVR111/props/main/Terp/addrbook.json";
+const DEFAULT_OMNIBUS_IMAGE: &str = "ghcr.io/akash-network/cosmos-omnibus:v1.2.37-generic";
 
 // ── Encryption ──
 
@@ -136,15 +145,62 @@ fn write_encrypted_mnemonic_to_env(blob: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+// ── Snapshot fetching ──
+
+async fn fetch_latest_snapshot_url() -> Result<String, Box<dyn Error>> {
+    println!("  Fetching latest snapshot info from itrocket...");
+    let resp = reqwest::get(ITROCKET_STATE_URL).await?.text().await?;
+    let trimmed = resp.trim();
+    let state: serde_json::Value = serde_json::from_str(trimmed)
+        .map_err(|e| format!("Failed to parse .current_state.json: {}", e))?;
+    let snapshot_name = state["snapshot_name"]
+        .as_str()
+        .ok_or("missing snapshot_name in .current_state.json")?;
+    let url = format!("{}{}", ITROCKET_SNAPSHOT_BASE, snapshot_name);
+    println!("  Latest snapshot: {}", url);
+    Ok(url)
+}
+
+/// Helper to insert the shared SDL template variables into a HashMap.
+fn insert_sdl_defaults(vars: &mut HashMap<String, String>) {
+    vars.insert("OMNIBUS_IMAGE".into(), DEFAULT_OMNIBUS_IMAGE.into());
+    vars.insert("CHAIN_JSON".into(), DEFAULT_CHAIN_JSON.into());
+    vars.insert("ADDRBOOK_URL".into(), DEFAULT_ADDRBOOK_URL.into());
+}
+
+/// Helper to insert S3 snapshot export variables from config.
+fn insert_s3_vars(vars: &mut HashMap<String, String>, config: &OLineConfig) {
+    vars.insert("S3_KEY".into(), config.s3_key.clone());
+    vars.insert("S3_SECRET".into(), config.s3_secret.clone());
+    vars.insert("S3_HOST".into(), config.s3_host.clone());
+    vars.insert("SNAPSHOT_PATH".into(), config.snapshot_path.clone());
+    vars.insert("SNAPSHOT_TIME".into(), config.snapshot_time.clone());
+    vars.insert("SNAPSHOT_SAVE_FORMAT".into(), config.snapshot_save_format.clone());
+    vars.insert("SNAPSHOT_METADATA_URL".into(), config.snapshot_metadata_url.clone());
+    vars.insert("SNAPSHOT_RETAIN".into(), config.snapshot_retain.clone());
+    vars.insert("SNAPSHOT_KEEP_LAST".into(), config.snapshot_keep_last.clone());
+}
+
 // ── OLineConfig & OLineDeployer ──
 
 pub struct OLineConfig {
     pub mnemonic: String,
     pub rpc_endpoint: String,
+    pub grpc_endpoint: String,
     pub snapshot_url: String,
     pub validator_peer_id: String,
     pub trusted_providers: Vec<String>,
     pub auto_select_provider: bool,
+    // S3 snapshot export
+    pub s3_key: String,
+    pub s3_secret: String,
+    pub s3_host: String,
+    pub snapshot_path: String,
+    pub snapshot_time: String,
+    pub snapshot_save_format: String,
+    pub snapshot_metadata_url: String,
+    pub snapshot_retain: String,
+    pub snapshot_keep_last: String,
 }
 
 pub struct OLineDeployer {
@@ -156,7 +212,8 @@ pub struct OLineDeployer {
 impl OLineDeployer {
     pub async fn new(config: OLineConfig) -> Result<Self, DeployError> {
         let client =
-            AkashClient::new_from_mnemonic(&config.mnemonic, &config.rpc_endpoint).await?;
+            AkashClient::new_from_mnemonic(&config.mnemonic, &config.rpc_endpoint, &config.grpc_endpoint)
+                .await?;
         let signer = KeySigner::new_mnemonic_str(&config.mnemonic, None)
             .map_err(|e| DeployError::Signer(format!("Failed to create signer: {}", e)))?;
         Ok(Self { client, signer, config })
@@ -381,19 +438,22 @@ impl OLineDeployer {
         }
 
         let mut a_vars = HashMap::new();
+        insert_sdl_defaults(&mut a_vars);
+        insert_s3_vars(&mut a_vars, &self.config);
+        a_vars.insert("SNAPSHOT_SVC".into(), "oline-a-snapshot".into());
+        a_vars.insert("SEED_SVC".into(), "oline-a-seed".into());
+        a_vars.insert("SNAPSHOT_MONIKER".into(), "oline::special::snapshot-node".into());
+        a_vars.insert("SEED_MONIKER".into(), "oline::special::seed-node".into());
+        a_vars.insert("SNAPSHOT_URL".into(), self.config.snapshot_url.clone());
         a_vars.insert(
-            "SNAPSHOT_URL".to_string(),
-            self.config.snapshot_url.clone(),
-        );
-        a_vars.insert(
-            "TERPD_P2P_PRIVATE_PEER_IDS".to_string(),
+            "TERPD_P2P_PRIVATE_PEER_IDS".into(),
             self.config.validator_peer_id.clone(),
         );
         let a_defaults = HashMap::new();
 
         println!("  Variables:");
         for (k, v) in &a_vars {
-            println!("    {}={}", k, v);
+            println!("    {}={}", k, redact_if_secret(k, v));
         }
 
         println!("  Deploying...");
@@ -418,32 +478,35 @@ impl OLineDeployer {
         println!("    snapshot_peer: {}", snapshot_peer);
         println!("    seed_peer: {}", seed_peer);
 
-        // ── Phase A2: Backup Snapshot + Seed ──
+        // ── Phase A2: Backup Snapshot + Seed (reuses SDL_A with backup service names) ──
         println!("\n── Phase 1b: Deploy Backup Snapshot + Seed nodes ──");
-        if !prompt_continue(&mut lines, "Deploy a2.kickoff-backup.yml?")? {
+        if !prompt_continue(&mut lines, "Deploy backup kickoff (a.kickoff-special-teams.yml)?")? {
             println!("Aborted.");
             return Ok(());
         }
 
         let mut a2_vars = HashMap::new();
+        insert_sdl_defaults(&mut a2_vars);
+        insert_s3_vars(&mut a2_vars, &self.config);
+        a2_vars.insert("SNAPSHOT_SVC".into(), "oline-a2-snapshot".into());
+        a2_vars.insert("SEED_SVC".into(), "oline-a2-seed".into());
+        a2_vars.insert("SNAPSHOT_MONIKER".into(), "oline::backup::snapshot-node".into());
+        a2_vars.insert("SEED_MONIKER".into(), "oline::backup::seed-node".into());
+        a2_vars.insert("SNAPSHOT_URL".into(), self.config.snapshot_url.clone());
         a2_vars.insert(
-            "SNAPSHOT_URL".to_string(),
-            self.config.snapshot_url.clone(),
-        );
-        a2_vars.insert(
-            "TERPD_P2P_PRIVATE_PEER_IDS".to_string(),
+            "TERPD_P2P_PRIVATE_PEER_IDS".into(),
             self.config.validator_peer_id.clone(),
         );
         let a2_defaults = HashMap::new();
 
         println!("  Variables:");
         for (k, v) in &a2_vars {
-            println!("    {}={}", k, v);
+            println!("    {}={}", k, redact_if_secret(k, v));
         }
 
         println!("  Deploying...");
         let (_a2_state, a2_endpoints) =
-            self.deploy_phase_with_selection(SDL_A2, a2_vars, a2_defaults, "oline-phase-a2", &mut lines).await?;
+            self.deploy_phase_with_selection(SDL_A, a2_vars, a2_defaults, "oline-phase-a2", &mut lines).await?;
 
         println!(
             "  Deployed! DSEQ: {}",
@@ -471,23 +534,24 @@ impl OLineDeployer {
         }
 
         let mut b_vars = HashMap::new();
+        insert_sdl_defaults(&mut b_vars);
         b_vars.insert(
-            "TERPD_P2P_PERSISTENT_PEERS".to_string(),
+            "TERPD_P2P_PERSISTENT_PEERS".into(),
             format!("{},{}", snapshot_peer, snapshot_2_peer),
         );
         b_vars.insert(
-            "TERPD_P2P_PRIVATE_PEER_IDS".to_string(),
+            "TERPD_P2P_PRIVATE_PEER_IDS".into(),
             self.config.validator_peer_id.clone(),
         );
         b_vars.insert(
-            "TERPD_P2P_UNCONDITIONAL_PEER_IDS".to_string(),
+            "TERPD_P2P_UNCONDITIONAL_PEER_IDS".into(),
             self.config.validator_peer_id.clone(),
         );
         let b_defaults = HashMap::new();
 
         println!("  Variables:");
         for (k, v) in &b_vars {
-            println!("    {}={}", k, v);
+            println!("    {}={}", k, redact_if_secret(k, v));
         }
 
         println!("  Deploying...");
@@ -521,27 +585,28 @@ impl OLineDeployer {
 
         let tackles_combined = format!("{},{}", left_tackle_peer, right_tackle_peer);
         let mut c_vars = HashMap::new();
+        insert_sdl_defaults(&mut c_vars);
         c_vars.insert(
-            "TERPD_P2P_SEEDS".to_string(),
+            "TERPD_P2P_SEEDS".into(),
             format!("{},{}", seed_peer, seed_2_peer),
         );
         c_vars.insert(
-            "TERPD_P2P_PRIVATE_PEER_IDS".to_string(),
+            "TERPD_P2P_PRIVATE_PEER_IDS".into(),
             tackles_combined.clone(),
         );
         c_vars.insert(
-            "TERPD_P2P_UNCONDITIONAL_PEER_IDS".to_string(),
+            "TERPD_P2P_UNCONDITIONAL_PEER_IDS".into(),
             tackles_combined,
         );
         c_vars.insert(
-            "TERPD_P2P_PERSISTENT_PEERS".to_string(),
+            "TERPD_P2P_PERSISTENT_PEERS".into(),
             format!("{},{}", snapshot_peer, snapshot_2_peer),
         );
         let c_defaults = HashMap::new();
 
         println!("  Variables:");
         for (k, v) in &c_vars {
-            println!("    {}={}", k, v);
+            println!("    {}={}", k, redact_if_secret(k, v));
         }
 
         println!("  Deploying...");
@@ -559,6 +624,26 @@ impl OLineDeployer {
         println!("  Phase B  DSEQ: {}", _b_state.dseq.unwrap_or(0));
         println!("  Phase C  DSEQ: {}", _c_state.dseq.unwrap_or(0));
         Ok(())
+    }
+}
+
+// ── Secret redaction ──
+
+const SECRET_KEYS: &[&str] = &[
+    "S3_KEY",
+    "S3_SECRET",
+    "TERPD_P2P_PRIVATE_PEER_IDS",
+];
+
+fn redact_if_secret(key: &str, value: &str) -> String {
+    if SECRET_KEYS.iter().any(|&s| s == key) {
+        if value.len() <= 4 {
+            "****".to_string()
+        } else {
+            format!("{}...{}", &value[..2], &value[value.len() - 2..])
+        }
+    } else {
+        value.to_string()
     }
 }
 
@@ -591,6 +676,26 @@ fn read_input(
     let input = lines
         .next()
         .unwrap_or(Ok(String::new()))?;
+    let input = input.trim().to_string();
+    if input.is_empty() {
+        if let Some(def) = default {
+            return Ok(def.to_string());
+        }
+    }
+    Ok(input)
+}
+
+/// Like `read_input` but hides the typed value (for secrets).
+fn read_secret_input(
+    prompt: &str,
+    default: Option<&str>,
+) -> Result<String, Box<dyn Error>> {
+    let display = if let Some(def) = default {
+        format!("{} [{}]: ", prompt, def)
+    } else {
+        format!("{}: ", prompt)
+    };
+    let input = rpassword::prompt_password(&display)?;
     let input = input.trim().to_string();
     if input.is_empty() {
         if let Some(def) = default {
@@ -658,12 +763,33 @@ async fn cmd_deploy(raw: bool) -> Result<(), Box<dyn Error>> {
         Some("https://rpc.akashnet.net:443"),
     )?;
 
-    let snapshot_url = read_input(&mut lines, "Enter snapshot URL", None)?;
-    if snapshot_url.is_empty() {
-        return Err("Snapshot URL is required.".into());
-    }
+    let grpc_endpoint = read_input(
+        &mut lines,
+        "Enter gRPC endpoint",
+        Some("https://grpc.akashnet.net:443"),
+    )?;
 
-    let validator_peer_id = read_input(&mut lines, "Enter validator peer ID (id@host:port)", None)?;
+    // Auto-fetch latest snapshot URL from itrocket, with manual override
+    let snapshot_url = match fetch_latest_snapshot_url().await {
+        Ok(url) => {
+            let override_url = read_input(
+                &mut lines,
+                "Snapshot URL (press Enter to use fetched URL, or paste override)",
+                Some(&url),
+            )?;
+            override_url
+        }
+        Err(e) => {
+            eprintln!("  Warning: failed to fetch snapshot: {}", e);
+            let url = read_input(&mut lines, "Enter snapshot URL manually", None)?;
+            if url.is_empty() {
+                return Err("Snapshot URL is required.".into());
+            }
+            url
+        }
+    };
+
+    let validator_peer_id = read_secret_input("Enter validator peer ID (id@host:port)", None)?;
     if validator_peer_id.is_empty() {
         return Err("Validator peer ID is required.".into());
     }
@@ -690,16 +816,66 @@ async fn cmd_deploy(raw: bool) -> Result<(), Box<dyn Error>> {
     let auto_select_provider =
         auto_select.is_empty() || auto_select == "y" || auto_select == "yes";
 
+    // S3 snapshot export config
+    println!("\n── S3 Snapshot Export ──");
+    let s3_key = read_secret_input("S3 access key", None)?;
+    let s3_secret = read_secret_input("S3 secret key", None)?;
+    let s3_host = read_input(
+        &mut lines,
+        "S3 host",
+        Some("https://s3.filebase.com"),
+    )?;
+    let snapshot_path = read_input(
+        &mut lines,
+        "S3 snapshot path (bucket/path)",
+        Some("snapshots/terpnetwork"),
+    )?;
+    let snapshot_time = read_input(
+        &mut lines,
+        "Snapshot schedule time (HH:MM:SS)",
+        Some("00:00:00"),
+    )?;
+    let snapshot_save_format = read_input(
+        &mut lines,
+        "Snapshot save format",
+        Some("tar.gz"),
+    )?;
+    let snapshot_metadata_url = read_input(
+        &mut lines,
+        "Snapshot metadata URL (where snapshots are served from)",
+        None,
+    )?;
+    let snapshot_retain = read_input(
+        &mut lines,
+        "Snapshot retention period",
+        Some("2 days"),
+    )?;
+    let snapshot_keep_last = read_input(
+        &mut lines,
+        "Minimum snapshots to keep",
+        Some("2"),
+    )?;
+
     // Drop the stdin lock before OLineDeployer::run() re-acquires it
     drop(lines);
 
     let config = OLineConfig {
         mnemonic,
         rpc_endpoint,
+        grpc_endpoint,
         snapshot_url,
         validator_peer_id,
         trusted_providers,
         auto_select_provider,
+        s3_key,
+        s3_secret,
+        s3_host,
+        snapshot_path,
+        snapshot_time,
+        snapshot_save_format,
+        snapshot_metadata_url,
+        snapshot_retain,
+        snapshot_keep_last,
     };
 
     let deployer = OLineDeployer::new(config).await?;
@@ -710,6 +886,10 @@ async fn cmd_deploy(raw: bool) -> Result<(), Box<dyn Error>> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
     let args: Vec<String> = std::env::args().collect();
 
     match args.get(1).map(|s| s.as_str()) {
