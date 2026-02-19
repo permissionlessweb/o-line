@@ -83,6 +83,51 @@ services:
       - WASMVM_URL=https://github.com/CosmWasm/wasmvm/releases/download/v3.0.2/libwasmvm.x86_64.so
       # - STATESYNC_RPC_SERVERS=<mainnet-terp-rpc.konsortech.xyz:443,rpc.terp.aknodes.net:443>
       - ADDRBOOK_URL=${ADDRBOOK_URL}
+  ${MINIO_SVC}:
+    image: ${MINIO_IPFS_IMAGE}
+    expose:
+      - port: 9001
+        as: 80
+        to:
+          - global: true
+        accept:
+          - snapshots.terp.network
+        http_options:
+          max_body_size: 104857600
+          read_timeout: 60000
+          send_timeout: 60000
+      - port: 8081
+        as: 8081
+        to:
+          - global: true
+      - port: 9000
+        as: 9000
+        to:
+          - global: true
+      - port: 4001
+        as: 4001
+        proto: tcp
+        to:
+          - global: true
+    env:
+      - MINIO_ROOT_USER=${S3_KEY}
+      - MINIO_ROOT_PASSWORD=${S3_SECRET}
+      - MINIO_BUCKET=${MINIO_BUCKET}
+      - MINIO_CONSOLE_PORT=9001
+      - IPFS_GATEWAY_PORT=8081
+      - IPFS_PROFILE=server
+      - AUTOPIN_INTERVAL=${AUTOPIN_INTERVAL}
+      - AUTOPIN_PATTERNS=*.tar.gz,*.tar.zst,*.tar.lz4,*.tar.xz
+      - PUID=1000
+      - PGID=1000
+    params:
+      storage:
+        ipfs-data:
+          mount: /data/ipfs
+          readOnly: false
+        minio-data:
+          mount: /data/minio
+          readOnly: false
 profiles:
   compute:
     ${SNAPSHOT_SVC}:
@@ -101,6 +146,24 @@ profiles:
           size: 8Gi
         storage:
           - size: 50Gi
+    ${MINIO_SVC}:
+      resources:
+        cpu:
+          units: 2
+        memory:
+          size: 4Gi
+        storage:
+          - size: 10Gi
+          - name: ipfs-data
+            size: 100Gi
+            attributes:
+              persistent: true
+              class: beta3
+          - name: minio-data
+            size: 50Gi
+            attributes:
+              persistent: true
+              class: beta3
   placement:
     dcloud:
       pricing:
@@ -108,6 +171,9 @@ profiles:
           denom: uakt
           amount: 1000
         ${SEED_SVC}:
+          denom: uakt
+          amount: 1000
+        ${MINIO_SVC}:
           denom: uakt
           amount: 1000
       signedBy:
@@ -123,4 +189,8 @@ deployment:
   ${SEED_SVC}:
     dcloud:
       profile: ${SEED_SVC}
+      count: 1
+  ${MINIO_SVC}:
+    dcloud:
+      profile: ${MINIO_SVC}
       count: 1

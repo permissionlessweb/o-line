@@ -1,0 +1,36 @@
+#!/command/with-contenv bash
+set -e
+MINIO_ENABLED="${MINIO_ENABLED:-true}"
+[ "$MINIO_ENABLED" != "true" ] && exit 0
+
+MINIO_PORT="${MINIO_PORT:-9000}"
+MINIO_BUCKET="${MINIO_BUCKET:-snapshots}"
+MINIO_ROOT_USER="${MINIO_ROOT_USER:-minioadmin}"
+MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-minioadmin}"
+
+# Wait for MinIO health
+ATTEMPTS=0
+printf "[init-minio-bucket] Waiting for MinIO "
+while [ $ATTEMPTS -lt 30 ]; do
+    if curl -sf "http://localhost:${MINIO_PORT}/minio/health/live" > /dev/null 2>&1; then
+        echo " ready (${ATTEMPTS}s)"
+        break
+    fi
+    printf "."
+    ATTEMPTS=$((ATTEMPTS + 1))
+    sleep 1
+done
+[ $ATTEMPTS -eq 30 ] && echo " timeout" && exit 1
+
+# Create bucket if needed
+mc alias set local "http://localhost:${MINIO_PORT}" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" --api S3v4 > /dev/null 2>&1
+if ! mc ls "local/${MINIO_BUCKET}" > /dev/null 2>&1; then
+    echo "[init-minio-bucket] Creating bucket: ${MINIO_BUCKET}"
+    mc mb "local/${MINIO_BUCKET}" > /dev/null 2>&1
+else
+    echo "[init-minio-bucket] Bucket exists: ${MINIO_BUCKET}"
+fi
+
+# Set anonymous download (public read, authenticated write)
+mc anonymous set download "local/${MINIO_BUCKET}"
+echo "[init-minio-bucket] Anonymous download enabled on ${MINIO_BUCKET}"

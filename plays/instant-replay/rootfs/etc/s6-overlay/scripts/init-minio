@@ -1,0 +1,16 @@
+#!/command/with-contenv bash
+set -e
+
+MINIO_ENABLED="${MINIO_ENABLED:-true}"
+
+if [ "$MINIO_ENABLED" != "true" ]; then
+    echo "[init-minio] MinIO disabled (MINIO_ENABLED=${MINIO_ENABLED})"
+    exit 0
+fi
+
+echo "[init-minio] Preparing MinIO data directory"
+
+mkdir -p /data/minio
+chown app:app /data/minio
+
+echo "[init-minio] Done"

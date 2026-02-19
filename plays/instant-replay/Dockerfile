@@ -1,0 +1,97 @@
+ARG ALPINE_VERSION=3.21
+
+# ── Stage 1: fetch binaries ──────────────────────────────────────────────────
+FROM alpine:${ALPINE_VERSION} AS fetch
+
+ARG S6_OVERLAY_VERSION=3.2.0.2
+ARG KUBO_VERSION=0.32.1
+ARG MINIO_VERSION=RELEASE.2025-10-15T17-29-55Z
+ARG MC_VERSION=RELEASE.2025-08-13T08-35-41Z
+ARG TARGETARCH
+
+RUN apk add --no-cache curl tar xz
+
+WORKDIR /tmp
+
+# s6-overlay
+RUN curl -fsSL "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz" \
+      -o s6-overlay-noarch.tar.xz && \
+    curl -fsSL "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-$(uname -m).tar.xz" \
+      -o s6-overlay-arch.tar.xz
+
+# Kubo (IPFS)
+RUN ARCH=$(case "$(uname -m)" in x86_64) echo "amd64";; aarch64) echo "arm64";; *) echo "$(uname -m)";; esac) && \
+    curl -fsSL "https://dist.ipfs.tech/kubo/v${KUBO_VERSION}/kubo_v${KUBO_VERSION}_linux-${ARCH}.tar.gz" \
+      -o kubo.tar.gz && \
+    tar xzf kubo.tar.gz kubo/ipfs && \
+    mv kubo/ipfs /tmp/ipfs
+
+# MinIO server + mc client
+RUN ARCH=$(case "$(uname -m)" in x86_64) echo "amd64";; aarch64) echo "arm64";; *) echo "$(uname -m)";; esac) && \
+    curl -fsSL "https://dl.min.io/server/minio/release/linux-${ARCH}/archive/minio.${MINIO_VERSION}" \
+      -o /tmp/minio && chmod +x /tmp/minio && \
+    curl -fsSL "https://dl.min.io/client/mc/release/linux-${ARCH}/archive/mc.${MC_VERSION}" \
+      -o /tmp/mc && chmod +x /tmp/mc
+
+# ── Stage 2: runtime ────────────────────────────────────────────────────────
+FROM alpine:${ALPINE_VERSION}
+
+# Extract s6-overlay
+COPY --from=fetch /tmp/s6-overlay-noarch.tar.xz /tmp/
+COPY --from=fetch /tmp/s6-overlay-arch.tar.xz /tmp/
+RUN tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz && \
+    tar -C / -Jxpf /tmp/s6-overlay-arch.tar.xz && \
+    rm /tmp/s6-overlay-*.tar.xz
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    bash \
+    ca-certificates \
+    curl \
+    jq \
+    shadow
+
+# Copy binaries from fetch stage
+COPY --from=fetch /tmp/ipfs /usr/local/bin/ipfs
+COPY --from=fetch /tmp/minio /usr/local/bin/minio
+COPY --from=fetch /tmp/mc /usr/local/bin/mc
+RUN chmod +x /usr/local/bin/ipfs /usr/local/bin/minio /usr/local/bin/mc
+
+# Create app user and directories
+RUN addgroup -g 1000 app && \
+    adduser -u 1000 -G app -D -h /home/app app && \
+    mkdir -p /data/ipfs /data/minio
+
+# Copy rootfs overlay (s6 services, scripts, utilities)
+COPY rootfs/ /
+
+# Make all scripts executable
+RUN chmod +x /etc/s6-overlay/scripts/* && \
+    chmod +x /etc/s6-overlay/s6-rc.d/svc-ipfs/run && \
+    chmod +x /etc/s6-overlay/s6-rc.d/svc-autopin/run && \
+    chmod +x /etc/s6-overlay/s6-rc.d/svc-minio/run && \
+    chmod +x /usr/local/bin/ipfs-pin && \
+    chmod +x /usr/local/bin/healthcheck
+
+# Environment defaults
+ENV MINIO_ENABLED="true" \
+    MINIO_ROOT_USER="minioadmin" \
+    MINIO_ROOT_PASSWORD="minioadmin" \
+    MINIO_BUCKET="snapshots" \
+    MINIO_PORT=9000 \
+    MINIO_CONSOLE_PORT=9001 \
+    IPFS_GATEWAY_PORT=8081 \
+    IPFS_PROFILE=server \
+    AUTOPIN_INTERVAL=300 \
+    AUTOPIN_PATTERNS="*.tar.gz,*.tar.zst,*.tar.lz4,*.tar.xz" \
+    PUID=1000 \
+    PGID=1000
+
+EXPOSE 8081 9000 9001
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD /usr/local/bin/healthcheck
+
+VOLUME ["/data/ipfs", "/data/minio"]
+
+ENTRYPOINT ["/init"]

@@ -34,6 +34,7 @@ const DEFAULT_CHAIN_JSON: &str =
 const DEFAULT_ADDRBOOK_URL: &str =
     "https://raw.githubusercontent.com/111STAVR111/props/main/Terp/addrbook.json";
 const DEFAULT_OMNIBUS_IMAGE: &str = "ghcr.io/akash-network/cosmos-omnibus:v1.2.37-generic";
+const DEFAULT_MINIO_IPFS_IMAGE: &str = "ghcr.io/terpnetwork/minio-ipfs:v1.0.0";
 
 // ── Encryption ──
 
@@ -170,6 +171,25 @@ pub struct SavedConfig {
     pub snapshot_metadata_url: String,
     pub snapshot_retain: String,
     pub snapshot_keep_last: String,
+    // MinIO-IPFS
+    #[serde(default = "default_minio_ipfs_image")]
+    pub minio_ipfs_image: String,
+    #[serde(default)]
+    pub s3_bucket: String,
+    #[serde(default = "default_s3_endpoint_url")]
+    pub s3_endpoint_url: String,
+    #[serde(default = "default_autopin_interval")]
+    pub autopin_interval: String,
+}
+
+fn default_minio_ipfs_image() -> String {
+    DEFAULT_MINIO_IPFS_IMAGE.to_string()
+}
+fn default_s3_endpoint_url() -> String {
+    "https://s3.filebase.com".to_string()
+}
+fn default_autopin_interval() -> String {
+    "300".to_string()
 }
 
 impl From<&OLineConfig> for SavedConfig {
@@ -190,6 +210,10 @@ impl From<&OLineConfig> for SavedConfig {
             snapshot_metadata_url: c.snapshot_metadata_url.clone(),
             snapshot_retain: c.snapshot_retain.clone(),
             snapshot_keep_last: c.snapshot_keep_last.clone(),
+            minio_ipfs_image: c.minio_ipfs_image.clone(),
+            s3_bucket: c.s3_bucket.clone(),
+            s3_endpoint_url: c.s3_endpoint_url.clone(),
+            autopin_interval: c.autopin_interval.clone(),
         }
     }
 }
@@ -213,6 +237,10 @@ impl SavedConfig {
             snapshot_metadata_url: self.snapshot_metadata_url.clone(),
             snapshot_retain: self.snapshot_retain.clone(),
             snapshot_keep_last: self.snapshot_keep_last.clone(),
+            minio_ipfs_image: self.minio_ipfs_image.clone(),
+            s3_bucket: self.s3_bucket.clone(),
+            s3_endpoint_url: self.s3_endpoint_url.clone(),
+            autopin_interval: self.autopin_interval.clone(),
         }
     }
 }
@@ -289,6 +317,20 @@ fn insert_s3_vars(vars: &mut HashMap<String, String>, config: &OLineConfig) {
     );
 }
 
+/// Helper to insert minio-ipfs variables from config.
+fn insert_minio_vars(vars: &mut HashMap<String, String>, config: &OLineConfig) {
+    vars.insert("MINIO_IPFS_IMAGE".into(), config.minio_ipfs_image.clone());
+    // Derive MINIO_BUCKET from snapshot_path (first path component, e.g. "snapshots" from "snapshots/terpnetwork")
+    let minio_bucket = config
+        .snapshot_path
+        .split('/')
+        .next()
+        .unwrap_or("snapshots")
+        .to_string();
+    vars.insert("MINIO_BUCKET".into(), minio_bucket);
+    vars.insert("AUTOPIN_INTERVAL".into(), config.autopin_interval.clone());
+}
+
 // ── Raw template substitution ──
 
 /// Raw text-based `${VAR}` substitution. Unlike `apply_template` (which is
@@ -337,8 +379,10 @@ fn build_phase_a_vars(config: &OLineConfig) -> HashMap<String, String> {
     let mut vars = HashMap::new();
     insert_sdl_defaults(&mut vars);
     insert_s3_vars(&mut vars, config);
+    insert_minio_vars(&mut vars, config);
     vars.insert("SNAPSHOT_SVC".into(), "oline-a-snapshot".into());
     vars.insert("SEED_SVC".into(), "oline-a-seed".into());
+    vars.insert("MINIO_SVC".into(), "oline-a-minio-ipfs".into());
     vars.insert(
         "SNAPSHOT_MONIKER".into(),
         "oline::special::snapshot-node".into(),
@@ -356,8 +400,10 @@ fn build_phase_a2_vars(config: &OLineConfig) -> HashMap<String, String> {
     let mut vars = HashMap::new();
     insert_sdl_defaults(&mut vars);
     insert_s3_vars(&mut vars, config);
+    insert_minio_vars(&mut vars, config);
     vars.insert("SNAPSHOT_SVC".into(), "oline-a2-snapshot".into());
     vars.insert("SEED_SVC".into(), "oline-a2-seed".into());
+    vars.insert("MINIO_SVC".into(), "oline-a2-minio-ipfs".into());
     vars.insert(
         "SNAPSHOT_MONIKER".into(),
         "oline::backup::snapshot-node".into(),
@@ -389,6 +435,18 @@ fn build_phase_b_vars(
     vars.insert(
         "TERPD_P2P_UNCONDITIONAL_PEER_IDS".into(),
         config.validator_peer_id.clone(),
+    );
+    // Snapshot URL from our own S3 bucket (replaces hardcoded external URLs)
+    let snapshot_url = format!(
+        "{}/{}/latest.{}",
+        config.s3_endpoint_url.trim_end_matches('/'),
+        config.s3_bucket,
+        config.snapshot_save_format
+    );
+    vars.insert("SNAPSHOT_URL".into(), snapshot_url);
+    vars.insert(
+        "SNAPSHOT_SAVE_FORMAT".into(),
+        config.snapshot_save_format.clone(),
     );
     vars
 }
@@ -440,6 +498,11 @@ pub struct OLineConfig {
     pub snapshot_metadata_url: String,
     pub snapshot_retain: String,
     pub snapshot_keep_last: String,
+    // MinIO-IPFS
+    pub minio_ipfs_image: String,
+    pub s3_bucket: String,
+    pub s3_endpoint_url: String,
+    pub autopin_interval: String,
 }
 
 pub struct OLineDeployer {
@@ -687,21 +750,7 @@ impl OLineDeployer {
             return Ok(());
         }
 
-        let mut a_vars = HashMap::new();
-        insert_sdl_defaults(&mut a_vars);
-        insert_s3_vars(&mut a_vars, &self.config);
-        a_vars.insert("SNAPSHOT_SVC".into(), "oline-a-snapshot".into());
-        a_vars.insert("SEED_SVC".into(), "oline-a-seed".into());
-        a_vars.insert(
-            "SNAPSHOT_MONIKER".into(),
-            "oline::special::snapshot-node".into(),
-        );
-        a_vars.insert("SEED_MONIKER".into(), "oline::special::seed-node".into());
-        a_vars.insert("SNAPSHOT_URL".into(), self.config.snapshot_url.clone());
-        a_vars.insert(
-            "TERPD_P2P_PRIVATE_PEER_IDS".into(),
-            self.config.validator_peer_id.clone(),
-        );
+        let a_vars = build_phase_a_vars(&self.config);
         let a_defaults = HashMap::new();
 
         println!("  Variables:");
@@ -741,21 +790,7 @@ impl OLineDeployer {
             return Ok(());
         }
 
-        let mut a2_vars = HashMap::new();
-        insert_sdl_defaults(&mut a2_vars);
-        insert_s3_vars(&mut a2_vars, &self.config);
-        a2_vars.insert("SNAPSHOT_SVC".into(), "oline-a2-snapshot".into());
-        a2_vars.insert("SEED_SVC".into(), "oline-a2-seed".into());
-        a2_vars.insert(
-            "SNAPSHOT_MONIKER".into(),
-            "oline::backup::snapshot-node".into(),
-        );
-        a2_vars.insert("SEED_MONIKER".into(), "oline::backup::seed-node".into());
-        a2_vars.insert("SNAPSHOT_URL".into(), self.config.snapshot_url.clone());
-        a2_vars.insert(
-            "TERPD_P2P_PRIVATE_PEER_IDS".into(),
-            self.config.validator_peer_id.clone(),
-        );
+        let a2_vars = build_phase_a2_vars(&self.config);
         let a2_defaults = HashMap::new();
 
         println!("  Variables:");
@@ -792,20 +827,7 @@ impl OLineDeployer {
             return Ok(());
         }
 
-        let mut b_vars = HashMap::new();
-        insert_sdl_defaults(&mut b_vars);
-        b_vars.insert(
-            "TERPD_P2P_PERSISTENT_PEERS".into(),
-            format!("{},{}", snapshot_peer, snapshot_2_peer),
-        );
-        b_vars.insert(
-            "TERPD_P2P_PRIVATE_PEER_IDS".into(),
-            self.config.validator_peer_id.clone(),
-        );
-        b_vars.insert(
-            "TERPD_P2P_UNCONDITIONAL_PEER_IDS".into(),
-            self.config.validator_peer_id.clone(),
-        );
+        let b_vars = build_phase_b_vars(&self.config, &snapshot_peer, &snapshot_2_peer);
         let b_defaults = HashMap::new();
 
         println!("  Variables:");
@@ -842,21 +864,13 @@ impl OLineDeployer {
             return Ok(());
         }
 
-        let tackles_combined = format!("{},{}", left_tackle_peer, right_tackle_peer);
-        let mut c_vars = HashMap::new();
-        insert_sdl_defaults(&mut c_vars);
-        c_vars.insert(
-            "TERPD_P2P_SEEDS".into(),
-            format!("{},{}", seed_peer, seed_2_peer),
-        );
-        c_vars.insert(
-            "TERPD_P2P_PRIVATE_PEER_IDS".into(),
-            tackles_combined.clone(),
-        );
-        c_vars.insert("TERPD_P2P_UNCONDITIONAL_PEER_IDS".into(), tackles_combined);
-        c_vars.insert(
-            "TERPD_P2P_PERSISTENT_PEERS".into(),
-            format!("{},{}", snapshot_peer, snapshot_2_peer),
+        let c_vars = build_phase_c_vars(
+            &seed_peer,
+            &seed_2_peer,
+            &snapshot_peer,
+            &snapshot_2_peer,
+            &left_tackle_peer,
+            &right_tackle_peer,
         );
         let c_defaults = HashMap::new();
 
@@ -1013,6 +1027,9 @@ async fn collect_config(
             );
             println!("    S3 host:          {}", cfg.s3_host);
             println!("    Snapshot path:    {}", cfg.snapshot_path);
+            println!("    MinIO-IPFS image: {}", cfg.minio_ipfs_image);
+            println!("    S3 bucket:        {}", cfg.s3_bucket);
+            println!("    S3 endpoint URL:  {}", cfg.s3_endpoint_url);
             println!();
             if prompt_continue(lines, "Use saved config?")? {
                 Some(cfg)
@@ -1191,6 +1208,49 @@ async fn collect_config(
         ),
     )?;
 
+    // MinIO-IPFS config
+    println!("\n── MinIO-IPFS ──");
+    let minio_ipfs_image = read_input(
+        lines,
+        "MinIO-IPFS image",
+        Some(
+            saved
+                .as_ref()
+                .map(|s| s.minio_ipfs_image.as_str())
+                .unwrap_or(DEFAULT_MINIO_IPFS_IMAGE),
+        ),
+    )?;
+    let s3_bucket = read_input(
+        lines,
+        "S3 bucket name",
+        Some(
+            saved
+                .as_ref()
+                .map(|s| s.s3_bucket.as_str())
+                .unwrap_or("terp-snapshots"),
+        ),
+    )?;
+    let s3_endpoint_url = read_input(
+        lines,
+        "S3 endpoint URL",
+        Some(
+            saved
+                .as_ref()
+                .map(|s| s.s3_endpoint_url.as_str())
+                .unwrap_or("https://s3.filebase.com"),
+        ),
+    )?;
+    let autopin_interval = read_input(
+        lines,
+        "IPFS auto-pin interval (seconds)",
+        Some(
+            saved
+                .as_ref()
+                .map(|s| s.autopin_interval.as_str())
+                .unwrap_or("300"),
+        ),
+    )?;
+
     let config = OLineConfig {
         mnemonic,
         rpc_endpoint,
@@ -1208,6 +1268,10 @@ async fn collect_config(
         snapshot_metadata_url,
         snapshot_retain,
         snapshot_keep_last,
+        minio_ipfs_image,
+        s3_bucket,
+        s3_endpoint_url,
+        autopin_interval,
     };
 
     // Offer to save
@@ -1326,6 +1390,27 @@ async fn cmd_generate_sdl() -> Result<(), Box<dyn Error>> {
         let snapshot_retain = read_input(&mut lines, "Snapshot retention period", Some("2 days"))?;
         let snapshot_keep_last = read_input(&mut lines, "Minimum snapshots to keep", Some("2"))?;
 
+        let minio_ipfs_image = read_input(
+            &mut lines,
+            "MinIO-IPFS image",
+            Some(DEFAULT_MINIO_IPFS_IMAGE),
+        )?;
+        let s3_bucket = read_input(
+            &mut lines,
+            "S3 bucket name",
+            Some("terp-snapshots"),
+        )?;
+        let s3_endpoint_url = read_input(
+            &mut lines,
+            "S3 endpoint URL",
+            Some("https://s3.filebase.com"),
+        )?;
+        let autopin_interval = read_input(
+            &mut lines,
+            "IPFS auto-pin interval (seconds)",
+            Some("300"),
+        )?;
+
         OLineConfig {
             mnemonic: String::new(),
             rpc_endpoint: String::new(),
@@ -1343,6 +1428,10 @@ async fn cmd_generate_sdl() -> Result<(), Box<dyn Error>> {
             snapshot_metadata_url,
             snapshot_retain,
             snapshot_keep_last,
+            minio_ipfs_image,
+            s3_bucket,
+            s3_endpoint_url,
+            autopin_interval,
         }
     };
 
@@ -1701,7 +1790,10 @@ fn s3_signed_headers(
         year, month, day, hours, mins, secs
     );
 
-    let host = url.host_str().unwrap_or("");
+    let host = match url.port() {
+        Some(port) => format!("{}:{}", url.host_str().unwrap_or(""), port),
+        None => url.host_str().unwrap_or("").to_string(),
+    };
     let path = url.path();
     let query = url.query().unwrap_or("");
     let payload_hash = sha256_hex(payload);
@@ -1784,27 +1876,41 @@ async fn s3_request(
 async fn cmd_test_s3() -> Result<(), Box<dyn Error>> {
     println!("=== S3 Connection Test ===\n");
 
-    let stdin = io::stdin();
-    let mut lines = stdin.lock().lines();
+    // Check for env vars first (enables non-interactive / CI usage)
+    let (s3_key, s3_secret, s3_host, snapshot_path) = match (
+        std::env::var("S3_KEY"),
+        std::env::var("S3_SECRET"),
+        std::env::var("S3_HOST"),
+        std::env::var("SNAPSHOT_PATH"),
+    ) {
+        (Ok(k), Ok(s), Ok(h), Ok(p)) if !k.is_empty() && !s.is_empty() && !h.is_empty() && !p.is_empty() => {
+            println!("  Using credentials from environment variables.\n");
+            (k, s, h, p)
+        }
+        _ => {
+            let stdin = io::stdin();
+            let mut lines = stdin.lock().lines();
 
-    // Load S3 credentials from saved config or prompt
-    let (s3_key, s3_secret, s3_host, snapshot_path) = if has_saved_config() {
-        println!("  Found saved config.");
-        let password =
-            rpassword::prompt_password("Enter password to decrypt config (or Enter to skip): ")?;
-        if !password.is_empty() {
-            if let Some(cfg) = load_config(&password) {
-                println!("  Using saved config.\n");
-                (cfg.s3_key, cfg.s3_secret, cfg.s3_host, cfg.snapshot_path)
+            // Load S3 credentials from saved config or prompt
+            if has_saved_config() {
+                println!("  Found saved config.");
+                let password =
+                    rpassword::prompt_password("Enter password to decrypt config (or Enter to skip): ")?;
+                if !password.is_empty() {
+                    if let Some(cfg) = load_config(&password) {
+                        println!("  Using saved config.\n");
+                        (cfg.s3_key, cfg.s3_secret, cfg.s3_host, cfg.snapshot_path)
+                    } else {
+                        println!("  Could not decrypt. Prompting for values.\n");
+                        prompt_s3_creds(&mut lines)?
+                    }
+                } else {
+                    prompt_s3_creds(&mut lines)?
+                }
             } else {
-                println!("  Could not decrypt. Prompting for values.\n");
                 prompt_s3_creds(&mut lines)?
             }
-        } else {
-            prompt_s3_creds(&mut lines)?
         }
-    } else {
-        prompt_s3_creds(&mut lines)?
     };
 
     // Parse bucket and prefix from snapshot_path (e.g. "snapshots/terpnetwork")
