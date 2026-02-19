@@ -1,13 +1,29 @@
 ARG ALPINE_VERSION=3.21
+ARG GO_VERSION=1.24
 
-# ── Stage 1: fetch binaries ──────────────────────────────────────────────────
+# ── Stage 1: build MinIO + mc from source ────────────────────────────────────
+FROM golang:${GO_VERSION}-alpine AS build-minio
+
+ARG MINIO_VERSION=RELEASE.2025-10-15T17-29-55Z
+ARG MC_VERSION=RELEASE.2025-08-13T08-35-41Z
+
+RUN apk add --no-cache git
+
+# Build MinIO server
+RUN git clone --depth 1 --branch ${MINIO_VERSION} https://github.com/minio/minio.git /src/minio && \
+    cd /src/minio && \
+    go build -trimpath -tags kqueue -o /tmp/minio .
+
+# Build mc client
+RUN git clone --depth 1 --branch ${MC_VERSION} https://github.com/minio/mc.git /src/mc && \
+    cd /src/mc && \
+    go build -trimpath -o /tmp/mc .
+
+# ── Stage 2: fetch other binaries ────────────────────────────────────────────
 FROM alpine:${ALPINE_VERSION} AS fetch
 
 ARG S6_OVERLAY_VERSION=3.2.0.2
 ARG KUBO_VERSION=0.32.1
-ARG MINIO_VERSION=RELEASE.2025-10-15T17-29-55Z
-ARG MC_VERSION=RELEASE.2025-08-13T08-35-41Z
-ARG TARGETARCH
 
 RUN apk add --no-cache curl tar xz
 
@@ -25,13 +41,6 @@ RUN ARCH=$(case "$(uname -m)" in x86_64) echo "amd64";; aarch64) echo "arm64";; 
       -o kubo.tar.gz && \
     tar xzf kubo.tar.gz kubo/ipfs && \
     mv kubo/ipfs /tmp/ipfs
-
-# MinIO server + mc client
-RUN ARCH=$(case "$(uname -m)" in x86_64) echo "amd64";; aarch64) echo "arm64";; *) echo "$(uname -m)";; esac) && \
-    curl -fsSL "https://dl.min.io/server/minio/release/linux-${ARCH}/archive/minio.${MINIO_VERSION}" \
-      -o /tmp/minio && chmod +x /tmp/minio && \
-    curl -fsSL "https://dl.min.io/client/mc/release/linux-${ARCH}/archive/mc.${MC_VERSION}" \
-      -o /tmp/mc && chmod +x /tmp/mc
 
 # ── Stage 2: runtime ────────────────────────────────────────────────────────
 FROM alpine:${ALPINE_VERSION}
@@ -51,10 +60,10 @@ RUN apk add --no-cache \
     jq \
     shadow
 
-# Copy binaries from fetch stage
+# Copy binaries from build stages
 COPY --from=fetch /tmp/ipfs /usr/local/bin/ipfs
-COPY --from=fetch /tmp/minio /usr/local/bin/minio
-COPY --from=fetch /tmp/mc /usr/local/bin/mc
+COPY --from=build-minio /tmp/minio /usr/local/bin/minio
+COPY --from=build-minio /tmp/mc /usr/local/bin/mc
 RUN chmod +x /usr/local/bin/ipfs /usr/local/bin/minio /usr/local/bin/mc
 
 # Create app user and directories

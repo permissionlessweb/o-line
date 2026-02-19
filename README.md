@@ -11,6 +11,9 @@ Useful scripts & configurations for setting up public RPC nodes.
 
 ## TODO
 
+- cicd:
+    - e2e test minio+ipfs server
+    - 
 - add bootstrapping of indexer support
 - PIR: private information retrieval indexer
 - add archive node bootstrapping support

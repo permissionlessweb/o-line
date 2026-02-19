@@ -340,7 +340,7 @@ test_s3_to_ipfs_pipeline() {
 # ── Build / locate oline binary ──────────────────────────────────────────────
 if [ -z "$OLINE_BIN" ]; then
     SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-    OLINE_PROJECT="${SCRIPT_DIR}/../plays/oline-sdl"
+    OLINE_PROJECT="${SCRIPT_DIR}/../oline-sdl"
     OLINE_RELEASE="${OLINE_PROJECT}/target/release/oline"
 
     if [ -x "$OLINE_RELEASE" ]; then
