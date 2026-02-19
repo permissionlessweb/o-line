@@ -5,7 +5,7 @@ Useful scripts & configurations for setting up public RPC nodes.
 ## What's Included?
 
 - **[0-line](./playbook/oline-sdl/README.md):** Sentry node array deployment runtime for protecting at home validators.
-- **[Reverse Proxy Template](./playbook/reverse-proxy/README.md):** RPC,API,GRPC,SEED reverse proxy configuration & guide.
+- **[Reverse Proxy Template](./playbook/flea-flicker/README.md):** RPC,API,GRPC,SEED reverse proxy configuration & guide.
 - [**Keep Alive**](./relayer/keepalive/README.md): Relayer service monitoring script, developed by [DAO DAO](https://github.com/DA0-DA0/)
 
 ## TODO
