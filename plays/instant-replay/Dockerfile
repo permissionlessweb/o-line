@@ -59,7 +59,11 @@ RUN apk add --no-cache \
     curl \
     jq \
     shadow \
-    libc6-compat
+    libc6-compat \
+    nginx \
+    certbot \
+    certbot-nginx \
+    gettext
 
 # Copy binaries from build stages
 COPY --from=fetch /tmp/ipfs /usr/local/bin/ipfs
@@ -80,6 +84,7 @@ RUN chmod +x /etc/s6-overlay/scripts/* && \
     chmod +x /etc/s6-overlay/s6-rc.d/svc-ipfs/run && \
     chmod +x /etc/s6-overlay/s6-rc.d/svc-autopin/run && \
     chmod +x /etc/s6-overlay/s6-rc.d/svc-minio/run && \
+    chmod +x /etc/s6-overlay/s6-rc.d/svc-nginx/run && \
     chmod +x /usr/local/bin/ipfs-pin && \
     chmod +x /usr/local/bin/healthcheck
 
@@ -97,7 +102,7 @@ ENV MINIO_ENABLED="true" \
     PUID=1000 \
     PGID=1000
 
-EXPOSE 8081 9000 9001
+EXPOSE 80 443 8081 9000 9001
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD /usr/local/bin/healthcheck

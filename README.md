@@ -19,12 +19,12 @@ Useful scripts & configurations for setting up public RPC nodes.
   - validator-peer id + ip
 
 - add bootstrapping of indexer & relayer services
+- configure tls/https for all nodes
 - load-balancing for frontward facing rpcs (need templatize lb-deploy.yaml)
 - PIR: private information retrieval indexer
 - tmkms step by step
 - special teams: vpn oline for oline
 - special taems: ephemeral deployments (rotate service provider & location)
-
 - agent skill for creating variabalized SDL's, and wiring into scripts
 
 ## Disclaimer

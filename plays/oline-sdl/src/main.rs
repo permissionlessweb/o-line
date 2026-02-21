@@ -280,6 +280,9 @@ pub struct SavedConfig {
     pub autopin_interval: String,
     #[serde(default = "default_snapshot_download_domain")]
     pub snapshot_download_domain: String,
+    // nginx-snapshot proxy (certbot email for Let's Encrypt registration)
+    #[serde(default = "default_certbot_email")]
+    pub certbot_email: String,
     // Cloudflare DNS (optional — auto-update CNAME after Phase A deploy)
     #[serde(default)]
     pub cloudflare_api_token: String,
@@ -289,6 +292,10 @@ pub struct SavedConfig {
 
 fn default_snapshot_download_domain() -> String {
     "snapshots.terp.network".to_string()
+}
+
+fn default_certbot_email() -> String {
+    "admin@terp.network".to_string()
 }
 
 fn default_minio_ipfs_image() -> String {
@@ -316,6 +323,7 @@ impl From<&OLineConfig> for SavedConfig {
             s3_bucket: c.s3_bucket.clone(),
             autopin_interval: c.autopin_interval.clone(),
             snapshot_download_domain: c.snapshot_download_domain.clone(),
+            certbot_email: c.certbot_email.clone(),
             cloudflare_api_token: c.cloudflare_api_token.clone(),
             cloudflare_zone_id: c.cloudflare_zone_id.clone(),
         }
@@ -341,6 +349,7 @@ impl SavedConfig {
             s3_bucket: self.s3_bucket.clone(),
             autopin_interval: self.autopin_interval.clone(),
             snapshot_download_domain: self.snapshot_download_domain.clone(),
+            certbot_email: self.certbot_email.clone(),
             cloudflare_api_token: self.cloudflare_api_token.clone(),
             cloudflare_zone_id: self.cloudflare_zone_id.clone(),
         }
@@ -498,6 +507,37 @@ fn endpoint_hostname(uri: &str) -> &str {
         .unwrap_or(uri);
     // Strip port if present
     s.split(':').next().unwrap_or(s)
+}
+
+// ── DNS domains for Phase-A services (match SDL accept: fields) ──
+// Snapshot node (oline-a-snapshot): port 26657 RPC → statesync.terp.network
+//                                   port 26656 P2P → reuse statesync.terp.network (same provider IP)
+// Seed node (oline-a-seed):         port 26657 RPC → seed-statesync.terp.network
+//                                   port 26656 P2P → seed.terp.network
+const SNAPSHOT_RPC_DOMAIN: &str = "statesync.terp.network";
+const SNAPSHOT_P2P_DOMAIN: &str = "statesync.terp.network";
+const SEED_RPC_DOMAIN: &str = "seed-statesync.terp.network";
+const SEED_P2P_DOMAIN: &str = "seed.terp.network";
+
+/// Fetch the snapshot metadata JSON and return the `url` field.
+/// Falls back to `fallback_url` if the metadata is unavailable or malformed.
+async fn fetch_snapshot_url_from_metadata(metadata_url: &str, fallback_url: &str) -> String {
+    println!("  Fetching snapshot metadata from {}", metadata_url);
+    match reqwest::get(metadata_url).await {
+        Ok(resp) => match resp.json::<serde_json::Value>().await {
+            Ok(json) => {
+                if let Some(url) = json.get("url").and_then(|u| u.as_str()) {
+                    println!("  Snapshot URL from metadata: {}", url);
+                    return url.to_string();
+                }
+                eprintln!("  Warning: snapshot metadata JSON has no 'url' field — using fallback");
+            }
+            Err(e) => eprintln!("  Warning: failed to parse snapshot metadata JSON: {} — using fallback", e),
+        },
+        Err(e) => eprintln!("  Warning: failed to fetch snapshot metadata from {}: {} — using fallback", metadata_url, e),
+    }
+    println!("  Using fallback snapshot URL: {}", fallback_url);
+    fallback_url.to_string()
 }
 
 /// Resolve a hostname to its first IPv4 address.
@@ -858,6 +898,7 @@ fn build_phase_a_vars(config: &OLineConfig, defaults: &RuntimeDefaults) -> HashM
     vars.insert("SNAPSHOT_SVC".into(), "oline-a-snapshot".into());
     vars.insert("SEED_SVC".into(), "oline-a-seed".into());
     vars.insert("MINIO_SVC".into(), minio_svc.into());
+    vars.insert("CERTBOT_EMAIL".into(), config.certbot_email.clone());
     vars.insert(
         "SNAPSHOT_MONIKER".into(),
         "oline::special::snapshot-node".into(),
@@ -886,6 +927,7 @@ fn build_phase_a2_vars(config: &OLineConfig, defaults: &RuntimeDefaults) -> Hash
     vars.insert("SNAPSHOT_SVC".into(), "oline-a2-snapshot".into());
     vars.insert("SEED_SVC".into(), "oline-a2-seed".into());
     vars.insert("MINIO_SVC".into(), minio_svc.into());
+    vars.insert("CERTBOT_EMAIL".into(), config.certbot_email.clone());
     vars.insert(
         "SNAPSHOT_MONIKER".into(),
         "oline::backup::snapshot-node".into(),
@@ -904,6 +946,9 @@ fn build_phase_b_vars(
     snapshot_peer: &str,
     snapshot_2_peer: &str,
     snapshot_url: &str,
+    // Comma-separated "host:port" pairs for cosmos statesync RPC servers.
+    // Uses A1 snapshot node (statesync.terp.network) and A1 seed node (seed-statesync.terp.network).
+    statesync_rpc_servers: &str,
     defaults: &RuntimeDefaults,
 ) -> HashMap<String, String> {
     let mut vars = HashMap::new();
@@ -925,6 +970,12 @@ fn build_phase_b_vars(
         "SNAPSHOT_SAVE_FORMAT".into(),
         config.snapshot_save_format.clone(),
     );
+    // Statesync — use both A1 snapshot RPC and A1 seed RPC so tackles can
+    // sync to the network quickly without waiting for a full replay.
+    if !statesync_rpc_servers.is_empty() {
+        vars.insert("STATESYNC_ENABLE".into(), "true".into());
+        vars.insert("STATESYNC_RPC_SERVERS".into(), statesync_rpc_servers.to_string());
+    }
     vars
 }
 
@@ -977,6 +1028,7 @@ pub struct OLineConfig {
     pub s3_bucket: String,
     pub autopin_interval: String,
     pub snapshot_download_domain: String,
+    pub certbot_email: String,
     // Cloudflare DNS (optional — auto-update CNAME after Phase A deploy)
     pub cloudflare_api_token: String,
     pub cloudflare_zone_id: String,
@@ -1207,42 +1259,58 @@ impl OLineDeployer {
         Ok(selected.provider.clone())
     }
 
-    pub async fn extract_peer_id(endpoint: &ServiceEndpoint) -> Result<String, Box<dyn Error>> {
-        // endpoint.uri already has scheme prefix (e.g. "https://host.provider.com")
-        let status_url = format!("{}/status", endpoint.uri);
+    /// Query `rpc_url/status` and return `"<node_id>@<p2p_address>"`.
+    /// `p2p_address` is the fully-formatted address string, e.g. `"seed.terp.network:31039"`.
+    pub async fn extract_peer_id_at(
+        rpc_url: &str,
+        p2p_address: &str,
+    ) -> Result<String, Box<dyn Error>> {
+        let status_url = format!("{}/status", rpc_url.trim_end_matches('/'));
         let resp = reqwest::get(&status_url).await?.text().await?;
         let json: serde_json::Value = serde_json::from_str(&resp)?;
-
         let node_id = json["result"]["node_info"]["id"]
             .as_str()
             .ok_or("missing node_info.id in /status response")?;
-
-        let host = endpoint_hostname(&endpoint.uri);
-        let peer = format!("{}@{}:26656", node_id, host);
-        Ok(peer)
+        Ok(format!("{}@{}", node_id, p2p_address))
     }
 
-    /// Retry `extract_peer_id` up to `max_attempts` times with a 30-second delay
-    /// between attempts. Returns `None` if all attempts fail rather than propagating
-    /// the error — callers should warn and continue rather than aborting the workflow.
-    pub async fn extract_peer_id_with_retry(
-        endpoint: &ServiceEndpoint,
-        max_attempts: u32,
+    /// Retry `extract_peer_id_at` with an optional initial boot wait.
+    ///
+    /// * `initial_wait_secs` — sleep this long before the first attempt (lets the
+    ///   node fully start; 0 means start immediately).
+    /// * `max_retries` — number of attempts after the initial wait.
+    /// * `retry_delay_secs` — pause between failed attempts.
+    ///
+    /// Returns `None` if all attempts fail.
+    pub async fn extract_peer_id_with_boot_wait(
+        rpc_url: &str,
+        p2p_address: &str,
+        initial_wait_secs: u64,
+        max_retries: u32,
+        retry_delay_secs: u64,
     ) -> Option<String> {
-        for attempt in 1..=max_attempts {
-            match Self::extract_peer_id(endpoint).await {
+        if initial_wait_secs > 0 {
+            println!(
+                "  Waiting {}m before querying {}/status (node boot time)",
+                initial_wait_secs / 60,
+                rpc_url,
+            );
+            tokio::time::sleep(tokio::time::Duration::from_secs(initial_wait_secs)).await;
+        }
+        for attempt in 1..=max_retries {
+            match Self::extract_peer_id_at(rpc_url, p2p_address).await {
                 Ok(peer) => return Some(peer),
                 Err(e) => {
-                    if attempt < max_attempts {
+                    if attempt < max_retries {
                         eprintln!(
-                            "  Peer ID fetch attempt {}/{} failed: {} — retrying in 30s",
-                            attempt, max_attempts, e
+                            "  Peer ID fetch attempt {}/{} for {} failed: {} — retrying in {}s",
+                            attempt, max_retries, rpc_url, e, retry_delay_secs
                         );
-                        tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+                        tokio::time::sleep(tokio::time::Duration::from_secs(retry_delay_secs)).await;
                     } else {
                         eprintln!(
-                            "  Peer ID fetch failed after {} attempts: {}",
-                            max_attempts, e
+                            "  Peer ID fetch failed after {} attempts for {}: {}",
+                            max_retries, rpc_url, e
                         );
                     }
                 }
@@ -1251,15 +1319,18 @@ impl OLineDeployer {
         None
     }
 
-    fn find_rpc_endpoint<'a>(
+    /// Find the forwarded endpoint for `service_name` where `internal_port` matches
+    /// the SDL-specified port (e.g. 26656 or 26657).  Falls back to the first
+    /// endpoint for that service if `internal_port` is 0 (old parsing path).
+    fn find_endpoint_by_internal_port<'a>(
         endpoints: &'a [ServiceEndpoint],
         service_name: &str,
+        internal_port: u16,
     ) -> Option<&'a ServiceEndpoint> {
-        // Match by service name only — the Akash ingress reports HTTP ports
-        // (443/80), not the internal container port (26657).
         endpoints
             .iter()
-            .find(|e| e.service == service_name)
+            .find(|e| e.service == service_name && e.internal_port == internal_port)
+            .or_else(|| endpoints.iter().find(|e| e.service == service_name))
     }
 
     pub async fn run(&mut self) -> Result<(), Box<dyn Error>> {
@@ -1310,30 +1381,69 @@ impl OLineDeployer {
             println!("  Note: Cloudflare DNS not configured — update CNAMEs for accept domains manually.");
         }
 
-        // ── Extract peer IDs — nodes may still be booting, retry up to 10×30s ──
-        println!("  Extracting peer IDs...");
-        let snapshot_rpc = Self::find_rpc_endpoint(&a_endpoints, "oline-a-snapshot")
-            .ok_or("No RPC endpoint found for oline-a-snapshot")?;
-        let seed_rpc = Self::find_rpc_endpoint(&a_endpoints, "oline-a-seed")
-            .ok_or("No RPC endpoint found for oline-a-seed")?;
+        // ── Extract peer IDs via DNS domains ──
+        // Find the forwarded NodePorts for each service's RPC (26657) and P2P (26656).
+        let snap_rpc_ep  = Self::find_endpoint_by_internal_port(&a_endpoints, "oline-a-snapshot", 26657);
+        let snap_p2p_ep  = Self::find_endpoint_by_internal_port(&a_endpoints, "oline-a-snapshot", 26656);
+        let seed_rpc_ep  = Self::find_endpoint_by_internal_port(&a_endpoints, "oline-a-seed",     26657);
+        let seed_p2p_ep  = Self::find_endpoint_by_internal_port(&a_endpoints, "oline-a-seed",     26656);
 
-        let snapshot_peer = Self::extract_peer_id_with_retry(snapshot_rpc, 10).await
-            .unwrap_or_else(|| {
-                eprintln!("  Warning: could not fetch snapshot peer ID — Phase B will need it set manually.");
-                String::new()
-            });
-        let seed_peer = Self::extract_peer_id_with_retry(seed_rpc, 10).await
-            .unwrap_or_else(|| {
-                eprintln!("  Warning: could not fetch seed peer ID — Phase B will need it set manually.");
-                String::new()
-            });
+        // Construct DNS-based query URLs and peer addresses.
+        // Format: <node_id>@<dns_domain>:<nodeport>  — the cosmos-sdk peer string.
+        let snap_rpc_url  = snap_rpc_ep.map(|e| format!("http://{}:{}", SNAPSHOT_RPC_DOMAIN, e.port));
+        let snap_p2p_addr = snap_p2p_ep.map(|e| format!("{}:{}", SNAPSHOT_P2P_DOMAIN, e.port));
+        let seed_rpc_url  = seed_rpc_ep.map(|e| format!("http://{}:{}", SEED_RPC_DOMAIN, e.port));
+        let seed_p2p_addr = seed_p2p_ep.map(|e| format!("{}:{}", SEED_P2P_DOMAIN, e.port));
+
+        // Statesync RPC servers string for Phase B (cosmos format: "host:port,host:port").
+        let a1_statesync_rpc = {
+            let s = snap_rpc_ep.map(|e| format!("{}:{}", SNAPSHOT_RPC_DOMAIN, e.port)).unwrap_or_default();
+            let sd = seed_rpc_ep.map(|e| format!("{}:{}", SEED_RPC_DOMAIN, e.port)).unwrap_or_default();
+            match (s.is_empty(), sd.is_empty()) {
+                (false, false) => format!("{},{}", s, sd),
+                (false, true)  => s,
+                (true,  false) => sd,
+                (true,  true)  => String::new(),
+            }
+        };
+
+        println!("  Snapshot RPC: {}", snap_rpc_url.as_deref().unwrap_or("(not found)"));
+        println!("  Snapshot P2P: {}", snap_p2p_addr.as_deref().unwrap_or("(not found)"));
+        println!("  Seed RPC:     {}", seed_rpc_url.as_deref().unwrap_or("(not found)"));
+        println!("  Seed P2P:     {}", seed_p2p_addr.as_deref().unwrap_or("(not found)"));
+        println!("  Statesync RPC servers: {}", a1_statesync_rpc);
+
+        // Snapshot node: 5 min initial wait (it creates a snapshot on startup before syncing),
+        // then retry every 60s up to 20 times (~25 min max total).
+        let snapshot_peer = match (snap_rpc_url.as_deref(), snap_p2p_addr.as_deref()) {
+            (Some(rpc), Some(p2p)) => {
+                Self::extract_peer_id_with_boot_wait(rpc, p2p, 300, 20, 60).await
+            }
+            _ => {
+                eprintln!("  Warning: no RPC/P2P endpoints found for oline-a-snapshot — skipping peer ID");
+                None
+            }
+        }.unwrap_or_else(|| {
+            eprintln!("  Warning: could not fetch snapshot peer ID — Phase B will use empty peer.");
+            String::new()
+        });
+
+        // Seed node: also 5 min initial wait, 20×60s retries.
+        let seed_peer = match (seed_rpc_url.as_deref(), seed_p2p_addr.as_deref()) {
+            (Some(rpc), Some(p2p)) => {
+                Self::extract_peer_id_with_boot_wait(rpc, p2p, 300, 20, 60).await
+            }
+            _ => {
+                eprintln!("  Warning: no RPC/P2P endpoints found for oline-a-seed — skipping peer ID");
+                None
+            }
+        }.unwrap_or_else(|| {
+            eprintln!("  Warning: could not fetch seed peer ID — Phase B will use empty peer.");
+            String::new()
+        });
 
         println!("    snapshot_peer: {}", snapshot_peer);
-        println!("    seed_peer: {}", seed_peer);
-
-        // Phase B snapshot downloads use the public download domain (no chicken-and-egg)
-        let snapshot_base_url = format!("https://{}", self.config.snapshot_download_domain);
-        println!("    snapshot_download_url: {}", snapshot_base_url);
+        println!("    seed_peer:     {}", seed_peer);
 
         // ── Phase A2: Backup Snapshot + Seed (reuses SDL_A with backup service names) ──
         println!("\n── Phase 1b: Deploy Backup Snapshot + Seed nodes ──");
@@ -1374,26 +1484,45 @@ impl OLineDeployer {
             }
         }
 
-        // ── Extract peer IDs from phase A2 ──
-        println!("  Extracting peer IDs...");
-        let snapshot_2_rpc = Self::find_rpc_endpoint(&a2_endpoints, "oline-a2-snapshot")
-            .ok_or("No RPC endpoint found for oline-a2-snapshot")?;
-        let seed_2_rpc = Self::find_rpc_endpoint(&a2_endpoints, "oline-a2-seed")
-            .ok_or("No RPC endpoint found for oline-a2-seed")?;
+        // ── Extract peer IDs from Phase A2 (backup nodes, same DNS domains) ──
+        let snap2_rpc_ep = Self::find_endpoint_by_internal_port(&a2_endpoints, "oline-a2-snapshot", 26657);
+        let snap2_p2p_ep = Self::find_endpoint_by_internal_port(&a2_endpoints, "oline-a2-snapshot", 26656);
+        let seed2_rpc_ep = Self::find_endpoint_by_internal_port(&a2_endpoints, "oline-a2-seed",     26657);
+        let seed2_p2p_ep = Self::find_endpoint_by_internal_port(&a2_endpoints, "oline-a2-seed",     26656);
 
-        let snapshot_2_peer = Self::extract_peer_id_with_retry(snapshot_2_rpc, 10).await
-            .unwrap_or_else(|| {
-                eprintln!("  Warning: could not fetch snapshot-2 peer ID.");
-                String::new()
-            });
-        let seed_2_peer = Self::extract_peer_id_with_retry(seed_2_rpc, 10).await
-            .unwrap_or_else(|| {
-                eprintln!("  Warning: could not fetch seed-2 peer ID.");
-                String::new()
-            });
+        let snap2_rpc_url  = snap2_rpc_ep.map(|e| format!("http://{}:{}", SNAPSHOT_RPC_DOMAIN, e.port));
+        let snap2_p2p_addr = snap2_p2p_ep.map(|e| format!("{}:{}", SNAPSHOT_P2P_DOMAIN, e.port));
+        let seed2_rpc_url  = seed2_rpc_ep.map(|e| format!("http://{}:{}", SEED_RPC_DOMAIN, e.port));
+        let seed2_p2p_addr = seed2_p2p_ep.map(|e| format!("{}:{}", SEED_P2P_DOMAIN, e.port));
+
+        let snapshot_2_peer = match (snap2_rpc_url.as_deref(), snap2_p2p_addr.as_deref()) {
+            (Some(rpc), Some(p2p)) => {
+                Self::extract_peer_id_with_boot_wait(rpc, p2p, 300, 20, 60).await
+            }
+            _ => {
+                eprintln!("  Warning: no RPC/P2P endpoints found for oline-a2-snapshot — skipping peer ID");
+                None
+            }
+        }.unwrap_or_else(|| {
+            eprintln!("  Warning: could not fetch snapshot-2 peer ID.");
+            String::new()
+        });
+
+        let seed_2_peer = match (seed2_rpc_url.as_deref(), seed2_p2p_addr.as_deref()) {
+            (Some(rpc), Some(p2p)) => {
+                Self::extract_peer_id_with_boot_wait(rpc, p2p, 300, 20, 60).await
+            }
+            _ => {
+                eprintln!("  Warning: no RPC/P2P endpoints found for oline-a2-seed — skipping peer ID");
+                None
+            }
+        }.unwrap_or_else(|| {
+            eprintln!("  Warning: could not fetch seed-2 peer ID.");
+            String::new()
+        });
 
         println!("    snapshot_2_peer: {}", snapshot_2_peer);
-        println!("    seed_2_peer: {}", seed_2_peer);
+        println!("    seed_2_peer:     {}", seed_2_peer);
 
         // ── Phase B: Left & Right Tackles ──
         println!("\n── Phase 2: Deploy Left & Right Tackles ──");
@@ -1402,16 +1531,30 @@ impl OLineDeployer {
             return Ok(());
         }
 
-        // Construct Phase B snapshot URL from the public download domain
-        let b_snapshot_url = format!(
-            "{}/{}/latest.{}",
-            snapshot_base_url.trim_end_matches('/'),
+        // Fetch the snapshot download URL from the MinIO metadata JSON.
+        // Fallback: construct from config path if metadata isn't available yet.
+        let b_snapshot_fallback = format!(
+            "https://{}/{}/latest.{}",
+            self.config.snapshot_download_domain,
             self.config.snapshot_path.trim_matches('/'),
             self.config.snapshot_save_format
         );
+        let b_snapshot_metadata_url = format!(
+            "https://{}/{}/snapshot.json",
+            self.config.snapshot_download_domain,
+            self.config.snapshot_path.trim_matches('/')
+        );
+        let b_snapshot_url = fetch_snapshot_url_from_metadata(&b_snapshot_metadata_url, &b_snapshot_fallback).await;
         println!("  Phase B snapshot URL: {}", b_snapshot_url);
 
-        let b_vars = build_phase_b_vars(&self.config, &snapshot_peer, &snapshot_2_peer, &b_snapshot_url, &self.defaults);
+        let b_vars = build_phase_b_vars(
+            &self.config,
+            &snapshot_peer,
+            &snapshot_2_peer,
+            &b_snapshot_url,
+            &a1_statesync_rpc,
+            &self.defaults,
+        );
         let b_defaults = HashMap::new();
 
         println!("  Variables:");
@@ -1429,19 +1572,34 @@ impl OLineDeployer {
         let record = DeploymentRecord::from_state(&b_state, &self.password)?;
         self.deployment_store.save(&record).await.ok();
 
-        // Extract peer IDs from phase B
-        println!("  Extracting peer IDs...");
-        let left_rpc = Self::find_rpc_endpoint(&b_endpoints, "oline-b-left-node")
-            .ok_or("No RPC endpoint found for oline-b-left-node")?;
-        let right_rpc = Self::find_rpc_endpoint(&b_endpoints, "oline-b-right-node")
-            .ok_or("No RPC endpoint found for oline-b-right-node")?;
+        // Extract peer IDs from Phase B tackles.
+        // Tackles don't have public DNS domains — use provider URI hostname + forwarded P2P port.
+        let left_rpc_ep  = Self::find_endpoint_by_internal_port(&b_endpoints, "oline-b-left-node",  26657);
+        let left_p2p_ep  = Self::find_endpoint_by_internal_port(&b_endpoints, "oline-b-left-node",  26656);
+        let right_rpc_ep = Self::find_endpoint_by_internal_port(&b_endpoints, "oline-b-right-node", 26657);
+        let right_p2p_ep = Self::find_endpoint_by_internal_port(&b_endpoints, "oline-b-right-node", 26656);
 
-        let left_tackle_peer = Self::extract_peer_id_with_retry(left_rpc, 10).await
-            .unwrap_or_else(|| { eprintln!("  Warning: could not fetch left-tackle peer ID."); String::new() });
-        let right_tackle_peer = Self::extract_peer_id_with_retry(right_rpc, 10).await
-            .unwrap_or_else(|| { eprintln!("  Warning: could not fetch right-tackle peer ID."); String::new() });
+        let left_rpc_url  = left_rpc_ep.map(|e| e.uri.clone());
+        let left_p2p_addr = left_p2p_ep.map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port));
+        let right_rpc_url  = right_rpc_ep.map(|e| e.uri.clone());
+        let right_p2p_addr = right_p2p_ep.map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port));
 
-        println!("    left_tackle: {}", left_tackle_peer);
+        // 5 min initial wait, 20×60s retries — tackles need to sync from statesync first.
+        let left_tackle_peer = match (left_rpc_url.as_deref(), left_p2p_addr.as_deref()) {
+            (Some(rpc), Some(p2p)) => {
+                Self::extract_peer_id_with_boot_wait(rpc, p2p, 300, 20, 60).await
+            }
+            _ => { eprintln!("  Warning: no endpoints for oline-b-left-node"); None }
+        }.unwrap_or_else(|| { eprintln!("  Warning: could not fetch left-tackle peer ID."); String::new() });
+
+        let right_tackle_peer = match (right_rpc_url.as_deref(), right_p2p_addr.as_deref()) {
+            (Some(rpc), Some(p2p)) => {
+                Self::extract_peer_id_with_boot_wait(rpc, p2p, 300, 20, 60).await
+            }
+            _ => { eprintln!("  Warning: no endpoints for oline-b-right-node"); None }
+        }.unwrap_or_else(|| { eprintln!("  Warning: could not fetch right-tackle peer ID."); String::new() });
+
+        println!("    left_tackle:  {}", left_tackle_peer);
         println!("    right_tackle: {}", right_tackle_peer);
 
         // ── Phase C: Left & Right Forwards ──
@@ -1715,6 +1873,9 @@ async fn collect_config(
     let d = default_val("OLINE_SNAPSHOT_DOWNLOAD_DOMAIN", saved.as_ref().map(|s| s.snapshot_download_domain.as_str()), "snapshots.terp.network");
     let snapshot_download_domain = read_input(lines, "Snapshot download domain (public S3 API)", Some(&d))?;
 
+    let d = default_val("OLINE_CERTBOT_EMAIL", saved.as_ref().map(|s| s.certbot_email.as_str()), "admin@terp.network");
+    let certbot_email = read_input(lines, "Certbot email (Let's Encrypt registration for nginx-snapshot)", Some(&d))?;
+
     // Cloudflare DNS (optional — auto-update CNAME after deploy)
     println!("\n── Cloudflare DNS (optional) ──");
     println!("  Set these to auto-update CNAME records after deployment.");
@@ -1750,6 +1911,7 @@ async fn collect_config(
         s3_bucket,
         autopin_interval,
         snapshot_download_domain,
+        certbot_email,
         cloudflare_api_token,
         cloudflare_zone_id,
     };
@@ -1880,6 +2042,9 @@ async fn cmd_generate_sdl(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Erro
         let d = default_val("OLINE_SNAPSHOT_DOWNLOAD_DOMAIN", None, "snapshots.terp.network");
         let snapshot_download_domain = read_input(&mut lines, "Snapshot download domain (public S3 API)", Some(&d))?;
 
+        let d = default_val("OLINE_CERTBOT_EMAIL", None, "admin@terp.network");
+        let certbot_email = read_input(&mut lines, "Certbot email (Let's Encrypt)", Some(&d))?;
+
         let d = default_val_opt("OLINE_CF_API_TOKEN", None);
         let cloudflare_api_token = if let Some(tok) = d {
             tok
@@ -1911,6 +2076,7 @@ async fn cmd_generate_sdl(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Erro
             s3_bucket,
             autopin_interval,
             snapshot_download_domain,
+            certbot_email,
             cloudflare_api_token,
             cloudflare_zone_id,
         }
@@ -1944,16 +2110,26 @@ async fn cmd_generate_sdl(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Erro
         (String::new(), String::new(), String::new(), String::new())
     };
 
-    // Phase B snapshot URL uses the public download domain (deterministic, no deploy-time discovery needed)
-    let b_snapshot_url = if needs_peers {
-        format!(
-            "https://{}/{}/latest.{}",
-            config.snapshot_download_domain,
-            config.snapshot_path.trim_matches('/'),
-            config.snapshot_save_format
-        )
+    // Phase B snapshot URL and statesync RPC (prompt operator — they know these after Phase A).
+    let (b_snapshot_url, b_statesync_rpc) = if needs_peers {
+        let snap_url = read_input(
+            &mut lines,
+            "Snapshot download URL (from metadata or fallback)",
+            Some(&format!(
+                "https://{}/{}/latest.{}",
+                config.snapshot_download_domain,
+                config.snapshot_path.trim_matches('/'),
+                config.snapshot_save_format
+            )),
+        )?;
+        let statesync_rpc = read_input(
+            &mut lines,
+            &format!("Statesync RPC servers (e.g. {}:PORT,{}:PORT)", SNAPSHOT_RPC_DOMAIN, SEED_RPC_DOMAIN),
+            Some(""),
+        )?;
+        (snap_url, statesync_rpc)
     } else {
-        String::new()
+        (String::new(), String::new())
     };
 
     let needs_tackles = matches!(phase.as_str(), "c" | "all");
@@ -1999,7 +2175,7 @@ async fn cmd_generate_sdl(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Erro
             render("Phase A2: Backup Kickoff", &sdl_a, &vars)?;
         }
         "b" => {
-            let vars = build_phase_b_vars(&config, &snapshot_peer, &snapshot_2_peer, &b_snapshot_url, defaults);
+            let vars = build_phase_b_vars(&config, &snapshot_peer, &snapshot_2_peer, &b_snapshot_url, &b_statesync_rpc, defaults);
             render("Phase B: Left & Right Tackles", &sdl_b, &vars)?;
         }
         "c" => {
@@ -2021,7 +2197,7 @@ async fn cmd_generate_sdl(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Erro
             let a2_vars = build_phase_a2_vars(&config, defaults);
             render("Phase A2: Backup Kickoff", &sdl_a, &a2_vars)?;
 
-            let b_vars = build_phase_b_vars(&config, &snapshot_peer, &snapshot_2_peer, &b_snapshot_url, defaults);
+            let b_vars = build_phase_b_vars(&config, &snapshot_peer, &snapshot_2_peer, &b_snapshot_url, &b_statesync_rpc, defaults);
             render("Phase B: Left & Right Tackles", &sdl_b, &b_vars)?;
 
             let c_vars = build_phase_c_vars(

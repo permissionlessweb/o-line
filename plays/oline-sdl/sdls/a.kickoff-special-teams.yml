@@ -87,19 +87,24 @@ services:
         to:
           - global: true
       - port: 9000
+        as: 9000
+        to:
+          - service: ${SNAPSHOT_SVC}
+      - port: 80
         as: 80
         to:
           - global: true
         accept:
           - ${SNAPSHOT_DOWNLOAD_DOMAIN}
         http_options:
-          max_body_size: 104857600
-          read_timeout: 60000
-          send_timeout: 60000
-      - port: 9000
-        as: 80
+          max_body_size: 1073741824
+          read_timeout: 300000
+          send_timeout: 300000
+      - port: 443
+        as: 443
+        proto: tcp
         to:
-          - service: ${SNAPSHOT_SVC}
+          - global: true
       - port: 4001
         as: 4001
         proto: tcp
@@ -116,6 +121,8 @@ services:
       - AUTOPIN_PATTERNS=*.tar.gz,*.tar.zst,*.tar.lz4,*.tar.xz
       - PUID=1000
       - PGID=1000
+      - SNAPSHOT_DOWNLOAD_DOMAIN=${SNAPSHOT_DOWNLOAD_DOMAIN}
+      - CERTBOT_EMAIL=${CERTBOT_EMAIL}
     params:
       storage:
         ipfs-data:

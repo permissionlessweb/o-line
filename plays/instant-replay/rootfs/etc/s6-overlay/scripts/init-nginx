@@ -1,0 +1,44 @@
+#!/command/with-contenv bash
+set -e
+
+NGINX_ENABLED="${NGINX_ENABLED:-true}"
+
+if [ "$NGINX_ENABLED" != "true" ]; then
+    echo "[init-nginx] nginx disabled — skipping"
+    exit 0
+fi
+
+if [ -z "${SNAPSHOT_DOWNLOAD_DOMAIN}" ]; then
+    echo "[init-nginx] SNAPSHOT_DOWNLOAD_DOMAIN not set — skipping TLS setup"
+    exit 0
+fi
+
+MINIO_PORT="${MINIO_PORT:-9000}"
+export MINIO_BACKEND="localhost:${MINIO_PORT}"
+
+echo "[init-nginx] Generating nginx config for ${SNAPSHOT_DOWNLOAD_DOMAIN} -> ${MINIO_BACKEND}"
+envsubst '${SNAPSHOT_DOWNLOAD_DOMAIN} ${MINIO_BACKEND}' \
+    < /etc/nginx/nginx.conf.template \
+    > /etc/nginx/nginx.conf
+
+# Start nginx temporarily so certbot can serve the HTTP-01 ACME challenge.
+nginx
+
+# Obtain/renew a Let's Encrypt certificate.
+# Falls back gracefully if DNS isn't propagated yet on first boot.
+if [ -n "${CERTBOT_EMAIL}" ]; then
+    echo "[init-nginx] Running certbot for ${SNAPSHOT_DOWNLOAD_DOMAIN}"
+    certbot --nginx \
+        -d "${SNAPSHOT_DOWNLOAD_DOMAIN}" \
+        --non-interactive \
+        --agree-tos \
+        --email "${CERTBOT_EMAIL}" \
+        || true
+else
+    echo "[init-nginx] CERTBOT_EMAIL not set — skipping TLS cert"
+fi
+
+# Stop the temporary nginx.
+nginx -s stop || true
+
+echo "[init-nginx] Done"

@@ -1,0 +1,16 @@
+#!/command/with-contenv bash
+
+NGINX_ENABLED="${NGINX_ENABLED:-true}"
+
+if [ "$NGINX_ENABLED" != "true" ]; then
+    echo "[svc-nginx] nginx disabled — sleeping"
+    exec sleep infinity
+fi
+
+if [ ! -f /etc/nginx/nginx.conf ]; then
+    echo "[svc-nginx] nginx.conf not found — sleeping (init-nginx may have skipped)"
+    exec sleep infinity
+fi
+
+echo "[svc-nginx] Starting nginx"
+exec nginx -g 'daemon off;'
