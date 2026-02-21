@@ -1,0 +1,63 @@
+#!/command/with-contenv bash
+export IPFS_PATH=/data/ipfs
+
+INTERVAL="${AUTOPIN_INTERVAL:-300}"
+PATTERNS="${AUTOPIN_PATTERNS:-*.tar.gz,*.tar.zst,*.tar.lz4,*.tar.xz}"
+PINNED_LOG="/data/ipfs/.autopin-state"
+STAGING="/tmp/autopin"
+MINIO_PORT="${MINIO_PORT:-9000}"
+MINIO_BUCKET="${MINIO_BUCKET:-snapshots}"
+MINIO_ROOT_USER="${MINIO_ROOT_USER:-minioadmin}"
+MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-minioadmin}"
+
+mkdir -p "$STAGING"
+touch "$PINNED_LOG"
+
+# Configure mc alias
+mc alias set local "http://localhost:${MINIO_PORT}" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" --api S3v4 > /dev/null 2>&1
+
+echo "[autopin] Watching MinIO bucket '${MINIO_BUCKET}' every ${INTERVAL}s for: ${PATTERNS}"
+
+while true; do
+    # List objects in bucket via mc, filter by patterns
+    mc ls --recursive "local/${MINIO_BUCKET}" 2>/dev/null | awk '{print $NF}' | while IFS= read -r objname; do
+        [ -z "$objname" ] && continue
+
+        # Check if object matches any pattern
+        matched=false
+        IFS=',' read -ra PATS <<< "$PATTERNS"
+        for pat in "${PATS[@]}"; do
+            case "$objname" in $pat) matched=true; break;; esac
+        done
+        [ "$matched" = false ] && continue
+
+        # Get ETag for change detection
+        etag=$(mc stat "local/${MINIO_BUCKET}/${objname}" 2>/dev/null | grep -i etag | awk '{print $NF}')
+        key="${objname}::${etag}"
+
+        if grep -qxF "$key" "$PINNED_LOG" 2>/dev/null; then
+            continue
+        fi
+
+        echo "[autopin] Pinning: ${objname}"
+        local_path="${STAGING}/$(basename "$objname")"
+        mc cp "local/${MINIO_BUCKET}/${objname}" "$local_path" > /dev/null 2>&1
+
+        if [ -f "$local_path" ]; then
+            CID=$(s6-setuidgid app ipfs add --pin=true -Q "$local_path" 2>/dev/null)
+            rm -f "$local_path"
+
+            if [ -n "$CID" ]; then
+                echo "$key" >> "$PINNED_LOG"
+                echo "[autopin] Pinned ${objname} -> ${CID}"
+                echo "[autopin]   gateway: http://localhost:${IPFS_GATEWAY_PORT:-8081}/ipfs/${CID}"
+            else
+                echo "[autopin] Failed to pin ${objname}"
+            fi
+        else
+            echo "[autopin] Failed to download ${objname} from MinIO"
+        fi
+    done
+
+    sleep "$INTERVAL"
+done

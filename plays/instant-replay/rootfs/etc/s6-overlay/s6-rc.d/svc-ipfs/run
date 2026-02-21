@@ -1,0 +1,4 @@
+#!/command/with-contenv bash
+export IPFS_PATH=/data/ipfs
+export HOME=/home/app
+exec s6-setuidgid app ipfs daemon --enable-gc

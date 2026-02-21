@@ -1,0 +1,20 @@
+#!/command/with-contenv bash
+
+MINIO_ENABLED="${MINIO_ENABLED:-true}"
+
+if [ "$MINIO_ENABLED" != "true" ]; then
+    echo "[svc-minio] MinIO disabled — sleeping"
+    exec sleep infinity
+fi
+
+export MINIO_BROWSER=on
+export MINIO_ROOT_USER="${MINIO_ROOT_USER:-minioadmin}"
+export MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-minioadmin}"
+
+MINIO_PORT="${MINIO_PORT:-9000}"
+MINIO_CONSOLE_PORT="${MINIO_CONSOLE_PORT:-9001}"
+
+echo "[svc-minio] Starting MinIO on :${MINIO_PORT} (console :${MINIO_CONSOLE_PORT})"
+exec s6-setuidgid app minio server /data/minio \
+    --address ":${MINIO_PORT}" \
+    --console-address ":${MINIO_CONSOLE_PORT}"

@@ -1,0 +1,110 @@
+---
+# minio-ipfs — Akash SDL
+#
+# Deploys MinIO (S3 API + Console UI) + IPFS (Kubo) with auto-pinning.
+# Upload snapshots via MinIO Console (:9001) or S3 API (:9000) →
+# autopin service pins them to IPFS for decentralized distribution.
+#
+# No FUSE or SYS_ADMIN capability required.
+#
+# Image must be pre-built and pushed to a registry before deploying.
+# Build:  docker build -t ghcr.io/permissionlessweb/minio-ipfs:v0.0.2 .
+# Push:   docker push ghcr.io/permissionlessweb/minio-ipfs:v0.0.2
+
+version: "2.0"
+
+services:
+  minio-ipfs:
+    image: ghcr.io/permissionlessweb/minio-ipfs:v0.0.2
+    env:
+      # MinIO
+      - "MINIO_ENABLED=true"
+      - "MINIO_ROOT_USER=minioadmin"
+      - "MINIO_ROOT_PASSWORD=minioadmin"
+      - "MINIO_BUCKET=snapshots"
+      - "MINIO_PORT=9000"
+      - "MINIO_CONSOLE_PORT=9001"
+      # Ports
+      - "IPFS_GATEWAY_PORT=8081"
+      # IPFS
+      - "IPFS_PROFILE=server"
+      # Auto-pin: scan every 5 minutes for snapshot files
+      - "AUTOPIN_INTERVAL=300"
+      - "AUTOPIN_PATTERNS=*.tar.gz,*.tar.zst,*.tar.lz4,*.tar.xz"
+      # User
+      - "PUID=1000"
+      - "PGID=1000"
+    expose:
+      # MinIO Console UI (browse/upload/download files)
+      - port: 9001
+        as: 80
+        to:
+          - global: true
+        http_options:
+          max_body_size: 104857600
+          read_timeout: 60000
+          send_timeout: 60000
+          next_tries: 3
+          next_cases:
+            - error
+            - timeout
+            - "502"
+            - "503"
+      # IPFS HTTP Gateway (public, read-only)
+      - port: 8081
+        as: 8081
+        to:
+          - global: true
+      # MinIO S3 API
+      - port: 9000
+        as: 9000
+        to:
+          - global: true
+      # IPFS Swarm (P2P — enables content distribution)
+      - port: 4001
+        as: 4001
+        proto: tcp
+        to:
+          - global: true
+    params:
+      storage:
+        ipfs-data:
+          mount: /data/ipfs
+          readOnly: false
+        minio-data:
+          mount: /data/minio
+          readOnly: false
+
+profiles:
+  compute:
+    minio-ipfs:
+      resources:
+        cpu:
+          units: 2
+        memory:
+          size: 2Gi
+        storage:
+          - name: default
+            size: 1Gi
+          - name: ipfs-data
+            size: 32Gi
+            attributes:
+              persistent: true
+              class: beta2
+          - name: minio-data
+            size: 50Gi
+            attributes:
+              persistent: true
+              class: beta2
+  placement:
+    dcloud:
+      pricing:
+        minio-ipfs:
+          denom: uakt
+          amount: 5000
+
+deployment:
+  minio-ipfs:
+    dcloud:
+      profile: minio-ipfs
+      count: 1

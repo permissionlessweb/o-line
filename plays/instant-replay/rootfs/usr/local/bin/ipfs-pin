@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -e
+
+if [ -z "$1" ]; then
+    echo "Usage: ipfs-pin <path>"
+    echo "Pins a file or directory to the local IPFS node and prints CID + gateway URLs."
+    exit 1
+fi
+
+TARGET="$1"
+export IPFS_PATH=/data/ipfs
+
+if [ ! -e "$TARGET" ]; then
+    echo "Error: '$TARGET' does not exist"
+    exit 1
+fi
+
+echo "Pinning '$TARGET' to IPFS..."
+
+if [ -d "$TARGET" ]; then
+    CID=$(ipfs add -r --pin=true -Q "$TARGET")
+else
+    CID=$(ipfs add --pin=true -Q "$TARGET")
+fi
+
+GATEWAY_PORT="${IPFS_GATEWAY_PORT:-8081}"
+
+echo ""
+echo "CID: ${CID}"
+echo ""
+echo "Gateway URLs:"
+echo "  Local:  http://localhost:${GATEWAY_PORT}/ipfs/${CID}"
+echo "  IPFS:   https://ipfs.io/ipfs/${CID}"
+echo "  Dweb:   https://dweb.link/ipfs/${CID}"
+echo "  DaoDao: https://ipfs.daodao.zone/ipfs/${CID}"

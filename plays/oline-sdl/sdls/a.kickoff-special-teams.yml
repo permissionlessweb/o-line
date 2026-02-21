@@ -19,27 +19,23 @@ services:
       - CHAIN_JSON=${CHAIN_JSON}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - FASTSYNC_VERSION=v0
-      # keep full state for statesync serving
       - PRUNING=nothing
       - STATESYNC_SNAPSHOT_INTERVAL=500
-      - COSMOVISOR_ENABLED=1
-      # peer exchange disabled
+      # - COSMOVISOR_ENABLED=1
       - TERPD_P2P_PEX=false
-      # public address book & snapshot
       - ADDRBOOK_URL=${ADDRBOOK_URL}
-      - SNAPSHOT_URL=${SNAPSHOT_URL}
-      - SNAPSHOT_FORMAT=tar.lz4
       - TERPD_P2P_PRIVATE_PEER_IDS=${TERPD_P2P_PRIVATE_PEER_IDS}
       - WASMVM_PATH=/lib/libwasmvm.x86_64.so
       - WASMVM_VERSION=v3.0.2
       - WASMVM_URL=https://github.com/CosmWasm/wasmvm/releases/download/v3.0.2/libwasmvm.x86_64.so
-      # s3 snapshot export
       - S3_KEY=${S3_KEY}
       - S3_SECRET=${S3_SECRET}
       - S3_HOST=${S3_HOST}
+      - SNAPSHOT_URL=${SNAPSHOT_URL}
+      - SNAPSHOT_FORMAT=tar.lz4
       - SNAPSHOT_PATH=${SNAPSHOT_PATH}
       - SNAPSHOT_TIME=${SNAPSHOT_TIME}
-      - SNAPSHOT_DIR=/root/.terp
+      - SNAPSHOT_DIR=/root/.terpd
       - SNAPSHOT_METADATA=1
       - SNAPSHOT_METADATA_URL=${SNAPSHOT_METADATA_URL}
       - SNAPSHOT_SAVE_FORMAT=${SNAPSHOT_SAVE_FORMAT}
@@ -52,11 +48,10 @@ services:
       - port: 26657
         as: 26657
         accept:
-          - statesync-b.terp.network
-          - www.statesync-b.terp.network
+          - seed-statesync.terp.network
+          - www.seed-statesync.terp.network
         to:
           - global: true
-      # DNS for <id>@seed.terp.network:26656
       - port: 26656
         as: 26656
         accept:
@@ -66,33 +61,79 @@ services:
           - global: true
     env:
       - MONIKER=${SEED_MONIKER}
-      # default chain cfg
       - CHAIN_JSON=${CHAIN_JSON}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - PRUNING=default
-      # peer exchange enabled
       - TERPD_P2P_PEX=true
-      # public address book & snapshot
-      - SNAPSHOT_URL=${SNAPSHOT_URL}
-      - SNAPSHOT_FORMAT=tar.lz4
       - FASTSYNC_VERSION=v0
       - STATESYNC_SNAPSHOT_INTERVAL=500
-      # - COSMOVISOR_ENABLED=1
       - WASMVM_PATH=/lib/libwasmvm.x86_64.so
       - WASMVM_VERSION=v3.0.2
       - WASMVM_URL=https://github.com/CosmWasm/wasmvm/releases/download/v3.0.2/libwasmvm.x86_64.so
+      # - COSMOVISOR_ENABLED=1
       # - STATESYNC_RPC_SERVERS=<mainnet-terp-rpc.konsortech.xyz:443,rpc.terp.aknodes.net:443>
       - ADDRBOOK_URL=${ADDRBOOK_URL}
+      - SNAPSHOT_URL=${SNAPSHOT_URL}
+      - SNAPSHOT_FORMAT=tar.lz4
+  ${MINIO_SVC}:
+    image: ${MINIO_IPFS_IMAGE}
+    expose:
+      - port: 9001
+        as: 9001
+        to:
+          - global: true
+      - port: 8081
+        as: 8081
+        to:
+          - global: true
+      - port: 9000
+        as: 80
+        to:
+          - global: true
+        accept:
+          - ${SNAPSHOT_DOWNLOAD_DOMAIN}
+        http_options:
+          max_body_size: 104857600
+          read_timeout: 60000
+          send_timeout: 60000
+      - port: 9000
+        as: 80
+        to:
+          - service: ${SNAPSHOT_SVC}
+      - port: 4001
+        as: 4001
+        proto: tcp
+        to:
+          - global: true
+    env:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - MINIO_BUCKET=${MINIO_BUCKET}
+      - MINIO_CONSOLE_PORT=9001
+      - IPFS_GATEWAY_PORT=8081
+      - IPFS_PROFILE=server
+      - AUTOPIN_INTERVAL=${AUTOPIN_INTERVAL}
+      - AUTOPIN_PATTERNS=*.tar.gz,*.tar.zst,*.tar.lz4,*.tar.xz
+      - PUID=1000
+      - PGID=1000
+    params:
+      storage:
+        ipfs-data:
+          mount: /data/ipfs
+          readOnly: false
+        minio-data:
+          mount: /data/minio
+          readOnly: false
 profiles:
   compute:
     ${SNAPSHOT_SVC}:
       resources:
         cpu:
-          units: 4
+          units: 2
         memory:
-          size: 16Gi
+          size: 8Gi
         storage:
-          - size: 250Gi
+          - size: 50Gi
     ${SEED_SVC}:
       resources:
         cpu:
@@ -101,6 +142,24 @@ profiles:
           size: 8Gi
         storage:
           - size: 50Gi
+    ${MINIO_SVC}:
+      resources:
+        cpu:
+          units: 2
+        memory:
+          size: 4Gi
+        storage:
+          - size: 10Gi
+          - name: ipfs-data
+            size: 100Gi
+            attributes:
+              persistent: true
+              class: beta3
+          - name: minio-data
+            size: 50Gi
+            attributes:
+              persistent: true
+              class: beta3
   placement:
     dcloud:
       pricing:
@@ -108,6 +167,9 @@ profiles:
           denom: uakt
           amount: 1000
         ${SEED_SVC}:
+          denom: uakt
+          amount: 1000
+        ${MINIO_SVC}:
           denom: uakt
           amount: 1000
       signedBy:
@@ -123,4 +185,8 @@ deployment:
   ${SEED_SVC}:
     dcloud:
       profile: ${SEED_SVC}
+      count: 1
+  ${MINIO_SVC}:
+    dcloud:
+      profile: ${MINIO_SVC}
       count: 1

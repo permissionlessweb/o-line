@@ -1,0 +1,28 @@
+#!/command/with-contenv bash
+set -e
+
+export IPFS_PATH=/data/ipfs
+
+# Initialize IPFS repo if first run
+if [ ! -f /data/ipfs/config ]; then
+    echo "[init-ipfs] Initializing IPFS repo with profile=${IPFS_PROFILE:-server}"
+    ipfs init --profile="${IPFS_PROFILE:-server}"
+fi
+
+# Configure gateway port
+echo "[init-ipfs] Setting gateway to port ${IPFS_GATEWAY_PORT:-8081}"
+ipfs config Addresses.Gateway "/ip4/0.0.0.0/tcp/${IPFS_GATEWAY_PORT:-8081}"
+
+# Tune for pinning server (low resource usage)
+ipfs config --json Swarm.ConnMgr.LowWater 50
+ipfs config --json Swarm.ConnMgr.HighWater 100
+ipfs config Datastore.StorageMax "10GB"
+ipfs config --json Discovery.MDNS.Enabled false
+
+# Create denylists dir for nopfs plugin (looks at $HOME/.config/ipfs/denylists)
+mkdir -p /home/app/.config/ipfs/denylists
+
+# Fix ownership
+chown -R app:app /data/ipfs /home/app/.config
+
+echo "[init-ipfs] Done"

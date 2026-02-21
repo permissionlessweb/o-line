@@ -14,3 +14,4 @@ We can curate a testing framework that is modular enought to let us resuse a sin
 
 - catalyst - load testing tool: <https://github.com/skip-mev/catalyst>
 - ironbird - testnet orchestration: <https://github.com/skip-mev/ironbird>
+- terp sh scripts: manual bash scripts with binary <https://github.com/terpnetwork/terp-core/tree/main/tests/tsh/upgrade>
