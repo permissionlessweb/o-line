@@ -58,7 +58,8 @@ RUN apk add --no-cache \
     ca-certificates \
     curl \
     jq \
-    shadow
+    shadow \
+    libc6-compat
 
 # Copy binaries from build stages
 COPY --from=fetch /tmp/ipfs /usr/local/bin/ipfs

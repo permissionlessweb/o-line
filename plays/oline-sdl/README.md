@@ -56,16 +56,6 @@ Or simply (deploy is the default):
 oline
 ```
 
-The tool will:
-
-1. Prompt for your **password** (hidden) to decrypt the mnemonic from `.env`
-2. Ask for **RPC endpoint** (defaults to `https://rpc.akashnet.net:443`)
-3. Ask for **snapshot URL**
-4. Ask for **validator peer ID**
-5. Ask for **trusted provider addresses** (optional)
-6. Ask whether to **auto-select cheapest provider** or manually choose
-7. Walk through each deployment phase interactively, confirming before each SDL deploy
-
 ### Manual Provider Selection
 
 To manually choose providers for each phase:
@@ -183,14 +173,39 @@ graph LR
     class LF,RF forward;
 ```
 
+## Estiamted Cost
+
+| Phase | SDL | Services | CPU | Memory | Storage | Tested | Est. Cost (AKT/month) |
+|-------|-----|----------|-----|--------|---------|--------|----------------------|
+| A  | `a.kickoff-special-teams.yml` | snapshot-node (2 CPU, 8Gi, 50Gi) + seed-node (2 CPU, 8Gi, 50Gi) + minio+ipfs (2 CPU, 4GB, 100 Gi) | 6 | 24Gi | 300Gi | Yes | ~75 AKT |
+| B  | `b.left-and-right-tackle.yml` | left-tackle (4 CPU, 16Gi, 60Gi) + right-tackle (4 CPU, 16Gi, 60Gi) | 8 | 32Gi | 120Gi | | |
+| C  | `c.left-and-right-forwards.yml` | left-forward (4 CPU, 16Gi, 60Gi) + right-forward (4 CPU, 16Gi, 60Gi) | 8 | 32Gi | 120Gi | | |
+| **Total** | | **8 services across 4 deployments** | **28** | **112Gi** | **840Gi** | | |
+
+> Costs vary by provider. Estimate based on Phase A observed pricing. Fill in as each phase is tested.
+
 ## TODO
 
-### WORKFLOW
+- route to sdl-template folder, define files per specific runtime
+- fix cosmovisor issue (not recognizing terpd in correct path for some reason)
+- test l/r tackle for statesync from special teams
+- test snapshot retrieval and use from special teams
 
-- select which workflow to deploy (just one, or all of them )
+## SCRIPT LOGIC
+
+- find commond logic that can be backported into akash-deploy-rs
 
 ### SNAPSHOTS
 
+- on load from saved-config, refjresh snapshot url by checking for updated one
+- define way to omit feature (snapshot+snapshot-server)
 - tune snapshot nodes to prune only the snapshot intervals, allowing us to lose no data
 - offload snapshot to jackal storage/s3 storage
-- s3 secrets inputs hidden in terminal
+- print each sdl generated in automated deployment to folder for retrieval
+- sort bitds by pricing tier, display monthy estimated akt to be spent
+
+## RESEARCH
+
+- <https://manpages.debian.org/unstable/s3cmd/s3cmd.1.en.html>
+- <https://github.com/davidcforbes/cloudflare-cli-rs>
+- <https://github.com/cloudflare/cloudflare-rs>

@@ -8,19 +8,22 @@ name = "oline"
 path = "src/main.rs"
 
 [dependencies]
+aes-gcm = "0.10"
 # akash-deploy-rs = { version = "0.0.5", features = ["default-client", "sdl-templates"] }
 akash-deploy-rs = { path = "/Users/returniflost/akash-deploy-rs", features = ["default-client", "sdl-templates", "file-storage"] }
-tokio = { version = "1.40", features = ["rt-multi-thread", "macros"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
-rustls = { version = "0.23", features = ["ring"] }
-aes-gcm = "0.10"
 argon2 = "0.5"
 base64 = "0.22"
-rand = "0.8"
-rpassword = "7"
+cloudflare = { version = "0.14.0", default-features = false, features = ["rustls-tls"] }
 dirs = "5"
-hmac = "0.12"
-sha2 = "0.10"
 hex = "0.4"
+hmac = "0.12"
+rand = "0.8"
+reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
+rpassword = "7"
+rustls = { version = "0.23", features = ["ring"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1.0"
+sha2 = "0.10"
+tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "time"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

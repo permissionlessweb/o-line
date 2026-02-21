@@ -3,7 +3,7 @@
 set -uo pipefail
 
 # ── Configuration ────────────────────────────────────────────────────────────
-IMAGE="${E2E_IMAGE:-ghcr.io/terpnetwork/minio-ipfs:v1.0.0}"
+IMAGE="${E2E_IMAGE:-ghcr.io/permissionlessweb/minio-ipfs:v0.0.2}"
 CONTAINER_NAME="minio-ipfs-e2e"
 IPFS_GW_PORT=18081
 MINIO_PORT=19000
