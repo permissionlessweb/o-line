@@ -848,7 +848,8 @@ fn build_phase_a_vars(config: &OLineConfig, defaults: &RuntimeDefaults) -> HashM
     // Auto-generate credentials shared between snapshot node and MinIO
     let s3_key = generate_credential(24);
     let s3_secret = generate_credential(40);
-    let s3_host = format!("{}:9000 --no-ssl", minio_svc);
+    // Use the public DNS domain so the snapshot node connects via the provider ingress.
+    let s3_host = config.snapshot_download_domain.clone();
 
     let mut vars = HashMap::new();
     insert_sdl_defaults(&mut vars, defaults);
@@ -875,7 +876,8 @@ fn build_phase_a2_vars(config: &OLineConfig, defaults: &RuntimeDefaults) -> Hash
     // Auto-generate credentials shared between snapshot node and MinIO
     let s3_key = generate_credential(24);
     let s3_secret = generate_credential(40);
-    let s3_host = format!("{}:9000 --no-ssl", minio_svc);
+    // Use the public DNS domain so the snapshot node connects via the provider ingress.
+    let s3_host = config.snapshot_download_domain.clone();
 
     let mut vars = HashMap::new();
     insert_sdl_defaults(&mut vars, defaults);
