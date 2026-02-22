@@ -63,7 +63,8 @@ RUN apk add --no-cache \
     nginx \
     certbot \
     certbot-nginx \
-    gettext
+    gettext && \
+    rm -f /etc/nginx/http.d/default.conf
 
 # Copy binaries from build stages
 COPY --from=fetch /tmp/ipfs /usr/local/bin/ipfs
@@ -102,7 +103,7 @@ ENV MINIO_ENABLED="true" \
     PUID=1000 \
     PGID=1000
 
-EXPOSE 80 443 8081 9000 9001
+EXPOSE 80 8081 9000 9001
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD /usr/local/bin/healthcheck

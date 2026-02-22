@@ -42,7 +42,12 @@ services:
       - SNAPSHOT_RETAIN=${SNAPSHOT_RETAIN}
       - SNAPSHOT_KEEP_LAST=${SNAPSHOT_KEEP_LAST}
       - SNAPSHOT_ON_START=1
-      - START_CMD=/bin/sh -c "curl -fsSL ${TLS_CONFIG_URL} | sh -s -- terpd start"
+      - TLS_CONFIG_URL=${TLS_CONFIG_URL}
+    command:
+      - sh
+    args:
+      - -c
+      - curl -fsSL ${ENTRYPOINT_URL} -o /tmp/wrapper.sh; sh /tmp/wrapper.sh
   ${SEED_SVC}:
     image: ${OMNIBUS_IMAGE}
     expose:
@@ -61,6 +66,7 @@ services:
         to:
           - global: true
     env:
+      - TLS_CONFIG_URL=${TLS_CONFIG_URL}
       - MONIKER=${SEED_MONIKER}
       - CHAIN_JSON=${CHAIN_JSON}
       - MINIMUM_GAS_PRICES=0.05uthiol
@@ -76,7 +82,11 @@ services:
       - ADDRBOOK_URL=${ADDRBOOK_URL}
       - SNAPSHOT_URL=${SNAPSHOT_URL}
       - SNAPSHOT_FORMAT=tar.lz4
-      - START_CMD=/bin/sh -c "curl -fsSL ${TLS_CONFIG_URL} | sh -s -- terpd start"
+    command:
+      - sh
+    args:
+      - -c
+      - curl -fsSL ${ENTRYPOINT_URL} -o /tmp/wrapper.sh; sh /tmp/wrapper.sh
   ${MINIO_SVC}:
     image: ${MINIO_IPFS_IMAGE}
     expose:

@@ -725,6 +725,7 @@ fn insert_sdl_defaults(vars: &mut HashMap<String, String>, defaults: &RuntimeDef
     vars.insert("OMNIBUS_IMAGE".into(), defaults.omnibus_image.clone());
     vars.insert("CHAIN_JSON".into(), defaults.chain_json.clone());
     vars.insert("ADDRBOOK_URL".into(), defaults.addrbook_url.clone());
+    vars.insert("ADDRBOOK_URL".into(), defaults.addrbook_url.clone());
 }
 
 /// Helper to insert S3 snapshot export variables.
@@ -849,6 +850,7 @@ fn build_phase_a_vars(config: &OLineConfig, defaults: &RuntimeDefaults) -> HashM
     vars.insert("MINIO_SVC".into(), minio_svc.into());
     vars.insert("CERTBOT_EMAIL".into(), config.certbot_email.clone());
     vars.insert("TLS_CONFIG_URL".into(), config.tls_config_url.clone());
+    vars.insert("ENTRYPOINT_URL".into(), config.tls_config_url.clone());
     vars.insert(
         "SNAPSHOT_MONIKER".into(),
         "oline::special::snapshot-node".into(),
@@ -991,6 +993,7 @@ pub struct OLineConfig {
     pub cloudflare_api_token: String,
     pub cloudflare_zone_id: String,
     pub tls_config_url: String,
+    pub entrypoint_url: String,
 }
 
 pub struct OLineDeployer {
@@ -1845,9 +1848,6 @@ async fn collect_config(
     } else {
         None
     };
-
-    // All prompts use env var > saved config > hardcoded default.
-    // Set OLINE_* env vars (or in .env file) to skip prompts.
     let d = default_val(
         "OLINE_RPC_ENDPOINT",
         saved.as_ref().map(|s| s.rpc_endpoint.as_str()),
@@ -1970,6 +1970,9 @@ async fn collect_config(
     let d = default_val("TLS_CONFIG_URL", None, "");
     let tls_config_url = read_input(lines, "TLS setup command", Some(&d))?;
 
+    let d = default_val("ENTRYPOINT_URL", None, "");
+    let entrypoint_url = read_input(lines, "entrypoint url", Some(&d))?;
+
     // MinIO-IPFS config
     tracing::info!("\n── MinIO-IPFS ──");
 
@@ -2058,6 +2061,7 @@ async fn collect_config(
         cloudflare_api_token,
         cloudflare_zone_id,
         tls_config_url,
+        entrypoint_url,
     };
 
     // Offer to save
@@ -2221,6 +2225,8 @@ async fn cmd_generate_sdl(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Erro
 
         let d = default_val("TLS_CONFIG_URL", None, "2");
         let tls_config_url = read_input(&mut lines, "TLS setup command", Some(&d))?;
+        let d = default_val("ENTRYPOINT_URL", None, "2");
+        let entrypoint_url = read_input(&mut lines, "TLS setup command", Some(&d))?;
 
         OLineConfig {
             mnemonic: String::new(),
@@ -2243,6 +2249,7 @@ async fn cmd_generate_sdl(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Erro
             cloudflare_api_token,
             cloudflare_zone_id,
             tls_config_url,
+            entrypoint_url,
         }
     };
 

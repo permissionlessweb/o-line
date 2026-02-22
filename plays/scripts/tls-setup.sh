@@ -230,5 +230,3 @@ fi
 rm -f "${NGINX_TEMPLATE}" "${NGINX_FULL}"
 
 log "TLS setup complete. Handing off to node start command."
-
-exec "$@"
