@@ -73,7 +73,9 @@ certbot certonly \
     --non-interactive \
     --agree-tos \
     --email "${CERTBOT_EMAIL}" \
-    "${CERTBOT_DOMAINS}" \
+    -d "${RPC_DOMAIN}" \
+    ${API_DOMAIN:+-d "${API_DOMAIN}"} \
+    ${SEED_DOMAIN:+-d "${SEED_DOMAIN}"}\
     || {
         log "WARNING: certbot failed — starting node without TLS"
         nginx -s stop 2>/dev/null || true
