@@ -9,7 +9,6 @@ use akash_deploy_rs::{
 };
 use argon2::Argon2;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use rand::RngCore;
 use cloudflare::endpoints::dns::dns::{
     CreateDnsRecord, CreateDnsRecordParams, DeleteDnsRecord, DnsContent, ListDnsRecords,
     ListDnsRecordsParams, UpdateDnsRecord, UpdateDnsRecordParams,
@@ -18,12 +17,17 @@ use cloudflare::framework::auth::Credentials;
 use cloudflare::framework::client::async_api::Client as CfClient;
 use cloudflare::framework::client::ClientConfig as CfClientConfig;
 use cloudflare::framework::Environment as CfEnvironment;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::error::Error;
-use std::fs;
-use std::io::{self, BufRead, Write};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    error::Error,
+    path::{Path, PathBuf},
+};
+use std::{
+    fs,
+    io::{self, BufRead, Write},
+};
 
 const SALT_LEN: usize = 16; // AES-256-GCM fixed
 const NONCE_LEN: usize = 12; // AES-256-GCM fixed
@@ -51,23 +55,14 @@ impl RuntimeDefaults {
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .collect(),
-            env_key: std::env::var("OLINE_ENV_KEY_NAME")
-                .unwrap_or_else(|_| "OLINE_ENCRYPTED_MNEMONIC".into()),
-            sdl_dir: PathBuf::from(
-                std::env::var("OLINE_SDL_DIR").unwrap_or_else(|_| "sdls".into()),
-            ),
-            snapshot_state_url: std::env::var("OLINE_SNAPSHOT_STATE_URL")
-                .unwrap_or_else(|_| "https://server-4.itrocket.net/mainnet/terp/.current_state.json".into()),
-            snapshot_base_url: std::env::var("OLINE_SNAPSHOT_BASE_URL")
-                .unwrap_or_else(|_| "https://server-4.itrocket.net/mainnet/terp/".into()),
-            chain_json: std::env::var("OLINE_CHAIN_JSON")
-                .unwrap_or_else(|_| "https://raw.githubusercontent.com/permissionlessweb/chain-registry/refs/heads/terpnetwork%40v5.0.2/terpnetwork/chain.json".into()),
-            addrbook_url: std::env::var("OLINE_ADDRBOOK_URL")
-                .unwrap_or_else(|_| "https://raw.githubusercontent.com/111STAVR111/props/main/Terp/addrbook.json".into()),
-            omnibus_image: std::env::var("OLINE_OMNIBUS_IMAGE")
-                .unwrap_or_else(|_| "ghcr.io/akash-network/cosmos-omnibus:v1.2.37-generic".into()),
-            minio_ipfs_image: std::env::var("OLINE_MINIO_IPFS_IMAGE")
-                .unwrap_or_else(|_| "ghcr.io/permissionlessweb/minio-ipfs:v0.0.2".into()),
+            env_key: std::env::var("OLINE_ENV_KEY_NAME").unwrap_or_else(|_| "OLINE_ENCRYPTED_MNEMONIC".into()),
+            sdl_dir: PathBuf::from(std::env::var("OLINE_SDL_DIR").unwrap_or_else(|_| "sdls".into())),
+            snapshot_state_url: std::env::var("OLINE_SNAPSHOT_STATE_URL").expect("latest snapshot json"),
+            snapshot_base_url: std::env::var("OLINE_SNAPSHOT_BASE_URL").expect("snapshot server"),
+            chain_json: std::env::var("OLINE_CHAIN_JSON").expect("chain json"),
+            addrbook_url: std::env::var("OLINE_ADDRBOOK_URL").expect("addrbook"),
+            omnibus_image: std::env::var("OLINE_OMNIBUS_IMAGE").expect("omnibus image"),
+            minio_ipfs_image: std::env::var("OLINE_MINIO_IPFS_IMAGE").expect("minio-ipfs version")
         }
     }
 
@@ -87,7 +82,7 @@ impl RuntimeDefaults {
 fn encrypt_mnemonic(mnemonic: &str, password: &str) -> Result<String, Box<dyn Error>> {
     let mut salt = [0u8; SALT_LEN];
     let mut key = [0u8; 32];
-    
+
     rand::thread_rng().fill_bytes(&mut salt);
     Argon2::default()
         .hash_password_into(password.as_bytes(), &salt, &mut key)
@@ -121,9 +116,11 @@ fn decrypt_mnemonic(encrypted_b64: &str, password: &str) -> Result<String, Box<d
         return Err("Encrypted data too short".into());
     }
 
-    let salt = &blob[..SALT_LEN];
-    let nonce_bytes = &blob[SALT_LEN..SALT_LEN + NONCE_LEN];
-    let ciphertext = &blob[SALT_LEN + NONCE_LEN..];
+    let (salt, nonce_bytes, ciphertext) = (
+        &blob[..SALT_LEN],
+        &blob[SALT_LEN..SALT_LEN + NONCE_LEN],
+        &blob[SALT_LEN + NONCE_LEN..],
+    );
 
     let mut key = [0u8; 32];
     Argon2::default()
@@ -258,110 +255,12 @@ fn write_encrypted_mnemonic_to_env(env_key: &str, blob: &str) -> Result<(), Box<
 
 // ── Config persistence ──
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct SavedConfig {
-    pub rpc_endpoint: String,
-    pub grpc_endpoint: String,
-    pub snapshot_url: String,
-    pub validator_peer_id: String,
-    pub trusted_providers: Vec<String>,
-    pub auto_select_provider: bool,
-    pub snapshot_path: String,
-    pub snapshot_time: String,
-    pub snapshot_save_format: String,
-    pub snapshot_retain: String,
-    pub snapshot_keep_last: String,
-    // MinIO-IPFS
-    #[serde(default = "default_minio_ipfs_image")]
-    pub minio_ipfs_image: String,
-    #[serde(default)]
-    pub s3_bucket: String,
-    #[serde(default = "default_autopin_interval")]
-    pub autopin_interval: String,
-    #[serde(default = "default_snapshot_download_domain")]
-    pub snapshot_download_domain: String,
-    // nginx-snapshot proxy (certbot email for Let's Encrypt registration)
-    #[serde(default = "default_certbot_email")]
-    pub certbot_email: String,
-    // Cloudflare DNS (optional — auto-update CNAME after Phase A deploy)
-    #[serde(default)]
-    pub cloudflare_api_token: String,
-    #[serde(default)]
-    pub cloudflare_zone_id: String,
-}
-
-fn default_snapshot_download_domain() -> String {
-    "snapshots.terp.network".to_string()
-}
-
-fn default_certbot_email() -> String {
-    "admin@terp.network".to_string()
-}
-
-fn default_minio_ipfs_image() -> String {
-    "ghcr.io/permissionlessweb/minio-ipfs:v0.0.2".to_string()
-}
-fn default_autopin_interval() -> String {
-    "300".to_string()
-}
-
-impl From<&OLineConfig> for SavedConfig {
-    fn from(c: &OLineConfig) -> Self {
-        Self {
-            rpc_endpoint: c.rpc_endpoint.clone(),
-            grpc_endpoint: c.grpc_endpoint.clone(),
-            snapshot_url: c.snapshot_url.clone(),
-            validator_peer_id: c.validator_peer_id.clone(),
-            trusted_providers: c.trusted_providers.clone(),
-            auto_select_provider: c.auto_select_provider,
-            snapshot_path: c.snapshot_path.clone(),
-            snapshot_time: c.snapshot_time.clone(),
-            snapshot_save_format: c.snapshot_save_format.clone(),
-            snapshot_retain: c.snapshot_retain.clone(),
-            snapshot_keep_last: c.snapshot_keep_last.clone(),
-            minio_ipfs_image: c.minio_ipfs_image.clone(),
-            s3_bucket: c.s3_bucket.clone(),
-            autopin_interval: c.autopin_interval.clone(),
-            snapshot_download_domain: c.snapshot_download_domain.clone(),
-            certbot_email: c.certbot_email.clone(),
-            cloudflare_api_token: c.cloudflare_api_token.clone(),
-            cloudflare_zone_id: c.cloudflare_zone_id.clone(),
-        }
-    }
-}
-
-impl SavedConfig {
-    pub fn to_oline_config(&self, mnemonic: String) -> OLineConfig {
-        OLineConfig {
-            mnemonic,
-            rpc_endpoint: self.rpc_endpoint.clone(),
-            grpc_endpoint: self.grpc_endpoint.clone(),
-            snapshot_url: self.snapshot_url.clone(),
-            validator_peer_id: self.validator_peer_id.clone(),
-            trusted_providers: self.trusted_providers.clone(),
-            auto_select_provider: self.auto_select_provider,
-            snapshot_path: self.snapshot_path.clone(),
-            snapshot_time: self.snapshot_time.clone(),
-            snapshot_save_format: self.snapshot_save_format.clone(),
-            snapshot_retain: self.snapshot_retain.clone(),
-            snapshot_keep_last: self.snapshot_keep_last.clone(),
-            minio_ipfs_image: self.minio_ipfs_image.clone(),
-            s3_bucket: self.s3_bucket.clone(),
-            autopin_interval: self.autopin_interval.clone(),
-            snapshot_download_domain: self.snapshot_download_domain.clone(),
-            certbot_email: self.certbot_email.clone(),
-            cloudflare_api_token: self.cloudflare_api_token.clone(),
-            cloudflare_zone_id: self.cloudflare_zone_id.clone(),
-        }
-    }
-}
-
 fn config_path() -> PathBuf {
     let home = dirs::home_dir().expect("Cannot determine home directory");
     home.join(".oline").join("config.enc")
 }
 
-fn save_config(config: &SavedConfig, password: &str) -> Result<(), Box<dyn Error>> {
+fn save_config(config: &OLineConfig, password: &str) -> Result<(), Box<dyn Error>> {
     let json = serde_json::to_string(config)?;
     let encrypted = encrypt_mnemonic(&json, password)?;
     let path = config_path();
@@ -372,7 +271,7 @@ fn save_config(config: &SavedConfig, password: &str) -> Result<(), Box<dyn Error
     Ok(())
 }
 
-fn load_config(password: &str) -> Option<SavedConfig> {
+fn load_config(password: &str) -> Option<OLineConfig> {
     let path = config_path();
     let encrypted = fs::read_to_string(&path).ok()?;
     let json = decrypt_mnemonic(encrypted.trim(), password).ok()?;
@@ -388,7 +287,7 @@ fn has_saved_config() -> bool {
 async fn fetch_latest_snapshot_url(defaults: &RuntimeDefaults) -> Result<String, Box<dyn Error>> {
     let state_url = &defaults.snapshot_state_url;
     let base_url = &defaults.snapshot_base_url;
-    println!("  Fetching latest snapshot info from {}...", state_url);
+    tracing::info!("Fetching latest snapshot info from {}...", state_url);
     let resp = reqwest::get(state_url).await?.text().await?;
     let trimmed = resp.trim();
     let state: serde_json::Value = serde_json::from_str(trimmed)
@@ -397,7 +296,8 @@ async fn fetch_latest_snapshot_url(defaults: &RuntimeDefaults) -> Result<String,
         .as_str()
         .ok_or("missing snapshot_name in .current_state.json")?;
     let url = format!("{}{}", base_url, snapshot_name);
-    println!("  Latest snapshot: {}", url);
+    tracing::info!("  Latest snapshot: {}", url);
+
     Ok(url)
 }
 
@@ -415,8 +315,12 @@ async fn cloudflare_upsert_cname(
     let credentials = Credentials::UserAuthToken {
         token: cf_token.to_string(),
     };
-    let client = CfClient::new(credentials, CfClientConfig::default(), CfEnvironment::Production)
-        .map_err(|e| format!("Failed to create Cloudflare client: {}", e))?;
+    let client = CfClient::new(
+        credentials,
+        CfClientConfig::default(),
+        CfEnvironment::Production,
+    )
+    .map_err(|e| format!("Failed to create Cloudflare client: {}", e))?;
 
     // List ALL records for this name (no type filter) so we find stale A/AAAA etc.
     let list_resp = client
@@ -441,18 +345,20 @@ async fn cloudflare_upsert_cname(
                         identifier: &existing.id,
                         params: UpdateDnsRecordParams {
                             name,
-                            content: DnsContent::CNAME { content: target.to_string() },
+                            content: DnsContent::CNAME {
+                                content: target.to_string(),
+                            },
                             ttl: Some(60),
                             proxied: Some(false),
                         },
                     })
                     .await
                     .map_err(|e| format!("Cloudflare CNAME update failed: {:?}", e))?;
-                println!("    Updated CNAME {} → {}", name, target);
+                tracing::info!("    Updated CNAME {} → {}", name, target);
             }
             _ => {
                 // Wrong type — delete it then create a fresh CNAME.
-                println!("    Replacing existing record for {} with CNAME", name);
+                tracing::info!("    Replacing existing record for {} with CNAME", name);
                 client
                     .request(&DeleteDnsRecord {
                         zone_identifier: zone_id,
@@ -465,7 +371,9 @@ async fn cloudflare_upsert_cname(
                         zone_identifier: zone_id,
                         params: CreateDnsRecordParams {
                             name,
-                            content: DnsContent::CNAME { content: target.to_string() },
+                            content: DnsContent::CNAME {
+                                content: target.to_string(),
+                            },
                             ttl: Some(60),
                             proxied: Some(false),
                             priority: None,
@@ -473,7 +381,11 @@ async fn cloudflare_upsert_cname(
                     })
                     .await
                     .map_err(|e| format!("Cloudflare CNAME create failed: {:?}", e))?;
-                println!("    Created CNAME {} → {} (replaced old record)", name, target);
+                tracing::info!(
+                    "    Created CNAME {} → {} (replaced old record)",
+                    name,
+                    target
+                );
             }
         }
     } else {
@@ -482,7 +394,9 @@ async fn cloudflare_upsert_cname(
                 zone_identifier: zone_id,
                 params: CreateDnsRecordParams {
                     name,
-                    content: DnsContent::CNAME { content: target.to_string() },
+                    content: DnsContent::CNAME {
+                        content: target.to_string(),
+                    },
                     ttl: Some(60),
                     proxied: Some(false),
                     priority: None,
@@ -490,7 +404,7 @@ async fn cloudflare_upsert_cname(
             })
             .await
             .map_err(|e| format!("Cloudflare CNAME create failed: {:?}", e))?;
-        println!("    Created CNAME {} → {}", name, target);
+        tracing::info!("    Created CNAME {} → {}", name, target);
     }
 
     Ok(())
@@ -522,21 +436,30 @@ const SEED_P2P_DOMAIN: &str = "seed.terp.network";
 /// Fetch the snapshot metadata JSON and return the `url` field.
 /// Falls back to `fallback_url` if the metadata is unavailable or malformed.
 async fn fetch_snapshot_url_from_metadata(metadata_url: &str, fallback_url: &str) -> String {
-    println!("  Fetching snapshot metadata from {}", metadata_url);
+    tracing::info!("  Fetching snapshot metadata from {}", metadata_url);
     match reqwest::get(metadata_url).await {
         Ok(resp) => match resp.json::<serde_json::Value>().await {
             Ok(json) => {
                 if let Some(url) = json.get("url").and_then(|u| u.as_str()) {
-                    println!("  Snapshot URL from metadata: {}", url);
+                    tracing::info!("  Snapshot URL from metadata: {}", url);
                     return url.to_string();
                 }
-                eprintln!("  Warning: snapshot metadata JSON has no 'url' field — using fallback");
+                tracing::info!(
+                    "  Warning: snapshot metadata JSON has no 'url' field — using fallback"
+                );
             }
-            Err(e) => eprintln!("  Warning: failed to parse snapshot metadata JSON: {} — using fallback", e),
+            Err(e) => tracing::info!(
+                "  Warning: failed to parse snapshot metadata JSON: {} — using fallback",
+                e
+            ),
         },
-        Err(e) => eprintln!("  Warning: failed to fetch snapshot metadata from {}: {} — using fallback", metadata_url, e),
+        Err(e) => tracing::info!(
+            "  Warning: failed to fetch snapshot metadata from {}: {} — using fallback",
+            metadata_url,
+            e
+        ),
     }
-    println!("  Using fallback snapshot URL: {}", fallback_url);
+    tracing::info!("  Using fallback snapshot URL: {}", fallback_url);
     fallback_url.to_string()
 }
 
@@ -563,8 +486,12 @@ async fn cloudflare_upsert_a(
     let credentials = Credentials::UserAuthToken {
         token: cf_token.to_string(),
     };
-    let client = CfClient::new(credentials, CfClientConfig::default(), CfEnvironment::Production)
-        .map_err(|e| format!("Failed to create Cloudflare client: {}", e))?;
+    let client = CfClient::new(
+        credentials,
+        CfClientConfig::default(),
+        CfEnvironment::Production,
+    )
+    .map_err(|e| format!("Failed to create Cloudflare client: {}", e))?;
 
     // List ALL records for this name (no type filter) so stale CNAMEs are caught.
     let list_resp = client
@@ -596,11 +523,11 @@ async fn cloudflare_upsert_a(
                     })
                     .await
                     .map_err(|e| format!("Cloudflare A record update failed: {:?}", e))?;
-                println!("    Updated A {} → {}", name, ip);
+                tracing::info!("    Updated A {} → {}", name, ip);
             }
             _ => {
                 // Wrong type (e.g. stale CNAME) — delete then create A record.
-                println!("    Replacing existing record for {} with A", name);
+                tracing::info!("    Replacing existing record for {} with A", name);
                 client
                     .request(&DeleteDnsRecord {
                         zone_identifier: zone_id,
@@ -621,7 +548,7 @@ async fn cloudflare_upsert_a(
                     })
                     .await
                     .map_err(|e| format!("Cloudflare A record create failed: {:?}", e))?;
-                println!("    Created A {} → {} (replaced old record)", name, ip);
+                tracing::info!("    Created A {} → {} (replaced old record)", name, ip);
             }
         }
     } else {
@@ -638,7 +565,7 @@ async fn cloudflare_upsert_a(
             })
             .await
             .map_err(|e| format!("Cloudflare A record create failed: {:?}", e))?;
-        println!("    Created A {} → {}", name, ip);
+        tracing::info!("    Created A {} → {}", name, ip);
     }
 
     Ok(())
@@ -660,7 +587,10 @@ async fn cloudflare_update_accept_domains(
     let yaml: serde_yaml::Value = match serde_yaml::from_str(rendered_sdl) {
         Ok(y) => y,
         Err(e) => {
-            eprintln!("  Warning: could not parse SDL for Cloudflare DNS update: {}", e);
+            tracing::info!(
+                "  Warning: could not parse SDL for Cloudflare DNS update: {}",
+                e
+            );
             return;
         }
     };
@@ -718,9 +648,11 @@ async fn cloudflare_update_accept_domains(
             Some(ingress) => {
                 // HTTP/HTTPS ingress — set CNAME to the provider-assigned ingress hostname.
                 for domain in &accept_domains {
-                    println!("  Cloudflare CNAME: {} → {}", domain, ingress);
-                    if let Err(e) = cloudflare_upsert_cname(cf_token, zone_id, domain, ingress).await {
-                        eprintln!("  Warning: Cloudflare CNAME failed for {}: {}", domain, e);
+                    tracing::info!("  Cloudflare CNAME: {} → {}", domain, ingress);
+                    if let Err(e) =
+                        cloudflare_upsert_cname(cf_token, zone_id, domain, ingress).await
+                    {
+                        tracing::info!("  Warning: Cloudflare CNAME failed for {}: {}", domain, e);
                     }
                 }
             }
@@ -736,7 +668,10 @@ async fn cloudflare_update_accept_domains(
                 let host = match provider_host {
                     Some(h) => h,
                     None => {
-                        eprintln!("  Warning: no endpoint found for '{}' — skipping DNS", svc_name);
+                        tracing::info!(
+                            "  Warning: no endpoint found for '{}' — skipping DNS",
+                            svc_name
+                        );
                         continue;
                     }
                 };
@@ -745,7 +680,10 @@ async fn cloudflare_update_accept_domains(
                 let ip = match resolve_to_ipv4(&host).await {
                     Some(ip) => ip,
                     None => {
-                        eprintln!("  Warning: could not resolve '{}' to IPv4 — skipping A records", host);
+                        tracing::info!(
+                            "  Warning: could not resolve '{}' to IPv4 — skipping A records",
+                            host
+                        );
                         continue;
                     }
                 };
@@ -760,17 +698,21 @@ async fn cloudflare_update_accept_domains(
                     .collect();
 
                 // Print connection strings prominently for each accept domain × port.
-                println!("  [{}] provider IP: {} (DNS A record)", svc_name, ip);
+                tracing::info!("  [{}] provider IP: {} (DNS A record)", svc_name, ip);
                 for domain in &accept_domains {
                     for (port, _) in &port_endpoints {
-                        println!("  [{}] connection string: {}:{}", svc_name, domain, port);
+                        tracing::info!("  [{}] connection string: {}:{}", svc_name, domain, port);
                     }
                 }
 
                 for domain in &accept_domains {
-                    println!("  Cloudflare A: {} → {}", domain, ip);
+                    tracing::info!("  Cloudflare A: {} → {}", domain, ip);
                     if let Err(e) = cloudflare_upsert_a(cf_token, zone_id, domain, ip).await {
-                        eprintln!("  Warning: Cloudflare A record failed for {}: {}", domain, e);
+                        tracing::info!(
+                            "  Warning: Cloudflare A record failed for {}: {}",
+                            domain,
+                            e
+                        );
                     }
                 }
             }
@@ -806,9 +748,16 @@ fn insert_s3_vars(
     // Metadata URL uses the public download domain so URLs in snapshot.json are externally accessible
     vars.insert(
         "SNAPSHOT_METADATA_URL".into(),
-        format!("https://{}/{}/snapshot.json", config.snapshot_download_domain, config.snapshot_path.trim_matches('/')),
+        format!(
+            "https://{}/{}/snapshot.json",
+            config.snapshot_download_domain,
+            config.snapshot_path.trim_matches('/')
+        ),
     );
-    vars.insert("SNAPSHOT_DOWNLOAD_DOMAIN".into(), config.snapshot_download_domain.clone());
+    vars.insert(
+        "SNAPSHOT_DOWNLOAD_DOMAIN".into(),
+        config.snapshot_download_domain.clone(),
+    );
     vars.insert("SNAPSHOT_RETAIN".into(), config.snapshot_retain.clone());
     vars.insert(
         "SNAPSHOT_KEEP_LAST".into(),
@@ -899,6 +848,7 @@ fn build_phase_a_vars(config: &OLineConfig, defaults: &RuntimeDefaults) -> HashM
     vars.insert("SEED_SVC".into(), "oline-a-seed".into());
     vars.insert("MINIO_SVC".into(), minio_svc.into());
     vars.insert("CERTBOT_EMAIL".into(), config.certbot_email.clone());
+    vars.insert("TLS_CONFIG_URL".into(), config.tls_config_url.clone());
     vars.insert(
         "SNAPSHOT_MONIKER".into(),
         "oline::special::snapshot-node".into(),
@@ -912,7 +862,10 @@ fn build_phase_a_vars(config: &OLineConfig, defaults: &RuntimeDefaults) -> HashM
     vars
 }
 
-fn build_phase_a2_vars(config: &OLineConfig, defaults: &RuntimeDefaults) -> HashMap<String, String> {
+fn build_phase_a2_vars(
+    config: &OLineConfig,
+    defaults: &RuntimeDefaults,
+) -> HashMap<String, String> {
     let minio_svc = "oline-a2-minio-ipfs";
     // Auto-generate credentials shared between snapshot node and MinIO
     let s3_key = generate_credential(24);
@@ -938,6 +891,7 @@ fn build_phase_a2_vars(config: &OLineConfig, defaults: &RuntimeDefaults) -> Hash
         "TERPD_P2P_PRIVATE_PEER_IDS".into(),
         config.validator_peer_id.clone(),
     );
+    vars.insert("TLS_CONFIG_URL".into(), config.tls_config_url.clone());
     vars
 }
 
@@ -974,7 +928,10 @@ fn build_phase_b_vars(
     // sync to the network quickly without waiting for a full replay.
     if !statesync_rpc_servers.is_empty() {
         vars.insert("STATESYNC_ENABLE".into(), "true".into());
-        vars.insert("STATESYNC_RPC_SERVERS".into(), statesync_rpc_servers.to_string());
+        vars.insert(
+            "STATESYNC_RPC_SERVERS".into(),
+            statesync_rpc_servers.to_string(),
+        );
     }
     vars
 }
@@ -1009,6 +966,7 @@ fn build_phase_c_vars(
 
 // ── OLineConfig & OLineDeployer ──
 
+#[derive(Serialize, Deserialize, Clone)]
 pub struct OLineConfig {
     pub mnemonic: String,
     pub rpc_endpoint: String,
@@ -1032,6 +990,7 @@ pub struct OLineConfig {
     // Cloudflare DNS (optional — auto-update CNAME after Phase A deploy)
     pub cloudflare_api_token: String,
     pub cloudflare_zone_id: String,
+    pub tls_config_url: String,
 }
 
 pub struct OLineDeployer {
@@ -1044,7 +1003,11 @@ pub struct OLineDeployer {
 }
 
 impl OLineDeployer {
-    pub async fn new(config: OLineConfig, password: String, defaults: RuntimeDefaults) -> Result<Self, DeployError> {
+    pub async fn new(
+        config: OLineConfig,
+        password: String,
+        defaults: RuntimeDefaults,
+    ) -> Result<Self, DeployError> {
         let client = AkashClient::new_from_mnemonic(
             &config.mnemonic,
             &config.rpc_endpoint,
@@ -1094,12 +1057,12 @@ impl OLineDeployer {
         // Bounded loop — matches akash-deploy-rs/examples/deploy.rs pattern.
         // 60 iterations × ~12s bid wait = ~12 min max before giving up.
         for i in 0..60 {
-            println!("    [{}] step {}: {:?}", label, i, state.step);
+            tracing::info!("    [{}] step {}: {:?}", label, i, state.step);
 
             let result = match workflow.advance(&mut state).await {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("    [{}] error at step {:?}: {:?}", label, state.step, e);
+                    tracing::info!("    [{}] error at step {:?}: {:?}", label, state.step, e);
                     return Err(e);
                 }
             };
@@ -1108,9 +1071,12 @@ impl OLineDeployer {
                 StepResult::Continue => continue,
 
                 StepResult::NeedsInput(InputRequired::SelectProvider { bids }) => {
-                    let choice = self.interactive_select_provider(&bids, lines).await.map_err(|e| {
-                        DeployError::InvalidState(format!("Provider selection failed: {}", e))
-                    })?;
+                    let choice = self
+                        .interactive_select_provider(&bids, lines)
+                        .await
+                        .map_err(|e| {
+                            DeployError::InvalidState(format!("Provider selection failed: {}", e))
+                        })?;
                     DeploymentWorkflow::<AkashClient>::select_provider(&mut state, &choice)?;
                 }
 
@@ -1121,12 +1087,18 @@ impl OLineDeployer {
                 }
 
                 StepResult::Complete => {
-                    println!("\n    [{}] complete!", label);
+                    tracing::info!("\n    [{}] complete!", label);
                     if let Some(dseq) = state.dseq {
-                        println!("    [{}] DSEQ: {}", label, dseq);
+                        tracing::info!("    [{}] DSEQ: {}", label, dseq);
                     }
                     for ep in &state.endpoints {
-                        println!("    [{}] endpoint: {} ({}:{})", label, ep.uri, ep.service, ep.port);
+                        tracing::info!(
+                            "    [{}] endpoint: {} ({}:{})",
+                            label,
+                            ep.uri,
+                            ep.service,
+                            ep.port
+                        );
                     }
                     let endpoints = state.endpoints.clone();
                     return Ok((state, endpoints));
@@ -1154,11 +1126,9 @@ impl OLineDeployer {
         bids: &[Bid],
         lines: &mut io::Lines<io::StdinLock<'_>>,
     ) -> Result<String, Box<dyn Error>> {
-        println!();
-        println!("  ═══════════════════════════════════════════════════════════════════════");
-        println!("    PROVIDER SELECTION — {} bid(s) received", bids.len());
-        println!("  ═══════════════════════════════════════════════════════════════════════");
-        println!();
+        tracing::info!("  ═══════════════════════════════════════════════════════════════════════");
+        tracing::info!("    PROVIDER SELECTION — {} bid(s) received", bids.len());
+        tracing::info!("  ═══════════════════════════════════════════════════════════════════════");
 
         // Query provider info for each bid (best-effort)
         let mut provider_infos: Vec<Option<ProviderInfo>> = Vec::with_capacity(bids.len());
@@ -1173,27 +1143,27 @@ impl OLineDeployer {
             let price_akt = bid.price_uakt as f64 / 1_000_000.0;
             let info = &provider_infos[i];
 
-            println!(
+            tracing::info!(
                 "    [{}] {:.6} AKT/block ({} uakt)",
                 i + 1,
                 price_akt,
                 bid.price_uakt
             );
-            println!("        address:  {}", bid.provider);
+            tracing::info!("        address:  {}", bid.provider);
 
             if let Some(ref info) = info {
-                println!("        host:     {}", info.host_uri);
+                tracing::info!("        host:     {}", info.host_uri);
 
                 if !info.email.is_empty() {
-                    println!("        email:    {}", info.email);
+                    tracing::info!("        email:    {}", info.email);
                 }
                 if !info.website.is_empty() {
-                    println!("        website:  {}", info.website);
+                    tracing::info!("        website:  {}", info.website);
                 }
 
                 let audited = info.attributes.iter().any(|(k, _)| k.starts_with("audit-"));
                 if audited {
-                    println!("        audited:  YES");
+                    tracing::info!("        audited:  YES");
                 }
 
                 let interesting_keys = [
@@ -1214,16 +1184,17 @@ impl OLineDeployer {
                     }
                 }
                 if !shown_attrs.is_empty() {
-                    println!("        attrs:    {}", shown_attrs.join(", "));
+                    tracing::info!("        attrs:    {}", shown_attrs.join(", "));
                 }
             } else {
-                println!("        host:     (could not query provider info)");
+                tracing::info!("        host:     (could not query provider info)");
             }
-
-            println!();
         }
 
-        print!("    Select provider (1-{}) or 'a' to auto-select cheapest: ", bids.len());
+        print!(
+            "    Select provider (1-{}) or 'a' to auto-select cheapest: ",
+            bids.len()
+        );
         io::stdout().flush()?;
 
         let input = lines.next().unwrap_or(Ok(String::new()))?;
@@ -1231,11 +1202,17 @@ impl OLineDeployer {
 
         if input == "a" || input == "auto" {
             let cheapest = bids.iter().min_by_key(|b| b.price_uakt).unwrap();
-            println!("\n    Selected: {}", cheapest.provider);
-            if let Some(ref info) = provider_infos[bids.iter().position(|b| b.provider == cheapest.provider).unwrap()] {
-                println!("    Host:     {}", info.host_uri);
+            tracing::info!("\n    Selected: {}", cheapest.provider);
+            if let Some(ref info) = provider_infos[bids
+                .iter()
+                .position(|b| b.provider == cheapest.provider)
+                .unwrap()]
+            {
+                tracing::info!("    Host:     {}", info.host_uri);
             }
-            println!("  ═══════════════════════════════════════════════════════════════════════\n");
+            tracing::info!(
+                "  ═══════════════════════════════════════════════════════════════════════\n"
+            );
             return Ok(cheapest.provider.clone());
         }
 
@@ -1250,11 +1227,13 @@ impl OLineDeployer {
         let selected = &bids[choice - 1];
         let selected_info = &provider_infos[choice - 1];
 
-        println!("\n    Selected: {}", selected.provider);
+        tracing::info!("\n    Selected: {}", selected.provider);
         if let Some(ref info) = selected_info {
-            println!("    Host:     {}", info.host_uri);
+            tracing::info!("    Host:     {}", info.host_uri);
         }
-        println!("  ═══════════════════════════════════════════════════════════════════════\n");
+        tracing::info!(
+            "  ═══════════════════════════════════════════════════════════════════════\n"
+        );
 
         Ok(selected.provider.clone())
     }
@@ -1290,7 +1269,7 @@ impl OLineDeployer {
         retry_delay_secs: u64,
     ) -> Option<String> {
         if initial_wait_secs > 0 {
-            println!(
+            tracing::info!(
                 "  Waiting {}m before querying {}/status (node boot time)",
                 initial_wait_secs / 60,
                 rpc_url,
@@ -1302,15 +1281,22 @@ impl OLineDeployer {
                 Ok(peer) => return Some(peer),
                 Err(e) => {
                     if attempt < max_retries {
-                        eprintln!(
+                        tracing::info!(
                             "  Peer ID fetch attempt {}/{} for {} failed: {} — retrying in {}s",
-                            attempt, max_retries, rpc_url, e, retry_delay_secs
+                            attempt,
+                            max_retries,
+                            rpc_url,
+                            e,
+                            retry_delay_secs
                         );
-                        tokio::time::sleep(tokio::time::Duration::from_secs(retry_delay_secs)).await;
+                        tokio::time::sleep(tokio::time::Duration::from_secs(retry_delay_secs))
+                            .await;
                     } else {
-                        eprintln!(
+                        tracing::info!(
                             "  Peer ID fetch failed after {} attempts for {}: {}",
-                            max_retries, rpc_url, e
+                            max_retries,
+                            rpc_url,
+                            e
                         );
                     }
                 }
@@ -1337,81 +1323,101 @@ impl OLineDeployer {
         let stdin = io::stdin();
         let mut lines = stdin.lock().lines();
 
-        println!("\n=== O-Line Deployer ===");
-        println!("Account: {}", self.client.address());
+        tracing::info!("\n=== O-Line Deployer ===");
+        tracing::info!("Account: {}", self.client.address());
 
         // ── Phase A: Snapshot + Seed ──
-        println!("\n── Phase 1: Deploy Snapshot + Seed nodes ──");
-        if !prompt_continue(&mut lines, "Deploy a.kickoff-special-teams.yml?")? {
-            println!("Aborted.");
+        tracing::info!("\n── Phase 1: Deploy Snapshot + Seed nodes ──");
+        if !prompt_continue(&mut lines, "Deploy Kickoff (Speacial Teams)?")? {
+            tracing::info!("Aborted.");
             return Ok(());
         }
 
         let a_vars = build_phase_a_vars(&self.config, &self.defaults);
         let a_defaults = HashMap::new();
 
-        println!("  Variables:");
+        tracing::info!("  Variables:");
         for (k, v) in &a_vars {
-            println!("    {}={}", k, redact_if_secret(k, v, &self.defaults));
+            tracing::info!("    {}={}", k, redact_if_secret(k, v, &self.defaults));
         }
 
         let sdl_a = self.defaults.load_sdl("a.kickoff-special-teams.yml")?;
-        println!("  Deploying...");
+        tracing::info!("  Deploying...");
         let (a_state, a_endpoints) = self
             .deploy_phase_with_selection(&sdl_a, a_vars, a_defaults, "oline-phase-a", &mut lines)
             .await?;
 
-        println!("  Deployed! DSEQ: {}", a_state.dseq.unwrap_or(0));
+        tracing::info!("  Deployed! DSEQ: {}", a_state.dseq.unwrap_or(0));
         let record = DeploymentRecord::from_state(&a_state, &self.password)?;
         self.deployment_store.save(&record).await.ok();
 
-        // ── Cloudflare DNS — update immediately so accept domains resolve before
-        // snapshot/seed services start uploading metadata or syncing peers. ──
-        if !self.config.cloudflare_api_token.is_empty() && !self.config.cloudflare_zone_id.is_empty() {
-            println!("  Updating Cloudflare DNS for accept domains...");
+        if !self.config.cloudflare_api_token.is_empty()
+            && !self.config.cloudflare_zone_id.is_empty()
+        {
+            tracing::info!("  Updating Cloudflare DNS for accept domains...");
             if let Some(sdl) = &a_state.sdl_content {
                 cloudflare_update_accept_domains(
                     sdl,
                     &a_endpoints,
                     &self.config.cloudflare_api_token,
                     &self.config.cloudflare_zone_id,
-                ).await;
+                )
+                .await;
             }
         } else {
-            println!("  Note: Cloudflare DNS not configured — update CNAMEs for accept domains manually.");
+            tracing::info!("  Note: Cloudflare DNS not configured — update CNAMEs for accept domains manually.");
         }
 
         // ── Extract peer IDs via DNS domains ──
         // Find the forwarded NodePorts for each service's RPC (26657) and P2P (26656).
-        let snap_rpc_ep  = Self::find_endpoint_by_internal_port(&a_endpoints, "oline-a-snapshot", 26657);
-        let snap_p2p_ep  = Self::find_endpoint_by_internal_port(&a_endpoints, "oline-a-snapshot", 26656);
-        let seed_rpc_ep  = Self::find_endpoint_by_internal_port(&a_endpoints, "oline-a-seed",     26657);
-        let seed_p2p_ep  = Self::find_endpoint_by_internal_port(&a_endpoints, "oline-a-seed",     26656);
+        let snap_rpc_ep =
+            Self::find_endpoint_by_internal_port(&a_endpoints, "oline-a-snapshot", 26657);
+        let snap_p2p_ep =
+            Self::find_endpoint_by_internal_port(&a_endpoints, "oline-a-snapshot", 26656);
+        let seed_rpc_ep = Self::find_endpoint_by_internal_port(&a_endpoints, "oline-a-seed", 26657);
+        let seed_p2p_ep = Self::find_endpoint_by_internal_port(&a_endpoints, "oline-a-seed", 26656);
 
         // Construct DNS-based query URLs and peer addresses.
         // Format: <node_id>@<dns_domain>:<nodeport>  — the cosmos-sdk peer string.
-        let snap_rpc_url  = snap_rpc_ep.map(|e| format!("http://{}:{}", SNAPSHOT_RPC_DOMAIN, e.port));
+        let snap_rpc_url =
+            snap_rpc_ep.map(|e| format!("http://{}:{}", SNAPSHOT_RPC_DOMAIN, e.port));
         let snap_p2p_addr = snap_p2p_ep.map(|e| format!("{}:{}", SNAPSHOT_P2P_DOMAIN, e.port));
-        let seed_rpc_url  = seed_rpc_ep.map(|e| format!("http://{}:{}", SEED_RPC_DOMAIN, e.port));
+        let seed_rpc_url = seed_rpc_ep.map(|e| format!("http://{}:{}", SEED_RPC_DOMAIN, e.port));
         let seed_p2p_addr = seed_p2p_ep.map(|e| format!("{}:{}", SEED_P2P_DOMAIN, e.port));
 
         // Statesync RPC servers string for Phase B (cosmos format: "host:port,host:port").
         let a1_statesync_rpc = {
-            let s = snap_rpc_ep.map(|e| format!("{}:{}", SNAPSHOT_RPC_DOMAIN, e.port)).unwrap_or_default();
-            let sd = seed_rpc_ep.map(|e| format!("{}:{}", SEED_RPC_DOMAIN, e.port)).unwrap_or_default();
+            let s = snap_rpc_ep
+                .map(|e| format!("{}:{}", SNAPSHOT_RPC_DOMAIN, e.port))
+                .unwrap_or_default();
+            let sd = seed_rpc_ep
+                .map(|e| format!("{}:{}", SEED_RPC_DOMAIN, e.port))
+                .unwrap_or_default();
             match (s.is_empty(), sd.is_empty()) {
                 (false, false) => format!("{},{}", s, sd),
-                (false, true)  => s,
-                (true,  false) => sd,
-                (true,  true)  => String::new(),
+                (false, true) => s,
+                (true, false) => sd,
+                (true, true) => String::new(),
             }
         };
 
-        println!("  Snapshot RPC: {}", snap_rpc_url.as_deref().unwrap_or("(not found)"));
-        println!("  Snapshot P2P: {}", snap_p2p_addr.as_deref().unwrap_or("(not found)"));
-        println!("  Seed RPC:     {}", seed_rpc_url.as_deref().unwrap_or("(not found)"));
-        println!("  Seed P2P:     {}", seed_p2p_addr.as_deref().unwrap_or("(not found)"));
-        println!("  Statesync RPC servers: {}", a1_statesync_rpc);
+        tracing::info!(
+            "  Snapshot RPC: {}",
+            snap_rpc_url.as_deref().unwrap_or("(not found)")
+        );
+        tracing::info!(
+            "  Snapshot P2P: {}",
+            snap_p2p_addr.as_deref().unwrap_or("(not found)")
+        );
+        tracing::info!(
+            "  Seed RPC:     {}",
+            seed_rpc_url.as_deref().unwrap_or("(not found)")
+        );
+        tracing::info!(
+            "  Seed P2P:     {}",
+            seed_p2p_addr.as_deref().unwrap_or("(not found)")
+        );
+        tracing::info!("  Statesync RPC servers: {}", a1_statesync_rpc);
 
         // Snapshot node: 5 min initial wait (it creates a snapshot on startup before syncing),
         // then retry every 60s up to 20 times (~25 min max total).
@@ -1420,11 +1426,16 @@ impl OLineDeployer {
                 Self::extract_peer_id_with_boot_wait(rpc, p2p, 300, 20, 60).await
             }
             _ => {
-                eprintln!("  Warning: no RPC/P2P endpoints found for oline-a-snapshot — skipping peer ID");
+                tracing::info!(
+                    "  Warning: no RPC/P2P endpoints found for oline-a-snapshot — skipping peer ID"
+                );
                 None
             }
-        }.unwrap_or_else(|| {
-            eprintln!("  Warning: could not fetch snapshot peer ID — Phase B will use empty peer.");
+        }
+        .unwrap_or_else(|| {
+            tracing::info!(
+                "  Warning: could not fetch snapshot peer ID — Phase B will use empty peer."
+            );
             String::new()
         });
 
@@ -1434,65 +1445,78 @@ impl OLineDeployer {
                 Self::extract_peer_id_with_boot_wait(rpc, p2p, 300, 20, 60).await
             }
             _ => {
-                eprintln!("  Warning: no RPC/P2P endpoints found for oline-a-seed — skipping peer ID");
+                tracing::info!(
+                    "  Warning: no RPC/P2P endpoints found for oline-a-seed — skipping peer ID"
+                );
                 None
             }
-        }.unwrap_or_else(|| {
-            eprintln!("  Warning: could not fetch seed peer ID — Phase B will use empty peer.");
+        }
+        .unwrap_or_else(|| {
+            tracing::info!(
+                "  Warning: could not fetch seed peer ID — Phase B will use empty peer."
+            );
             String::new()
         });
 
-        println!("    snapshot_peer: {}", snapshot_peer);
-        println!("    seed_peer:     {}", seed_peer);
+        tracing::info!("    snapshot_peer: {}", snapshot_peer);
+        tracing::info!("    seed_peer:     {}", seed_peer);
 
         // ── Phase A2: Backup Snapshot + Seed (reuses SDL_A with backup service names) ──
-        println!("\n── Phase 1b: Deploy Backup Snapshot + Seed nodes ──");
+        tracing::info!("\n── Phase 1b: Deploy Backup Snapshot + Seed nodes ──");
         if !prompt_continue(
             &mut lines,
             "Deploy backup kickoff (a.kickoff-special-teams.yml)?",
         )? {
-            println!("Aborted.");
+            tracing::info!("Aborted.");
             return Ok(());
         }
 
         let a2_vars = build_phase_a2_vars(&self.config, &self.defaults);
         let a2_defaults = HashMap::new();
 
-        println!("  Variables:");
+        tracing::info!("  Variables:");
         for (k, v) in &a2_vars {
-            println!("    {}={}", k, redact_if_secret(k, v, &self.defaults));
+            tracing::info!("    {}={}", k, redact_if_secret(k, v, &self.defaults));
         }
 
-        println!("  Deploying...");
+        tracing::info!("  Deploying...");
         let (a2_state, a2_endpoints) = self
             .deploy_phase_with_selection(&sdl_a, a2_vars, a2_defaults, "oline-phase-a2", &mut lines)
             .await?;
 
-        println!("  Deployed! DSEQ: {}", a2_state.dseq.unwrap_or(0));
+        tracing::info!("  Deployed! DSEQ: {}", a2_state.dseq.unwrap_or(0));
         let record = DeploymentRecord::from_state(&a2_state, &self.password)?;
         self.deployment_store.save(&record).await.ok();
 
         // ── Cloudflare DNS for Phase A2 accept domains ──
-        if !self.config.cloudflare_api_token.is_empty() && !self.config.cloudflare_zone_id.is_empty() {
+        if !self.config.cloudflare_api_token.is_empty()
+            && !self.config.cloudflare_zone_id.is_empty()
+        {
             if let Some(sdl) = &a2_state.sdl_content {
                 cloudflare_update_accept_domains(
                     sdl,
                     &a2_endpoints,
                     &self.config.cloudflare_api_token,
                     &self.config.cloudflare_zone_id,
-                ).await;
+                )
+                .await;
             }
         }
 
         // ── Extract peer IDs from Phase A2 (backup nodes, same DNS domains) ──
-        let snap2_rpc_ep = Self::find_endpoint_by_internal_port(&a2_endpoints, "oline-a2-snapshot", 26657);
-        let snap2_p2p_ep = Self::find_endpoint_by_internal_port(&a2_endpoints, "oline-a2-snapshot", 26656);
-        let seed2_rpc_ep = Self::find_endpoint_by_internal_port(&a2_endpoints, "oline-a2-seed",     26657);
-        let seed2_p2p_ep = Self::find_endpoint_by_internal_port(&a2_endpoints, "oline-a2-seed",     26656);
+        let snap2_rpc_ep =
+            Self::find_endpoint_by_internal_port(&a2_endpoints, "oline-a2-snapshot", 26657);
+        let snap2_p2p_ep =
+            Self::find_endpoint_by_internal_port(&a2_endpoints, "oline-a2-snapshot", 26656);
+        let seed2_rpc_ep =
+            Self::find_endpoint_by_internal_port(&a2_endpoints, "oline-a2-seed", 26657);
+        let seed2_p2p_ep =
+            Self::find_endpoint_by_internal_port(&a2_endpoints, "oline-a2-seed", 26656);
 
-        let snap2_rpc_url  = snap2_rpc_ep.map(|e| format!("http://{}:{}", SNAPSHOT_RPC_DOMAIN, e.port));
+        let snap2_rpc_url =
+            snap2_rpc_ep.map(|e| format!("http://{}:{}", SNAPSHOT_RPC_DOMAIN, e.port));
         let snap2_p2p_addr = snap2_p2p_ep.map(|e| format!("{}:{}", SNAPSHOT_P2P_DOMAIN, e.port));
-        let seed2_rpc_url  = seed2_rpc_ep.map(|e| format!("http://{}:{}", SEED_RPC_DOMAIN, e.port));
+        let seed2_rpc_url = seed2_rpc_ep.map(|e| format!("http://{}:{}", SEED_RPC_DOMAIN, e.port));
         let seed2_p2p_addr = seed2_p2p_ep.map(|e| format!("{}:{}", SEED_P2P_DOMAIN, e.port));
 
         let snapshot_2_peer = match (snap2_rpc_url.as_deref(), snap2_p2p_addr.as_deref()) {
@@ -1500,11 +1524,11 @@ impl OLineDeployer {
                 Self::extract_peer_id_with_boot_wait(rpc, p2p, 300, 20, 60).await
             }
             _ => {
-                eprintln!("  Warning: no RPC/P2P endpoints found for oline-a2-snapshot — skipping peer ID");
+                tracing::info!("  Warning: no RPC/P2P endpoints found for oline-a2-snapshot — skipping peer ID");
                 None
             }
         }.unwrap_or_else(|| {
-            eprintln!("  Warning: could not fetch snapshot-2 peer ID.");
+            tracing::info!("  Warning: could not fetch snapshot-2 peer ID.");
             String::new()
         });
 
@@ -1513,21 +1537,24 @@ impl OLineDeployer {
                 Self::extract_peer_id_with_boot_wait(rpc, p2p, 300, 20, 60).await
             }
             _ => {
-                eprintln!("  Warning: no RPC/P2P endpoints found for oline-a2-seed — skipping peer ID");
+                tracing::info!(
+                    "  Warning: no RPC/P2P endpoints found for oline-a2-seed — skipping peer ID"
+                );
                 None
             }
-        }.unwrap_or_else(|| {
-            eprintln!("  Warning: could not fetch seed-2 peer ID.");
+        }
+        .unwrap_or_else(|| {
+            tracing::info!("  Warning: could not fetch seed-2 peer ID.");
             String::new()
         });
 
-        println!("    snapshot_2_peer: {}", snapshot_2_peer);
-        println!("    seed_2_peer:     {}", seed_2_peer);
+        tracing::info!("    snapshot_2_peer: {}", snapshot_2_peer);
+        tracing::info!("    seed_2_peer:     {}", seed_2_peer);
 
         // ── Phase B: Left & Right Tackles ──
-        println!("\n── Phase 2: Deploy Left & Right Tackles ──");
+        tracing::info!("\n── Phase 2: Deploy Left & Right Tackles ──");
         if !prompt_continue(&mut lines, "Deploy b.left-and-right-tackle.yml?")? {
-            println!("Aborted.");
+            tracing::info!("Aborted.");
             return Ok(());
         }
 
@@ -1544,8 +1571,9 @@ impl OLineDeployer {
             self.config.snapshot_download_domain,
             self.config.snapshot_path.trim_matches('/')
         );
-        let b_snapshot_url = fetch_snapshot_url_from_metadata(&b_snapshot_metadata_url, &b_snapshot_fallback).await;
-        println!("  Phase B snapshot URL: {}", b_snapshot_url);
+        let b_snapshot_url =
+            fetch_snapshot_url_from_metadata(&b_snapshot_metadata_url, &b_snapshot_fallback).await;
+        tracing::info!("  Phase B snapshot URL: {}", b_snapshot_url);
 
         let b_vars = build_phase_b_vars(
             &self.config,
@@ -1557,55 +1585,75 @@ impl OLineDeployer {
         );
         let b_defaults = HashMap::new();
 
-        println!("  Variables:");
+        tracing::info!("  Variables:");
         for (k, v) in &b_vars {
-            println!("    {}={}", k, redact_if_secret(k, v, &self.defaults));
+            tracing::info!("    {}={}", k, redact_if_secret(k, v, &self.defaults));
         }
 
         let sdl_b = self.defaults.load_sdl("b.left-and-right-tackle.yml")?;
-        println!("  Deploying...");
+        tracing::info!("  Deploying...");
         let (b_state, b_endpoints) = self
             .deploy_phase_with_selection(&sdl_b, b_vars, b_defaults, "oline-phase-b", &mut lines)
             .await?;
 
-        println!("  Deployed! DSEQ: {}", b_state.dseq.unwrap_or(0));
+        tracing::info!("  Deployed! DSEQ: {}", b_state.dseq.unwrap_or(0));
         let record = DeploymentRecord::from_state(&b_state, &self.password)?;
         self.deployment_store.save(&record).await.ok();
 
         // Extract peer IDs from Phase B tackles.
         // Tackles don't have public DNS domains — use provider URI hostname + forwarded P2P port.
-        let left_rpc_ep  = Self::find_endpoint_by_internal_port(&b_endpoints, "oline-b-left-node",  26657);
-        let left_p2p_ep  = Self::find_endpoint_by_internal_port(&b_endpoints, "oline-b-left-node",  26656);
-        let right_rpc_ep = Self::find_endpoint_by_internal_port(&b_endpoints, "oline-b-right-node", 26657);
-        let right_p2p_ep = Self::find_endpoint_by_internal_port(&b_endpoints, "oline-b-right-node", 26656);
+        let left_rpc_ep =
+            Self::find_endpoint_by_internal_port(&b_endpoints, "oline-b-left-node", 26657);
+        let left_p2p_ep =
+            Self::find_endpoint_by_internal_port(&b_endpoints, "oline-b-left-node", 26656);
+        let right_rpc_ep =
+            Self::find_endpoint_by_internal_port(&b_endpoints, "oline-b-right-node", 26657);
+        let right_p2p_ep =
+            Self::find_endpoint_by_internal_port(&b_endpoints, "oline-b-right-node", 26656);
 
-        let left_rpc_url  = left_rpc_ep.map(|e| e.uri.clone());
-        let left_p2p_addr = left_p2p_ep.map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port));
-        let right_rpc_url  = right_rpc_ep.map(|e| e.uri.clone());
-        let right_p2p_addr = right_p2p_ep.map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port));
+        let left_rpc_url = left_rpc_ep.map(|e| e.uri.clone());
+        let left_p2p_addr =
+            left_p2p_ep.map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port));
+        let right_rpc_url = right_rpc_ep.map(|e| e.uri.clone());
+        let right_p2p_addr =
+            right_p2p_ep.map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port));
 
         // 5 min initial wait, 20×60s retries — tackles need to sync from statesync first.
         let left_tackle_peer = match (left_rpc_url.as_deref(), left_p2p_addr.as_deref()) {
             (Some(rpc), Some(p2p)) => {
                 Self::extract_peer_id_with_boot_wait(rpc, p2p, 300, 20, 60).await
             }
-            _ => { eprintln!("  Warning: no endpoints for oline-b-left-node"); None }
-        }.unwrap_or_else(|| { eprintln!("  Warning: could not fetch left-tackle peer ID."); String::new() });
+            _ => {
+                tracing::info!("  Warning: no endpoints for oline-b-left-node");
+                None
+            }
+        }
+        .unwrap_or_else(|| {
+            tracing::info!("  Warning: could not fetch left-tackle peer ID.");
+            String::new()
+        });
 
         let right_tackle_peer = match (right_rpc_url.as_deref(), right_p2p_addr.as_deref()) {
             (Some(rpc), Some(p2p)) => {
                 Self::extract_peer_id_with_boot_wait(rpc, p2p, 300, 20, 60).await
             }
-            _ => { eprintln!("  Warning: no endpoints for oline-b-right-node"); None }
-        }.unwrap_or_else(|| { eprintln!("  Warning: could not fetch right-tackle peer ID."); String::new() });
+            _ => {
+                tracing::info!("  Warning: no endpoints for oline-b-right-node");
+                None
+            }
+        }
+        .unwrap_or_else(|| {
+            tracing::info!("  Warning: could not fetch right-tackle peer ID.");
+            String::new()
+        });
 
-        println!("    left_tackle:  {}", left_tackle_peer);
-        println!("    right_tackle: {}", right_tackle_peer);
+        tracing::info!("    left_tackle:  {}", left_tackle_peer);
+        tracing::info!("    right_tackle: {}", right_tackle_peer);
 
         // ── Phase C: Left & Right Forwards ──
-        println!("\n── Phase 3: Deploy Left & Right Forwards ──");
+        tracing::info!("\n── Phase 3: Deploy Left & Right Forwards ──");
         if !prompt_continue(&mut lines, "Deploy c.left-and-right-forwards.yml?")? {
-            println!("Aborted.");
+            tracing::info!("Aborted.");
             return Ok(());
         }
 
@@ -1620,26 +1668,26 @@ impl OLineDeployer {
         );
         let c_defaults = HashMap::new();
 
-        println!("  Variables:");
+        tracing::info!("  Variables:");
         for (k, v) in &c_vars {
-            println!("    {}={}", k, redact_if_secret(k, v, &self.defaults));
+            tracing::info!("    {}={}", k, redact_if_secret(k, v, &self.defaults));
         }
 
         let sdl_c = self.defaults.load_sdl("c.left-and-right-forwards.yml")?;
-        println!("  Deploying...");
+        tracing::info!("  Deploying...");
         let (c_state, _c_endpoints) = self
             .deploy_phase_with_selection(&sdl_c, c_vars, c_defaults, "oline-phase-c", &mut lines)
             .await?;
 
-        println!("  Deployed! DSEQ: {}", c_state.dseq.unwrap_or(0));
+        tracing::info!("  Deployed! DSEQ: {}", c_state.dseq.unwrap_or(0));
         let record = DeploymentRecord::from_state(&c_state, &self.password)?;
         self.deployment_store.save(&record).await.ok();
 
-        println!("\n=== All deployments complete! ===");
-        println!("  Phase A1 DSEQ: {}", a_state.dseq.unwrap_or(0));
-        println!("  Phase A2 DSEQ: {}", a2_state.dseq.unwrap_or(0));
-        println!("  Phase B  DSEQ: {}", b_state.dseq.unwrap_or(0));
-        println!("  Phase C  DSEQ: {}", c_state.dseq.unwrap_or(0));
+        tracing::info!("\n=== All deployments complete! ===");
+        tracing::info!("  Phase A1 DSEQ: {}", a_state.dseq.unwrap_or(0));
+        tracing::info!("  Phase A2 DSEQ: {}", a2_state.dseq.unwrap_or(0));
+        tracing::info!("  Phase B  DSEQ: {}", b_state.dseq.unwrap_or(0));
+        tracing::info!("  Phase C  DSEQ: {}", c_state.dseq.unwrap_or(0));
         Ok(())
     }
 }
@@ -1676,7 +1724,7 @@ fn read_input(
 ) -> Result<String, io::Error> {
     if let Some(def) = default {
         // Show default as a dim placeholder on the input line
-        println!("  {}", prompt);
+        tracing::info!("  {}", prompt);
         print!("  \x1b[2m{}\x1b[0m > ", def);
     } else {
         print!("  {}: ", prompt);
@@ -1696,7 +1744,7 @@ fn read_input(
 fn read_secret_input(prompt: &str, default: Option<&str>) -> Result<String, Box<dyn Error>> {
     let display = if let Some(def) = default {
         // Show prompt, then placeholder hint (rpassword hides typed input)
-        println!("  {}", prompt);
+        tracing::info!("  {}", prompt);
         format!("  \x1b[2m{}\x1b[0m > ", def)
     } else {
         format!("  {}: ", prompt)
@@ -1714,7 +1762,7 @@ fn read_secret_input(prompt: &str, default: Option<&str>) -> Result<String, Box<
 // ── Subcommand: encrypt ──
 
 fn cmd_encrypt(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Error>> {
-    println!("=== Encrypt Mnemonic ===\n");
+    tracing::info!("=== Encrypt Mnemonic ===\n");
 
     let mnemonic = rpassword::prompt_password("Enter mnemonic: ")?;
     if mnemonic.trim().is_empty() {
@@ -1734,8 +1782,8 @@ fn cmd_encrypt(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Error>> {
     let blob = encrypt_mnemonic(mnemonic.trim(), &password)?;
     write_encrypted_mnemonic_to_env(&defaults.env_key, &blob)?;
 
-    println!("\nEncrypted mnemonic written to .env");
-    println!("You can now run `oline deploy` to deploy using your encrypted mnemonic.");
+    tracing::info!("\nEncrypted mnemonic written to .env");
+    tracing::info!("You can now run `oline deploy` to deploy using your encrypted mnemonic.");
     Ok(())
 }
 
@@ -1745,7 +1793,7 @@ fn unlock_mnemonic(defaults: &RuntimeDefaults) -> Result<(String, String), Box<d
     let blob = read_encrypted_mnemonic_from_env(&defaults.env_key)?;
     let password = rpassword::prompt_password("Enter password: ")?;
     let mnemonic = decrypt_mnemonic(&blob, &password)?;
-    println!("Mnemonic decrypted successfully.\n");
+    tracing::info!("Mnemonic decrypted successfully.\n");
     Ok((mnemonic, password))
 }
 
@@ -1760,27 +1808,38 @@ async fn collect_config(
     // Try to load saved config
     let saved = if has_saved_config() {
         if let Some(cfg) = load_config(password) {
-            println!("  Found saved config:");
-            println!("    RPC endpoint:     {}", cfg.rpc_endpoint);
-            println!("    gRPC endpoint:    {}", cfg.grpc_endpoint);
-            println!("    Snapshot URL:     {}", cfg.snapshot_url);
-            println!(
+            tracing::info!("  Found saved config:");
+            tracing::info!("    RPC endpoint:     {}", cfg.rpc_endpoint);
+            tracing::info!("    gRPC endpoint:    {}", cfg.grpc_endpoint);
+            tracing::info!("    Snapshot URL:     {}", cfg.snapshot_url);
+            tracing::info!(
                 "    Validator peer:   {}",
-                redact_if_secret("TERPD_P2P_PRIVATE_PEER_IDS", &cfg.validator_peer_id, defaults)
+                redact_if_secret(
+                    "TERPD_P2P_PRIVATE_PEER_IDS",
+                    &cfg.validator_peer_id,
+                    defaults
+                )
             );
-            println!("    Trusted providers: {:?}", cfg.trusted_providers);
-            println!("    Snapshot path:    {}", cfg.snapshot_path);
-            println!("    MinIO-IPFS image: {}", cfg.minio_ipfs_image);
-            println!("    S3 bucket:        {}", cfg.s3_bucket);
-            println!("    Cloudflare DNS:   {}", if cfg.cloudflare_api_token.is_empty() { "not configured" } else { "configured" });
-            println!();
+            tracing::info!("    Trusted providers: {:?}", cfg.trusted_providers);
+            tracing::info!("    Snapshot path:    {}", cfg.snapshot_path);
+            tracing::info!("    MinIO-IPFS image: {}", cfg.minio_ipfs_image);
+            tracing::info!("    S3 bucket:        {}", cfg.s3_bucket);
+            tracing::info!(
+                "    Cloudflare DNS:   {}",
+                if cfg.cloudflare_api_token.is_empty() {
+                    "not configured"
+                } else {
+                    "configured"
+                }
+            );
+
             if prompt_continue(lines, "Use saved config?")? {
                 Some(cfg)
             } else {
                 None
             }
         } else {
-            println!("  Saved config found but could not decrypt (wrong password?). Continuing with fresh config.\n");
+            tracing::info!("  Saved config found but could not decrypt (wrong password?). Continuing with fresh config.\n");
             None
         }
     } else {
@@ -1789,21 +1848,32 @@ async fn collect_config(
 
     // All prompts use env var > saved config > hardcoded default.
     // Set OLINE_* env vars (or in .env file) to skip prompts.
-    let d = default_val("OLINE_RPC_ENDPOINT", saved.as_ref().map(|s| s.rpc_endpoint.as_str()), "https://rpc.akashnet.net:443");
+    let d = default_val(
+        "OLINE_RPC_ENDPOINT",
+        saved.as_ref().map(|s| s.rpc_endpoint.as_str()),
+        "https://rpc.akashnet.net:443",
+    );
     let rpc_endpoint = read_input(lines, "RPC endpoint", Some(&d))?;
 
-    let d = default_val("OLINE_GRPC_ENDPOINT", saved.as_ref().map(|s| s.grpc_endpoint.as_str()), "https://grpc.akashnet.net:443");
+    let d = default_val(
+        "OLINE_GRPC_ENDPOINT",
+        saved.as_ref().map(|s| s.grpc_endpoint.as_str()),
+        "https://grpc.akashnet.net:443",
+    );
     let grpc_endpoint = read_input(lines, "gRPC endpoint", Some(&d))?;
 
     let snapshot_url = {
-        let env_url = default_val_opt("OLINE_SNAPSHOT_URL", saved.as_ref().map(|s| s.snapshot_url.as_str()));
+        let env_url = default_val_opt(
+            "OLINE_SNAPSHOT_URL",
+            saved.as_ref().map(|s| s.snapshot_url.as_str()),
+        );
         if let Some(url) = env_url {
             read_input(lines, "Snapshot URL", Some(&url))?
         } else {
             match fetch_latest_snapshot_url(defaults).await {
                 Ok(url) => read_input(lines, "Snapshot URL (fetched from itrocket)", Some(&url))?,
                 Err(e) => {
-                    eprintln!("  Warning: failed to fetch snapshot: {}", e);
+                    tracing::info!("  Warning: failed to fetch snapshot: {}", e);
                     let url = read_input(lines, "Enter snapshot URL manually", None)?;
                     if url.is_empty() {
                         return Err("Snapshot URL is required.".into());
@@ -1814,17 +1884,28 @@ async fn collect_config(
         }
     };
 
-    let d = default_val_opt("OLINE_VALIDATOR_PEER_ID", saved.as_ref().map(|s| s.validator_peer_id.as_str()));
-    let validator_peer_id = read_secret_input(
-        "Validator peer ID (id@host:port)",
-        d.as_deref(),
-    )?;
+    let d = default_val_opt(
+        "OLINE_VALIDATOR_PEER_ID",
+        saved.as_ref().map(|s| s.validator_peer_id.as_str()),
+    );
+    let validator_peer_id = read_secret_input("Validator peer ID (id@host:port)", d.as_deref())?;
     if validator_peer_id.is_empty() {
         return Err("Validator peer ID is required.".into());
     }
 
-    let d = default_val("OLINE_TRUSTED_PROVIDERS", saved.as_ref().map(|s| s.trusted_providers.join(",")).as_deref(), "");
-    let providers_input = read_input(lines, "Trusted provider addresses (comma-separated, or empty)", Some(&d))?;
+    let d = default_val(
+        "OLINE_TRUSTED_PROVIDERS",
+        saved
+            .as_ref()
+            .map(|s| s.trusted_providers.join(","))
+            .as_deref(),
+        "",
+    );
+    let providers_input = read_input(
+        lines,
+        "Trusted provider addresses (comma-separated, or empty)",
+        Some(&d),
+    )?;
     let trusted_providers: Vec<String> = if providers_input.is_empty() {
         vec![]
     } else {
@@ -1834,65 +1915,127 @@ async fn collect_config(
             .collect()
     };
 
-    let auto_default = if saved.as_ref().map(|s| s.auto_select_provider).unwrap_or(false) { "n" } else { "n" };
+    let auto_default = if saved
+        .as_ref()
+        .map(|s| s.auto_select_provider)
+        .unwrap_or(false)
+    {
+        "n"
+    } else {
+        "n"
+    };
     let d = default_val("OLINE_AUTO_SELECT_PROVIDER", None, auto_default);
     let auto_select = read_input(lines, "Auto-select cheapest provider? (y/n)", Some(&d))?;
     let auto_select_provider = auto_select.is_empty() || auto_select == "y" || auto_select == "yes";
 
     // Snapshot export config (credentials auto-generated per deployment)
-    println!("\n── Snapshot Export ──");
-    println!("  Note: S3/MinIO credentials are auto-generated per deployment.");
+    tracing::info!("\n── Snapshot Export ──");
+    tracing::info!("  Note: S3/MinIO credentials are auto-generated per deployment.");
 
-    let d = default_val("OLINE_SNAPSHOT_PATH", saved.as_ref().map(|s| s.snapshot_path.as_str()), "snapshots/terpnetwork");
+    let d = default_val(
+        "OLINE_SNAPSHOT_PATH",
+        saved.as_ref().map(|s| s.snapshot_path.as_str()),
+        "snapshots/terpnetwork",
+    );
     let snapshot_path = read_input(lines, "S3 snapshot path (bucket/path)", Some(&d))?;
 
-    let d = default_val("OLINE_SNAPSHOT_TIME", saved.as_ref().map(|s| s.snapshot_time.as_str()), "00:00:00");
+    let d = default_val(
+        "OLINE_SNAPSHOT_TIME",
+        saved.as_ref().map(|s| s.snapshot_time.as_str()),
+        "00:00:00",
+    );
     let snapshot_time = read_input(lines, "Snapshot schedule time (HH:MM:SS)", Some(&d))?;
 
-    let d = default_val("OLINE_SNAPSHOT_SAVE_FORMAT", saved.as_ref().map(|s| s.snapshot_save_format.as_str()), "tar.gz");
+    let d = default_val(
+        "OLINE_SNAPSHOT_SAVE_FORMAT",
+        saved.as_ref().map(|s| s.snapshot_save_format.as_str()),
+        "tar.gz",
+    );
     let snapshot_save_format = read_input(lines, "Snapshot save format", Some(&d))?;
 
-    let d = default_val("OLINE_SNAPSHOT_RETAIN", saved.as_ref().map(|s| s.snapshot_retain.as_str()), "2 days");
+    let d = default_val(
+        "OLINE_SNAPSHOT_RETAIN",
+        saved.as_ref().map(|s| s.snapshot_retain.as_str()),
+        "2 days",
+    );
     let snapshot_retain = read_input(lines, "Snapshot retention period", Some(&d))?;
 
-    let d = default_val("OLINE_SNAPSHOT_KEEP_LAST", saved.as_ref().map(|s| s.snapshot_keep_last.as_str()), "2");
+    let d = default_val(
+        "OLINE_SNAPSHOT_KEEP_LAST",
+        saved.as_ref().map(|s| s.snapshot_keep_last.as_str()),
+        "2",
+    );
     let snapshot_keep_last = read_input(lines, "Minimum snapshots to keep", Some(&d))?;
 
-    // MinIO-IPFS config
-    println!("\n── MinIO-IPFS ──");
+    let d = default_val("TLS_CONFIG_URL", None, "");
+    let tls_config_url = read_input(lines, "TLS setup command", Some(&d))?;
 
-    let d = default_val("OLINE_MINIO_IPFS_IMAGE", saved.as_ref().map(|s| s.minio_ipfs_image.as_str()), &defaults.minio_ipfs_image);
+    // MinIO-IPFS config
+    tracing::info!("\n── MinIO-IPFS ──");
+
+    let d = default_val(
+        "OLINE_MINIO_IPFS_IMAGE",
+        saved.as_ref().map(|s| s.minio_ipfs_image.as_str()),
+        &defaults.minio_ipfs_image,
+    );
     let minio_ipfs_image = read_input(lines, "MinIO-IPFS image", Some(&d))?;
 
-    let d = default_val("OLINE_S3_BUCKET", saved.as_ref().map(|s| s.s3_bucket.as_str()), "terp-snapshots");
+    let d = default_val(
+        "OLINE_S3_BUCKET",
+        saved.as_ref().map(|s| s.s3_bucket.as_str()),
+        "terp-snapshots",
+    );
     let s3_bucket = read_input(lines, "S3 bucket name", Some(&d))?;
 
-    let d = default_val("OLINE_AUTOPIN_INTERVAL", saved.as_ref().map(|s| s.autopin_interval.as_str()), "300");
+    let d = default_val(
+        "OLINE_AUTOPIN_INTERVAL",
+        saved.as_ref().map(|s| s.autopin_interval.as_str()),
+        "300",
+    );
     let autopin_interval = read_input(lines, "IPFS auto-pin interval (seconds)", Some(&d))?;
 
-    let d = default_val("OLINE_SNAPSHOT_DOWNLOAD_DOMAIN", saved.as_ref().map(|s| s.snapshot_download_domain.as_str()), "snapshots.terp.network");
-    let snapshot_download_domain = read_input(lines, "Snapshot download domain (public S3 API)", Some(&d))?;
+    let d = default_val(
+        "OLINE_SNAPSHOT_DOWNLOAD_DOMAIN",
+        saved.as_ref().map(|s| s.snapshot_download_domain.as_str()),
+        "snapshots.terp.network",
+    );
+    let snapshot_download_domain =
+        read_input(lines, "Snapshot download domain (public S3 API)", Some(&d))?;
 
-    let d = default_val("OLINE_CERTBOT_EMAIL", saved.as_ref().map(|s| s.certbot_email.as_str()), "admin@terp.network");
-    let certbot_email = read_input(lines, "Certbot email (Let's Encrypt registration for nginx-snapshot)", Some(&d))?;
+    let d = default_val(
+        "OLINE_CERTBOT_EMAIL",
+        saved.as_ref().map(|s| s.certbot_email.as_str()),
+        "admin@terp.network",
+    );
+    let certbot_email = read_input(
+        lines,
+        "Certbot email (Let's Encrypt registration for nginx-snapshot)",
+        Some(&d),
+    )?;
 
     // Cloudflare DNS (optional — auto-update CNAME after deploy)
-    println!("\n── Cloudflare DNS (optional) ──");
-    println!("  Set these to auto-update CNAME records after deployment.");
-    println!("  Leave empty to skip automatic DNS updates.\n");
+    tracing::info!("\n── Cloudflare DNS (optional) ──");
+    tracing::info!("  Set these to auto-update CNAME records after deployment.");
+    tracing::info!("  Leave empty to skip automatic DNS updates.\n");
 
-    let d = default_val_opt("OLINE_CF_API_TOKEN", saved.as_ref().map(|s| s.cloudflare_api_token.as_str()).filter(|s| !s.is_empty()));
-    let cloudflare_api_token = read_secret_input(
-        "Cloudflare API token (DNS:Edit permission)",
-        d.as_deref(),
-    )?;
+    let d = default_val_opt(
+        "OLINE_CF_API_TOKEN",
+        saved
+            .as_ref()
+            .map(|s| s.cloudflare_api_token.as_str())
+            .filter(|s| !s.is_empty()),
+    );
+    let cloudflare_api_token =
+        read_secret_input("Cloudflare API token (DNS:Edit permission)", d.as_deref())?;
 
-    let d = default_val_opt("OLINE_CF_ZONE_ID", saved.as_ref().map(|s| s.cloudflare_zone_id.as_str()).filter(|s| !s.is_empty()));
-    let cloudflare_zone_id = read_input(
-        lines,
-        "Cloudflare zone ID",
-        d.as_deref(),
-    )?;
+    let d = default_val_opt(
+        "OLINE_CF_ZONE_ID",
+        saved
+            .as_ref()
+            .map(|s| s.cloudflare_zone_id.as_str())
+            .filter(|s| !s.is_empty()),
+    );
+    let cloudflare_zone_id = read_input(lines, "Cloudflare zone ID", d.as_deref())?;
 
     let config = OLineConfig {
         mnemonic,
@@ -1914,15 +2057,15 @@ async fn collect_config(
         certbot_email,
         cloudflare_api_token,
         cloudflare_zone_id,
+        tls_config_url,
     };
 
     // Offer to save
     if prompt_continue(lines, "Save config for next time?")? {
-        let saved_cfg = SavedConfig::from(&config);
-        if let Err(e) = save_config(&saved_cfg, password) {
-            eprintln!("  Warning: failed to save config: {}", e);
+        if let Err(e) = save_config(&config, password) {
+            tracing::info!("  Warning: failed to save config: {}", e);
         } else {
-            println!("  Config saved to {}", config_path().display());
+            tracing::info!("  Config saved to {}", config_path().display());
         }
     }
 
@@ -1932,7 +2075,7 @@ async fn collect_config(
 // ── Subcommand: deploy ──
 
 async fn cmd_deploy(raw: bool, defaults: &RuntimeDefaults) -> Result<(), Box<dyn Error>> {
-    println!("=== Welcome to O-Line Deployer ===\n");
+    tracing::info!("=== Welcome to O-Line Deployer ===\n");
 
     let (mnemonic, password) = if raw {
         let m = rpassword::prompt_password("Enter mnemonic: ")?;
@@ -1960,22 +2103,22 @@ async fn cmd_deploy(raw: bool, defaults: &RuntimeDefaults) -> Result<(), Box<dyn
 // ── Subcommand: generate-sdl ──
 
 async fn cmd_generate_sdl(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Error>> {
-    println!("=== Generate SDL ===\n");
+    tracing::info!("=== Generate SDL ===\n");
 
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines();
 
-    println!("  Select phase to render:");
-    println!("    a  - Phase A: Kickoff Special Teams (snapshot + seed)");
-    println!("    a2 - Phase A2: Backup Kickoff");
-    println!("    b  - Phase B: Left & Right Tackles");
-    println!("    c  - Phase C: Left & Right Forwards");
-    println!("    all - All phases");
+    tracing::info!("  Select phase to render:");
+    tracing::info!("    a  - Phase A: Kickoff Special Teams (snapshot + seed)");
+    tracing::info!("    a2 - Phase A2: Backup Kickoff");
+    tracing::info!("    b  - Phase B: Left & Right Tackles");
+    tracing::info!("    c  - Phase C: Left & Right Forwards");
+    tracing::info!("    all - All phases");
     let phase = read_input(&mut lines, "Phase", Some("all"))?;
 
     // Load config (optionally from saved)
     let config = if has_saved_config() {
-        println!("\n  Found saved config.");
+        tracing::info!("\n  Found saved config.");
         let password = rpassword::prompt_password(
             "Enter password to decrypt config (or press Enter to skip): ",
         )?;
@@ -1990,10 +2133,10 @@ async fn cmd_generate_sdl(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Erro
 
     // Build a minimal OLineConfig for variable generation
     let config = if let Some(saved) = config {
-        println!("  Using saved config.\n");
-        saved.to_oline_config(String::new()) // mnemonic not needed for SDL generation
+        tracing::info!("  Using saved config.\n");
+        saved
     } else {
-        println!("  No saved config loaded. Prompting for values.\n");
+        tracing::info!("  No saved config loaded. Prompting for values.\n");
 
         let snapshot_url = {
             let env_url = default_val_opt("OLINE_SNAPSHOT_URL", None);
@@ -2014,7 +2157,7 @@ async fn cmd_generate_sdl(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Erro
             Some(&d),
         )?;
 
-        println!("  Note: S3/MinIO credentials are auto-generated per deployment.\n");
+        tracing::info!("  Note: S3/MinIO credentials are auto-generated per deployment.\n");
         let d = default_val("OLINE_SNAPSHOT_PATH", None, "snapshots/terpnetwork");
         let snapshot_path = read_input(&mut lines, "S3 snapshot path", Some(&d))?;
 
@@ -2037,10 +2180,19 @@ async fn cmd_generate_sdl(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Erro
         let s3_bucket = read_input(&mut lines, "S3 bucket name", Some(&d))?;
 
         let d = default_val("OLINE_AUTOPIN_INTERVAL", None, "300");
-        let autopin_interval = read_input(&mut lines, "IPFS auto-pin interval (seconds)", Some(&d))?;
+        let autopin_interval =
+            read_input(&mut lines, "IPFS auto-pin interval (seconds)", Some(&d))?;
 
-        let d = default_val("OLINE_SNAPSHOT_DOWNLOAD_DOMAIN", None, "snapshots.terp.network");
-        let snapshot_download_domain = read_input(&mut lines, "Snapshot download domain (public S3 API)", Some(&d))?;
+        let d = default_val(
+            "OLINE_SNAPSHOT_DOWNLOAD_DOMAIN",
+            None,
+            "snapshots.terp.network",
+        );
+        let snapshot_download_domain = read_input(
+            &mut lines,
+            "Snapshot download domain (public S3 API)",
+            Some(&d),
+        )?;
 
         let d = default_val("OLINE_CERTBOT_EMAIL", None, "admin@terp.network");
         let certbot_email = read_input(&mut lines, "Certbot email (Let's Encrypt)", Some(&d))?;
@@ -2049,15 +2201,26 @@ async fn cmd_generate_sdl(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Erro
         let cloudflare_api_token = if let Some(tok) = d {
             tok
         } else {
-            read_input(&mut lines, "Cloudflare API token (optional, press Enter to skip)", Some(""))?
+            read_input(
+                &mut lines,
+                "Cloudflare API token (optional, press Enter to skip)",
+                Some(""),
+            )?
         };
 
         let d = default_val_opt("OLINE_CF_ZONE_ID", None);
         let cloudflare_zone_id = if let Some(zid) = d {
             zid
         } else {
-            read_input(&mut lines, "Cloudflare zone ID (optional, press Enter to skip)", Some(""))?
+            read_input(
+                &mut lines,
+                "Cloudflare zone ID (optional, press Enter to skip)",
+                Some(""),
+            )?
         };
+
+        let d = default_val("TLS_CONFIG_URL", None, "2");
+        let tls_config_url = read_input(&mut lines, "TLS setup command", Some(&d))?;
 
         OLineConfig {
             mnemonic: String::new(),
@@ -2079,6 +2242,7 @@ async fn cmd_generate_sdl(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Erro
             certbot_email,
             cloudflare_api_token,
             cloudflare_zone_id,
+            tls_config_url,
         }
     };
 
@@ -2124,7 +2288,10 @@ async fn cmd_generate_sdl(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Erro
         )?;
         let statesync_rpc = read_input(
             &mut lines,
-            &format!("Statesync RPC servers (e.g. {}:PORT,{}:PORT)", SNAPSHOT_RPC_DOMAIN, SEED_RPC_DOMAIN),
+            &format!(
+                "Statesync RPC servers (e.g. {}:PORT,{}:PORT)",
+                SNAPSHOT_RPC_DOMAIN, SEED_RPC_DOMAIN
+            ),
             Some(""),
         )?;
         (snap_url, statesync_rpc)
@@ -2159,9 +2326,9 @@ async fn cmd_generate_sdl(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Erro
                   template: &str,
                   vars: &HashMap<String, String>|
      -> Result<(), Box<dyn Error>> {
-        println!("\n── {} ──", label);
+        tracing::info!("\n── {} ──", label);
         let rendered = substitute_template_raw(template, vars, &template_defaults)?;
-        println!("{}", rendered);
+        tracing::info!("{}", rendered);
         Ok(())
     };
 
@@ -2175,7 +2342,14 @@ async fn cmd_generate_sdl(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Erro
             render("Phase A2: Backup Kickoff", &sdl_a, &vars)?;
         }
         "b" => {
-            let vars = build_phase_b_vars(&config, &snapshot_peer, &snapshot_2_peer, &b_snapshot_url, &b_statesync_rpc, defaults);
+            let vars = build_phase_b_vars(
+                &config,
+                &snapshot_peer,
+                &snapshot_2_peer,
+                &b_snapshot_url,
+                &b_statesync_rpc,
+                defaults,
+            );
             render("Phase B: Left & Right Tackles", &sdl_b, &vars)?;
         }
         "c" => {
@@ -2197,7 +2371,14 @@ async fn cmd_generate_sdl(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Erro
             let a2_vars = build_phase_a2_vars(&config, defaults);
             render("Phase A2: Backup Kickoff", &sdl_a, &a2_vars)?;
 
-            let b_vars = build_phase_b_vars(&config, &snapshot_peer, &snapshot_2_peer, &b_snapshot_url, &b_statesync_rpc, defaults);
+            let b_vars = build_phase_b_vars(
+                &config,
+                &snapshot_peer,
+                &snapshot_2_peer,
+                &b_snapshot_url,
+                &b_statesync_rpc,
+                defaults,
+            );
             render("Phase B: Left & Right Tackles", &sdl_b, &b_vars)?;
 
             let c_vars = build_phase_c_vars(
@@ -2212,7 +2393,7 @@ async fn cmd_generate_sdl(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Erro
             render("Phase C: Left & Right Forwards", &sdl_c, &c_vars)?;
         }
         _ => {
-            eprintln!("Unknown phase: {}. Choose a, a2, b, c, or all.", phase);
+            tracing::info!("Unknown phase: {}. Choose a, a2, b, c, or all.", phase);
         }
     }
 
@@ -2222,21 +2403,25 @@ async fn cmd_generate_sdl(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Erro
 // ── Subcommand: manage ──
 
 async fn cmd_manage_deployments(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Error>> {
-    println!("=== Manage Deployments ===\n");
+    tracing::info!("=== Manage Deployments ===\n");
 
     let mut store = FileDeploymentStore::new_default().await?;
     let records = store.list().await?;
 
     if records.is_empty() {
-        println!("  No deployments found.");
+        tracing::info!("  No deployments found.");
         return Ok(());
     }
 
-    println!(
+    tracing::info!(
         "  {:<6} {:<20} {:<18} {:<20} {:<20}",
-        "DSEQ", "Label", "Step", "Provider", "Created"
+        "DSEQ",
+        "Label",
+        "Step",
+        "Provider",
+        "Created"
     );
-    println!("  {:-<90}", "");
+    tracing::info!("  {:-<90}", "");
 
     for r in &records {
         let provider = r
@@ -2253,7 +2438,7 @@ async fn cmd_manage_deployments(defaults: &RuntimeDefaults) -> Result<(), Box<dy
 
         let created = chrono_format_timestamp(r.created_at);
 
-        println!(
+        tracing::info!(
             "  {:<6} {:<20} {:<18} {:<20} {:<20}",
             r.dseq,
             truncate(&r.label, 20),
@@ -2266,7 +2451,6 @@ async fn cmd_manage_deployments(defaults: &RuntimeDefaults) -> Result<(), Box<dy
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines();
 
-    println!();
     let dseq_str = read_input(&mut lines, "Enter DSEQ to manage (or 'q' to quit)", None)?;
     if dseq_str == "q" || dseq_str.is_empty() {
         return Ok(());
@@ -2276,21 +2460,21 @@ async fn cmd_manage_deployments(defaults: &RuntimeDefaults) -> Result<(), Box<dy
 
     let record = records.iter().find(|r| r.dseq == dseq);
     if record.is_none() {
-        eprintln!("  No record found for DSEQ {}", dseq);
+        tracing::info!("  No record found for DSEQ {}", dseq);
         return Ok(());
     }
 
-    println!("\n  Actions:");
-    println!("    1. Close deployment");
-    println!("    2. View record (JSON)");
-    println!("    3. Update SDL (not yet implemented)");
+    tracing::info!("\n  Actions:");
+    tracing::info!("    1. Close deployment");
+    tracing::info!("    2. View record (JSON)");
+    tracing::info!("    3. Update SDL (not yet implemented)");
 
     let action = read_input(&mut lines, "Select action", None)?;
 
     match action.as_str() {
         "1" => {
             if !prompt_continue(&mut lines, &format!("Close deployment DSEQ {}?", dseq))? {
-                println!("  Cancelled.");
+                tracing::info!("  Cancelled.");
                 return Ok(());
             }
 
@@ -2332,25 +2516,25 @@ async fn cmd_manage_deployments(defaults: &RuntimeDefaults) -> Result<(), Box<dy
             let signer = KeySigner::new_mnemonic_str(&mnemonic, None)
                 .map_err(|e| format!("Failed to create signer: {}", e))?;
 
-            println!("  Closing deployment DSEQ {}...", dseq);
+            tracing::info!("  Closing deployment DSEQ {}...", dseq);
             let result = client
                 .broadcast_close_deployment(&signer, &client.address(), dseq)
                 .await?;
 
-            println!("  Closed! TX hash: {}", result.hash);
+            tracing::info!("  Closed! TX hash: {}", result.hash);
 
             store.delete(dseq).await?;
-            println!("  Record removed from store.");
+            tracing::info!("  Record removed from store.");
         }
         "2" => {
             let json = serde_json::to_string_pretty(record.unwrap())?;
-            println!("\n{}", json);
+            tracing::info!("\n{}", json);
         }
         "3" => {
-            println!("  Update SDL is not yet implemented.");
+            tracing::info!("  Update SDL is not yet implemented.");
         }
         _ => {
-            eprintln!("  Unknown action.");
+            tracing::info!("  Unknown action.");
         }
     }
 
@@ -2431,8 +2615,7 @@ fn sha256_hex(data: &[u8]) -> String {
 
 fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> {
     use hmac::{Hmac, Mac};
-    let mut mac =
-        <Hmac<sha2::Sha256> as Mac>::new_from_slice(key).expect("HMAC key length");
+    let mut mac = <Hmac<sha2::Sha256> as Mac>::new_from_slice(key).expect("HMAC key length");
     mac.update(msg);
     mac.finalize().into_bytes().to_vec()
 }
@@ -2549,10 +2732,10 @@ async fn s3_request(
 // ── Subcommand: test-s3 ──
 
 async fn cmd_test_s3(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Error>> {
-    println!("=== S3 Connection Test ===\n");
+    tracing::info!("=== S3 Connection Test ===\n");
 
-    println!("  Note: S3/MinIO credentials are auto-generated per deployment.");
-    println!("  Enter the credentials from your running MinIO instance to test.\n");
+    tracing::info!("  Note: S3/MinIO credentials are auto-generated per deployment.");
+    tracing::info!("  Enter the credentials from your running MinIO instance to test.\n");
 
     // Check for env vars first (enables non-interactive / CI usage)
     let (s3_key, s3_secret, s3_host, snapshot_path) = match (
@@ -2561,8 +2744,10 @@ async fn cmd_test_s3(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Error>> {
         std::env::var("S3_HOST"),
         std::env::var("SNAPSHOT_PATH"),
     ) {
-        (Ok(k), Ok(s), Ok(h), Ok(p)) if !k.is_empty() && !s.is_empty() && !h.is_empty() && !p.is_empty() => {
-            println!("  Using credentials from environment variables.\n");
+        (Ok(k), Ok(s), Ok(h), Ok(p))
+            if !k.is_empty() && !s.is_empty() && !h.is_empty() && !p.is_empty() =>
+        {
+            tracing::info!("  Using credentials from environment variables.\n");
             (k, s, h, p)
         }
         _ => {
@@ -2578,14 +2763,16 @@ async fn cmd_test_s3(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Error>> {
         None => (snapshot_path.clone(), String::new()),
     };
 
-    println!("  S3 host:    {}", s3_host);
-    println!("  Bucket:     {}", bucket_name);
-    println!(
+    tracing::info!("  S3 host:    {}", s3_host);
+    tracing::info!("  Bucket:     {}", bucket_name);
+    tracing::info!(
         "  Prefix:     {}",
         if prefix.is_empty() { "(root)" } else { &prefix }
     );
-    println!("  Access key: {}", redact_if_secret("S3_KEY", &s3_key, defaults));
-    println!();
+    tracing::info!(
+        "  Access key: {}",
+        redact_if_secret("S3_KEY", &s3_key, defaults)
+    );
 
     let client = reqwest::Client::new();
     let region = "us-east-1";
@@ -2617,14 +2804,17 @@ async fn cmd_test_s3(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Error>> {
             if status == 200 {
                 let body = resp.text().await.unwrap_or_default();
                 let count = body.matches("<Key>").count();
-                println!("OK (HTTP 200, {} objects listed)", count);
+                tracing::info!("OK (HTTP 200, {} objects listed)", count);
             } else {
-                println!("SKIPPED (HTTP {} — provider may not support ListObjects)", status);
+                tracing::info!(
+                    "SKIPPED (HTTP {} — provider may not support ListObjects)",
+                    status
+                );
                 list_ok = false;
             }
         }
         Err(e) => {
-            println!("SKIPPED: {}", e);
+            tracing::info!("SKIPPED: {}", e);
             list_ok = false;
         }
     }
@@ -2650,18 +2840,18 @@ async fn cmd_test_s3(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Error>> {
         Ok(resp) => {
             let status = resp.status().as_u16();
             if status >= 200 && status < 300 {
-                println!("OK (HTTP {})", status);
+                tracing::info!("OK (HTTP {})", status);
             } else {
                 let body = resp.text().await.unwrap_or_default();
-                println!("FAILED (HTTP {})", status);
+                tracing::info!("FAILED (HTTP {})", status);
                 if !body.is_empty() {
-                    eprintln!("    Response: {}", &body[..body.len().min(200)]);
+                    tracing::info!("    Response: {}", &body[..body.len().min(200)]);
                 }
                 rw_ok = false;
             }
         }
         Err(e) => {
-            println!("FAILED: {}", e);
+            tracing::info!("FAILED: {}", e);
             rw_ok = false;
         }
     }
@@ -2686,17 +2876,17 @@ async fn cmd_test_s3(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Error>> {
             if status == 200 {
                 let body = resp.bytes().await.unwrap_or_default();
                 if body.as_ref() == test_data {
-                    println!("OK (data verified)");
+                    tracing::info!("OK (data verified)");
                 } else {
-                    println!("OK (HTTP 200, content differs — still functional)");
+                    tracing::info!("OK (HTTP 200, content differs — still functional)");
                 }
             } else {
-                println!("FAILED (HTTP {})", status);
+                tracing::info!("FAILED (HTTP {})", status);
                 rw_ok = false;
             }
         }
         Err(e) => {
-            println!("FAILED: {}", e);
+            tracing::info!("FAILED: {}", e);
             rw_ok = false;
         }
     }
@@ -2719,28 +2909,28 @@ async fn cmd_test_s3(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Error>> {
         Ok(resp) => {
             let status = resp.status().as_u16();
             if status == 200 || status == 204 {
-                println!("OK (HTTP {})", status);
+                tracing::info!("OK (HTTP {})", status);
             } else {
-                println!(
+                tracing::info!(
                     "WARN (HTTP {} — may need manual cleanup of {})",
-                    status, test_key
+                    status,
+                    test_key
                 );
             }
         }
         Err(e) => {
-            println!("WARN: {} — test object may remain at {}", e, test_key);
+            tracing::info!("WARN: {} — test object may remain at {}", e, test_key);
         }
     }
 
-    println!();
     if rw_ok && list_ok {
-        println!("  All S3 tests passed. Credentials are fully functional.");
+        tracing::info!("All S3 tests passed. Credentials are fully functional.");
     } else if rw_ok {
-        println!("  Read/write tests passed. Credentials are functional.");
-        println!("  Note: ListObjects not supported by this provider (common with Filebase).");
-        println!("  This does not affect O-Line deployments — only PUT/GET/DELETE are used.");
+        tracing::info!("Read/write tests passed. Credentials are functional.");
+        tracing::info!("Note: ListObjects not supported by this provider (common with Filebase).");
+        tracing::info!("This does not affect O-Line deployments — only PUT/GET/DELETE are used.");
     } else {
-        println!("  S3 read/write tests failed. Check credentials and bucket permissions.");
+        tracing::info!("S3 read/write tests failed. Check credentials and bucket permissions.");
     }
     Ok(())
 }
@@ -2777,14 +2967,14 @@ async fn cmd_main_menu(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Error>>
     let records = store.list().await.unwrap_or_default();
     let has_deployments = !records.is_empty();
 
-    println!("=== O-Line Deployer ===\n");
-    println!("  1. Deploy (full automated deployment)");
-    println!("  2. Generate SDL (render & print, no broadcast)");
+    tracing::info!("=== O-Line Deployer ===\n");
+    tracing::info!("  1. Deploy (full automated deployment)");
+    tracing::info!("  2. Generate SDL (render & print, no broadcast)");
     if has_deployments {
-        println!("  3. Manage Deployments ({} active)", records.len());
+        tracing::info!("  3. Manage Deployments ({} active)", records.len());
     }
-    println!("  4. Test S3 Connection");
-    println!("  5. Encrypt Mnemonic");
+    tracing::info!("  4. Test S3 Connection");
+    tracing::info!("  5. Encrypt Mnemonic");
 
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines();
@@ -2799,7 +2989,7 @@ async fn cmd_main_menu(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Error>>
         "4" => cmd_test_s3(defaults).await,
         "5" => cmd_encrypt(defaults),
         _ => {
-            eprintln!("Invalid option.");
+            tracing::info!("Invalid option.");
             Ok(())
         }
     }
@@ -2827,17 +3017,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .expect("Failed to install rustls crypto provider");
 
     // Determine the env key name before loading .env (may come from process env)
-    let env_key = std::env::var("OLINE_ENV_KEY_NAME")
-        .unwrap_or_else(|_| "OLINE_ENCRYPTED_MNEMONIC".into());
-
-    // Load .env file variables into process environment
-    load_dotenv(&env_key);
+    load_dotenv(
+        &std::env::var("OLINE_ENV_KEY_NAME").unwrap_or_else(|_| "OLINE_ENCRYPTED_MNEMONIC".into()),
+    );
 
     // Now build runtime defaults (reads env vars, including those just loaded from .env)
     let defaults = RuntimeDefaults::load();
-
     let args: Vec<String> = std::env::args().collect();
-
     match args.get(1).map(|s| s.as_str()) {
         Some("encrypt") => cmd_encrypt(&defaults),
         Some("deploy") => {
@@ -2849,16 +3035,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Some("test-s3") => cmd_test_s3(&defaults).await,
         None => cmd_main_menu(&defaults).await,
         Some(other) => {
-            eprintln!("Unknown command: {}", other);
-            eprintln!();
-            eprintln!("Usage:");
-            eprintln!("  oline                 Interactive main menu");
-            eprintln!("  oline encrypt         Encrypt mnemonic and store in .env");
-            eprintln!("  oline deploy          Deploy using encrypted mnemonic from .env");
-            eprintln!("  oline deploy --raw    Deploy with mnemonic entered directly (hidden)");
-            eprintln!("  oline sdl             Generate SDL templates (render & preview)");
-            eprintln!("  oline manage          Manage active deployments");
-            eprintln!("  oline test-s3         Test S3 bucket connectivity");
+            tracing::info!("Unknown command: {}", other);
+            tracing::info!("Usage:");
+            tracing::info!("  oline                 Interactive main menu");
+            tracing::info!("  oline encrypt         Encrypt mnemonic and store in .env");
+            tracing::info!("  oline deploy          Deploy using encrypted mnemonic from .env");
+            tracing::info!(
+                "  oline deploy --raw    Deploy with mnemonic entered directly (hidden)"
+            );
+            tracing::info!("  oline sdl             Generate SDL templates (render & preview)");
+            tracing::info!("  oline manage          Manage active deployments");
+            tracing::info!("  oline test-s3         Test S3 bucket connectivity");
             std::process::exit(1);
         }
     }

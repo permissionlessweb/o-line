@@ -3,7 +3,7 @@
 set -uo pipefail
 
 # ── Configuration ────────────────────────────────────────────────────────────
-IMAGE="${E2E_IMAGE:-ghcr.io/permissionlessweb/minio-ipfs:v0.0.2}"
+IMAGE="${E2E_IMAGE:-ghcr.io/permissionlessweb/minio-ipfs:v0.0.3}"
 CONTAINER_NAME="minio-ipfs-e2e"
 IPFS_GW_PORT=18081
 MINIO_PORT=19000
@@ -70,7 +70,7 @@ wait_for() {
     local attempt=0
 
     printf "  Waiting for %s " "$desc"
-    while [ $attempt -lt $max_attempts ]; do
+    while [ $attempt -lt "$max_attempts" ]; do
         if curl -sf "$url" > /dev/null 2>&1; then
             echo " ready (${attempt}s)"
             return 0
@@ -132,6 +132,7 @@ test_container_start() {
         -e MINIO_ROOT_PASSWORD=minioadmin \
         -e MINIO_BUCKET=snapshots \
         -e AUTOPIN_INTERVAL=10 \
+        -e "AUTOPIN_PATTERNS=*.tar.gz,*.tar.zst,*.tar.lz4,*.tar.xz,snapshot.json" \
         "$IMAGE" 2>&1)
     local rc=$?
 
@@ -395,7 +396,7 @@ test_metadata_json() {
     if [ -n "$meta_cid" ]; then
         pass "metadata.json pinned to IPFS (CID: ${meta_cid})"
         local status
-        status=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 15 \
+        status=$(curl -sfL -o /dev/null -w "%{http_code}" --max-time 15 \
             "${IPFS_GW_URL}/ipfs/${meta_cid}" 2>&1 || true)
         if [ "$status" = "200" ]; then
             pass "metadata.json retrievable via IPFS gateway"
@@ -411,18 +412,20 @@ test_metadata_json() {
 
 test_snapshot_json_in_metadata() {
     echo ""
-    echo "=== 7. snapshot.json Pinned and Tracked in metadata.json ==="
+    echo "=== 7. Node snapshot.json → IPFS CID recorded in metadata.json ==="
+    # What this test verifies:
+    #   Nodes upload snapshot.json: { chain_id, snapshots: [S3-url,...], latest: S3-url }
+    #   autopin must (a) pin snapshot.json to IPFS and (b) write its ipfs_cid + ipfs_url
+    #   into metadata.json under .snapshots["snapshot.json"].
+    #   Success is confirmed by reading metadata.json from the public MinIO URL.
 
-    # Build a snapshot.json in the format nodes produce:
-    #   { "chain_id": "...", "snapshots": ["<url>", ...], "latest": "<url>" }
-    # The snapshot URLs reference the tar.gz we already uploaded in test 5.
     local snap_url="http://localhost:${MINIO_PORT}/snapshots/s3-pipeline-snapshot.tar.gz"
     local snap_json
     snap_json=$(printf '{"chain_id":"test-chain-1","snapshots":["%s"],"latest":"%s"}' \
         "$snap_url" "$snap_url")
     local snap_json_path="${TMPDIR}/snapshot.json"
     printf '%s\n' "$snap_json" > "$snap_json_path"
-    log "snapshot.json content: $snap_json"
+    log "Uploading node-format snapshot.json: $snap_json"
 
     # Upload snapshot.json to the MinIO bucket
     docker cp "$snap_json_path" "${CONTAINER_NAME}:/tmp/snapshot.json" 2>&1
@@ -430,65 +433,52 @@ test_snapshot_json_in_metadata() {
     mc_output=$(docker exec "$CONTAINER_NAME" sh -c \
         "mc alias set local http://localhost:9000 minioadmin minioadmin --api S3v4 > /dev/null 2>&1 \
          && mc cp /tmp/snapshot.json local/snapshots/snapshot.json" 2>&1)
-    local rc=$?
-    if [ $rc -eq 0 ]; then
+    if [ $? -eq 0 ]; then
         pass "snapshot.json (node format) uploaded to MinIO bucket"
     else
         fail "Failed to upload snapshot.json to MinIO" "$mc_output"
         return 1
     fi
 
-    # Wait for autopin to detect and pin snapshot.json (interval is 10s in the test container)
-    echo "  Waiting for autopin to pin snapshot.json (up to 45s)..."
+    # Poll metadata.json directly until snapshot.json's entry (with ipfs_cid) appears.
+    # This waits for the full autopin cycle to complete: pin → update_metadata → MinIO upload.
+    # Avoids the race of checking metadata.json the moment "Pinned" appears in logs.
+    echo "  Waiting for snapshot.json CID in metadata.json (up to 60s)..."
     local attempt=0
-    local snap_cid=""
-    while [ $attempt -lt 22 ]; do
-        snap_cid=$(docker logs "$CONTAINER_NAME" 2>&1 \
-            | grep "\[autopin\] Pinned snapshot\.json ->" \
-            | grep -oE "Qm[a-zA-Z0-9]{44,}|bafy[a-zA-Z0-9]{50,}" \
-            | tail -1 || true)
-        [ -n "$snap_cid" ] && break
+    local entry_cid="" meta_json=""
+    while [ $attempt -lt 30 ]; do
+        meta_json=$(curl -sf "${MINIO_URL}/snapshots/metadata.json" 2>/dev/null || true)
+        entry_cid=$(echo "$meta_json" | jq -r '.snapshots["snapshot.json"].ipfs_cid // empty' 2>/dev/null || true)
+        [ -n "$entry_cid" ] && break
         attempt=$((attempt + 1))
         sleep 2
     done
 
-    if [ -n "$snap_cid" ]; then
-        pass "snapshot.json pinned to IPFS (CID: ${snap_cid})"
-    else
-        fail "snapshot.json was not pinned by autopin within timeout"
+    if [ -z "$entry_cid" ]; then
+        fail "snapshot.json CID did not appear in metadata.json within timeout"
         log "autopin logs:"
         docker logs "$CONTAINER_NAME" 2>&1 | grep "\[autopin\]" | tail -15 \
             | while IFS= read -r line; do log "  $line"; done
+        log "metadata.json: $(echo "$meta_json" | jq -c . 2>/dev/null || echo "$meta_json")"
         return 1
     fi
+    pass "metadata.json has ipfs_cid for snapshot.json: ${entry_cid}"
 
-    # metadata.json must have an entry for snapshot.json with the correct CID
-    local meta_json
-    meta_json=$(curl -sf "${MINIO_URL}/snapshots/metadata.json" 2>/dev/null || true)
-    if [ -z "$meta_json" ]; then
-        fail "metadata.json not accessible after snapshot.json pin"
-        return 1
+    # Cross-verify CID against what autopin logged
+    local log_cid
+    log_cid=$(docker logs "$CONTAINER_NAME" 2>&1 \
+        | grep "\[autopin\] Pinned snapshot\.json ->" \
+        | grep -oE "Qm[a-zA-Z0-9]{44,}|bafy[a-zA-Z0-9]{50,}" \
+        | tail -1 || true)
+    if [ -n "$log_cid" ] && [ "$entry_cid" = "$log_cid" ]; then
+        pass "metadata.json CID matches autopin log"
+    elif [ -n "$log_cid" ]; then
+        fail "CID mismatch" "Log: ${log_cid}, Metadata: ${entry_cid}"
     fi
 
-    local entry_cid
-    entry_cid=$(echo "$meta_json" | jq -r '.snapshots["snapshot.json"].ipfs_cid // empty')
-    if [ -z "$entry_cid" ]; then
-        fail "metadata.json missing entry for snapshot.json"
-        log "metadata.json: $(echo "$meta_json" | jq -c .)"
-        return 1
-    fi
-    pass "metadata.json has IPFS CID for snapshot.json (CID: ${entry_cid})"
-
-    if [ "$entry_cid" = "$snap_cid" ]; then
-        pass "metadata.json CID matches pinned snapshot.json CID"
-    else
-        fail "CID mismatch for snapshot.json" "Expected: ${snap_cid}, Got: ${entry_cid}"
-    fi
-
-    # Fetch snapshot.json via IPFS gateway and verify its node-format structure
-    local dl_json
-    dl_json=$(curl -sf --max-time 15 "${IPFS_GW_URL}/ipfs/${snap_cid}" 2>/dev/null || true)
-    local gw_chain_id
+    # Fetch snapshot.json back via IPFS gateway and verify node-format structure
+    local dl_json gw_chain_id
+    dl_json=$(curl -sfL --max-time 15 "${IPFS_GW_URL}/ipfs/${entry_cid}" 2>/dev/null || true)
     gw_chain_id=$(echo "$dl_json" | jq -r '.chain_id // empty' 2>/dev/null || true)
     if [ "$gw_chain_id" = "test-chain-1" ]; then
         pass "snapshot.json retrievable via IPFS gateway with correct node-format structure"

@@ -1,0 +1,4 @@
+[workspace]
+members = ["plays/oline-sdl"]
+resolver = "3"
+

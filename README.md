@@ -17,7 +17,6 @@ Useful scripts & configurations for setting up public RPC nodes.
 - prepare encrypted env variables:
   - generate / set minio-ipfs s3 keys,
   - validator-peer id + ip
-
 - add bootstrapping of indexer & relayer services
 - configure tls/https for all nodes
 - load-balancing for frontward facing rpcs (need templatize lb-deploy.yaml)

@@ -39,6 +39,7 @@ CONFIG_DIR="${NODE_HOME}/config"
 
 NGINX_CONF_URL="${NGINX_CONF_URL:-https://raw.githubusercontent.com/permissionlessweb/o-line/master/plays/flea-flicker/nginx/rpc-api-grpc-peer}"
 
+
 [ -n "${RPC_DOMAIN}" ]    || die "RPC_DOMAIN must be set"
 [ -n "${CERTBOT_EMAIL}" ] || die "CERTBOT_EMAIL must be set"
 
@@ -229,3 +230,5 @@ fi
 rm -f "${NGINX_TEMPLATE}" "${NGINX_FULL}"
 
 log "TLS setup complete. Handing off to node start command."
+
+exec "$@"

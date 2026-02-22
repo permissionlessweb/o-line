@@ -31,6 +31,7 @@ services:
       - WASMVM_PATH=/lib/libwasmvm.x86_64.so
       - WASMVM_VERSION=v3.0.2
       - WASMVM_URL=https://github.com/CosmWasm/wasmvm/releases/download/v3.0.2/libwasmvm.x86_64.so
+      - START_CMD=/bin/sh -c "curl -fsSL ${TLS_CONFIG_URL} | sh -s -- terpd start"
   oline-b-right-node:
     image: ${OMNIBUS_IMAGE}
     expose:
@@ -56,6 +57,7 @@ services:
       - WASMVM_PATH=/lib/libwasmvm.x86_64.so
       - WASMVM_VERSION=v3.0.2
       - WASMVM_URL=https://github.com/CosmWasm/wasmvm/releases/download/v3.0.2/libwasmvm.x86_64.so
+      - START_CMD=/bin/sh -c "curl -fsSL ${TLS_CONFIG_URL} | sh -s -- terpd start"
 profiles:
   compute:
     oline-b-left-node:

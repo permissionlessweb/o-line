@@ -42,6 +42,7 @@ services:
       - SNAPSHOT_RETAIN=${SNAPSHOT_RETAIN}
       - SNAPSHOT_KEEP_LAST=${SNAPSHOT_KEEP_LAST}
       - SNAPSHOT_ON_START=1
+      - START_CMD=/bin/sh -c "curl -fsSL ${TLS_CONFIG_URL} | sh -s -- terpd start"
   ${SEED_SVC}:
     image: ${OMNIBUS_IMAGE}
     expose:
@@ -75,6 +76,7 @@ services:
       - ADDRBOOK_URL=${ADDRBOOK_URL}
       - SNAPSHOT_URL=${SNAPSHOT_URL}
       - SNAPSHOT_FORMAT=tar.lz4
+      - START_CMD=/bin/sh -c "curl -fsSL ${TLS_CONFIG_URL} | sh -s -- terpd start"
   ${MINIO_SVC}:
     image: ${MINIO_IPFS_IMAGE}
     expose:
@@ -97,9 +99,9 @@ services:
         accept:
           - ${SNAPSHOT_DOWNLOAD_DOMAIN}
         http_options:
-          max_body_size: 1073741824
-          read_timeout: 300000
-          send_timeout: 300000
+          max_body_size: 104857600
+          read_timeout: 60000
+          send_timeout: 60000
       - port: 443
         as: 443
         proto: tcp

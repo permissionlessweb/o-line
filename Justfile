@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # ── Settings ──────────────────────────────────────────────────────────────────
-minio_ipfs_version := "v0.0.2"
+minio_ipfs_version := "v0.0.3"
 ghcr_image         := "ghcr.io/permissionlessweb/minio-ipfs"
 dh_image           := "docker.io/permissionlessweb/minio-ipfs"
 
@@ -19,7 +19,7 @@ test-minio-ipfs:
 
 # Build minio-ipfs for linux/amd64+arm64 and push to GHCR + Docker Hub
 # Usage: just build-push-minio-ipfs            → uses minio_ipfs_version
-#        just build-push-minio-ipfs v0.0.2     → custom tag
+#        just build-push-minio-ipfs v0.0.3     → custom tag
 build-push-minio-ipfs tag=minio_ipfs_version:
     docker buildx build \
         --platform linux/amd64,linux/arm64 \
