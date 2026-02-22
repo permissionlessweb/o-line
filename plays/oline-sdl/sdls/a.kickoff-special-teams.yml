@@ -43,6 +43,8 @@ services:
       - SNAPSHOT_KEEP_LAST=${SNAPSHOT_KEEP_LAST}
       - SNAPSHOT_ON_START=1
       - TLS_CONFIG_URL=${TLS_CONFIG_URL}
+      - RPC_DOMAIN=statesync.terp.network
+      - CERTBOT_EMAIL=${CERTBOT_EMAIL}
     command:
       - sh
     args:
@@ -82,6 +84,8 @@ services:
       - ADDRBOOK_URL=${ADDRBOOK_URL}
       - SNAPSHOT_URL=${SNAPSHOT_URL}
       - SNAPSHOT_FORMAT=tar.lz4
+      - CERTBOT_EMAIL=${CERTBOT_EMAIL}
+      - RPC_DOMAIN=seed.terp.network
     command:
       - sh
     args:

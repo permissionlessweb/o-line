@@ -7,7 +7,7 @@ http {
     client_max_body_size 0;
 
     server {
-        listen 80;
+        listen 8080; 
         server_name ${SNAPSHOT_DOWNLOAD_DOMAIN};
 
         # Proxy all S3/MinIO requests to the local MinIO server.

@@ -74,7 +74,7 @@ log "RPC:          https://${RPC_DOMAIN} → 127.0.0.1:${RPC_PORT}"
 [ -n "${P2P_DOMAIN}" ]  && log "P2P:          http://${P2P_DOMAIN}  → 127.0.0.1:${P2P_PORT}"
 
 # Build envsubst variable list (only substitute our vars, not nginx's $host etc.)
-SUBST_VARS='${RPC_DOMAIN} ${RPC_PORT} ${API_DOMAIN} ${API_PORT} ${GRPC_DOMAIN} ${GRPC_PORT} ${P2P_DOMAIN} ${P2P_PORT} ${TLS_CERT} ${TLS_KEY}'
+SUBST_VARS="${RPC_DOMAIN} ${RPC_PORT} ${API_DOMAIN} ${API_PORT} ${GRPC_DOMAIN} ${GRPC_PORT} ${P2P_DOMAIN} ${P2P_PORT} ${TLS_CERT} ${TLS_KEY}"
 
 # Export all vars so envsubst can see them
 export RPC_DOMAIN RPC_PORT API_DOMAIN API_PORT GRPC_DOMAIN GRPC_PORT P2P_DOMAIN P2P_PORT TLS_CERT TLS_KEY
@@ -114,7 +114,7 @@ strip_server_block "${NGINX_FULL}" "${P2P_DOMAIN}"
 # ── 4. bootstrap nginx for certbot HTTP-01 challenge ─────────────────────────
 log "Writing minimal HTTP nginx config for certbot challenge..."
 
-mkdir -p /var/www/certbot
+mkdir -p /var/www/certbot/.well-known/acme-challenge
 
 # Build server_name list for the challenge server (all domains using same cert)
 CHALLENGE_NAMES="${RPC_DOMAIN}"
@@ -128,7 +128,7 @@ http {
         listen 80;
         server_name ${CHALLENGE_NAMES};
         location /.well-known/acme-challenge/ {
-            root /var/www/certbot;
+            alias /var/www/certbot/.well-known/acme-challenge/;
         }
         location / { return 200 'ok'; }
     }
@@ -151,7 +151,7 @@ certbot certonly \
     --non-interactive \
     --agree-tos \
     --email "${CERTBOT_EMAIL}" \
-    ${CERTBOT_DOMAINS} \
+    "${CERTBOT_DOMAINS}" \
     || {
         log "WARNING: certbot failed (DNS may not be propagated yet). Continuing without TLS."
         nginx -s stop 2>/dev/null || true
