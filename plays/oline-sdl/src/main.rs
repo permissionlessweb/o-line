@@ -2223,10 +2223,8 @@ async fn cmd_generate_sdl(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Erro
             )?
         };
 
-        let d = default_val("TLS_CONFIG_URL", None, "2");
-        let tls_config_url = read_input(&mut lines, "TLS setup command", Some(&d))?;
-        let d = default_val("ENTRYPOINT_URL", None, "2");
-        let entrypoint_url = read_input(&mut lines, "TLS setup command", Some(&d))?;
+        let tls_config_url = default_val("TLS_CONFIG_URL", None, "2");
+        let entrypoint_url = default_val("ENTRYPOINT_URL", None, "2");
 
         OLineConfig {
             mnemonic: String::new(),
