@@ -28,3 +28,7 @@ sha2 = "0.10"
 tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "time"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing = "0.1"
+ssh-key = { version = "0.6", features = ["rsa", "ed25519"] }
+openssh-sftp-client  = { version = "0.15", features = ["openssh"] }
+openssh = { version = "0.11", features = ["native-mux"] }
+
