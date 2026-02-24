@@ -1,0 +1,50 @@
+#   ${GRPC_DOMAIN}  - domain served for gRPC           (optional, omit block if empty)
+#   ${GRPC_PORT}    - internal gRPC port               (default: 9090)
+#   ${TLS_CERT}     - path to fullchain PEM         
+#   ${TLS_KEY}      - path to privkey PEM       
+
+upstream grpc_backend {
+    server 127.0.0.1:${GRPC_PORT};
+}
+
+# ── gRPC — HTTP redirect ───────────────────────────────────────────────────
+server {
+    listen 80;
+    server_name ${GRPC_DOMAIN};
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# ── gRPC — HTTPS/2 ────────────────────────────────────────────────────────
+server {
+    listen 443 ssl http2;
+    server_name ${GRPC_DOMAIN};
+
+    ssl_certificate     ${TLS_CERT};
+    ssl_certificate_key ${TLS_KEY};
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    location / {
+        grpc_pass         grpc://grpc_backend;
+        grpc_set_header   Host       $host;
+        grpc_set_header   X-Real-IP  $remote_addr;
+
+        # Handle gRPC errors
+        error_page 502 = /error502grpc;
+    }
+
+    location = /error502grpc {
+        internal;
+        default_type application/grpc;
+        add_header grpc-status 14;
+        add_header content-length 0;
+        return 204;
+    }
+}

@@ -186,6 +186,7 @@ graph LR
 
 ## TODO
 
+- enable proxy by default when updating cloudflare dns
 - route to sdl-template folder, define files per specific runtime
 - fix cosmovisor issue (not recognizing terpd in correct path for some reason)
 - test l/r tackle for statesync from special teams

@@ -1,51 +1,62 @@
-#!/bin/sh
-# tls-setup.sh — pre-start TLS curation for cosmos-sdk nodes
+#!/bin/bash
+# tls-setup.sh --rpc <P2P_DOMAIN>:<RPC_PORT> --grpc <GRPC_DOMAIN>:<GRPC_PORT> --p2p <P2P_DOMAIN>:<P2P_PORT> --api <API_DOMAIN>:<API_PORT>
 #
-# Fetched and executed by START_CMD before the node binary starts.
-# Installs nginx, obtains a Let's Encrypt cert, wires up a reverse proxy,
-# and patches config.toml / app.toml so the node advertises HTTPS endpoints.
+# NOTE: if any flag is omitted, this means this node is not exposing/providing these ports, so we avoid configuring nginx 
 #
-# Required env vars:
-#   RPC_DOMAIN        - public domain for CometBFT RPC (e.g. statesync.terp.network)
-#   CERTBOT_EMAIL     - email for Let's Encrypt registration
-#
-# Optional env vars (each section omitted when unset):
-#   API_DOMAIN        - public domain for Cosmos REST API
-#   GRPC_DOMAIN       - public domain for Cosmos gRPC
-#   P2P_DOMAIN        - public domain for P2P seed endpoint (HTTP passthrough)
-#   RPC_PORT          - internal RPC port          (default: 26657)
-#   API_PORT          - internal REST API port     (default: 1317)
-#   GRPC_PORT         - internal gRPC port         (default: 9090)
-#   P2P_PORT          - internal P2P port          (default: 26656)
-#   NODE_HOME         - node home directory        (default: /root/.terpd)
-#   NGINX_CONF_URL    - URL of the nginx config template to fetch
-#                       (defaults to the rpc-api-grpc-peer template in this repo)
-#
-# Usage in SDL env:
-#   START_CMD=/bin/sh -c "curl -fsSL $TLS_SETUP_URL | sh && exec terpd start"
 
 set -e
-
 log() { echo "[tls-setup] $*"; }
 die() { echo "[tls-setup] ERROR: $*" >&2; exit 1; }
 
+NODE_CONFIG_SCRIPT="${NODE_CONFIG_SCRIPT:-https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/feat/tls/plays/scripts/config-node-endpoints.sh}"
+NGINX_CONFIG_TEMPLATES="${NGINX_CONFIG_TEMPLATES:-https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/feat/tls/plays/flea-flicker/nginx}"
+TLS_CERT_PATH="/etc/letsencrypt/live/cert.pem"
+TLS_PRIVKEY_PATH="/etc/letsencrypt/live/privkey.pem"
+
 # ── defaults ──────────────────────────────────────────────────────────────────
-RPC_PORT="${RPC_PORT:-26657}"
-API_PORT="${API_PORT:-1317}"
-GRPC_PORT="${GRPC_PORT:-9090}"
-P2P_PORT="${P2P_PORT:-26656}"
-NODE_HOME="${NODE_HOME:-/root/.terpd}"
-CONFIG_DIR="${NODE_HOME}/config"
+services="RPC API PEER GRPC"
+at_least_one=false
+for svc in $services; do
+    eval "origin_val=\"\$${svc}_ORIGIN\""
+    eval "port_val=\"\$${svc}_PORT\""
+    # echo "DEBUG: ${svc}_ORIGIN=$origin_val, ${svc}_PORT=$port_val" >&2
+    if [ -n "$origin_val" ] && [ -n "$port_val" ]; then
+        # Check port is numeric using POSIX case statement
+        case "$port_val" in
+            ''|*[!0-9]*)
+                die "port must a numeric value  be numeric"
+                ;;
+            *)
+                # Port is numeric - additional validation
+                if [ "$port_val" -lt 1 ] || [ "$port_val" -gt 65535 ]; then
+                   die " ${svc}_PORT $port_val out of range 1-65535"
+                fi
+                at_least_one=true
+                ;;
+        esac
+    fi
+done
 
-NGINX_CONF_URL="${NGINX_CONF_URL:-https://raw.githubusercontent.com/permissionlessweb/o-line/master/plays/flea-flicker/nginx/rpc-api-grpc-peer}"
-
-
-[ -n "${RPC_DOMAIN}" ]    || die "RPC_DOMAIN must be set"
-[ -n "${CERTBOT_EMAIL}" ] || die "CERTBOT_EMAIL must be set"
+# Fail if no service has both ORIGIN and PORT set
+if [ "$at_least_one" = false ]; then
+    echo "Error: At least one of the following must be fully set (ORIGIN and PORT):" >&2
+    echo "  RPC, API, PEER, or GRPC" >&2
+    echo "Example: RPC_ORIGIN=localhost RPC_PORT=8545 $0" >&2
+    exit 1
+fi
+log "Configuration validated."
+eval "RPC_ORIGIN=\"\$RPC_ORIGIN\"; RPC_PORT=\"\$RPC_PORT\""
+eval "API_ORIGIN=\"\$API_ORIGIN\"; API_PORT=\"\$API_PORT\""
+eval "PEER_ORIGIN=\"\$PEER_ORIGIN\"; PEER_PORT=\"\$PEER_PORT\""
+eval "GRPC_ORIGIN=\"\$GRPC_ORIGIN\"; GRPC_PORT=\"\$GRPC_PORT\""
+[ -n "$RPC_ORIGIN" ] && [ -n "$RPC_PORT" ] && log "RPC: $RPC_ORIGIN:$RPC_PORT"
+[ -n "$API_ORIGIN" ] && [ -n "$API_PORT" ] && log "API: $API_ORIGIN:$API_PORT"
+[ -n "$PEER_ORIGIN" ] && [ -n "$PEER_PORT" ] && log "PEER: $PEER_ORIGIN:$PEER_PORT"
+[ -n "$GRPC_ORIGIN" ] && [ -n "$GRPC_PORT" ] && log "GRPC: $GRPC_ORIGIN:$GRPC_PORT"
+# die "testing"
 
 # ── 1. install nginx + certbot ─────────────────────────────────────────────────
 log "Installing nginx, certbot, gettext..."
-
 if command -v apt-get > /dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
@@ -56,177 +67,72 @@ else
     die "Unsupported package manager (need apt-get or apk)"
 fi
 
-# ── 2. fetch nginx config template ───────────────────────────────────────────
-log "Fetching nginx config template from ${NGINX_CONF_URL}"
-NGINX_TEMPLATE=$(mktemp /tmp/nginx-template.XXXXXX)
-curl -fsSL "${NGINX_CONF_URL}" -o "${NGINX_TEMPLATE}" \
-    || die "Failed to fetch nginx config template"
-
-# ── 3. gather node environment & set TLS cert paths ───────────────────────────
-# certonly --webroot stores certs under /etc/letsencrypt/live/<primary-domain>/
-TLS_CERT="/etc/letsencrypt/live/${RPC_DOMAIN}/fullchain.pem"
-TLS_KEY="/etc/letsencrypt/live/${RPC_DOMAIN}/privkey.pem"
-
-log "Node home:    ${NODE_HOME}"
-log "RPC:          https://${RPC_DOMAIN} → 127.0.0.1:${RPC_PORT}"
-[ -n "${API_DOMAIN}" ]  && log "API:          https://${API_DOMAIN} → 127.0.0.1:${API_PORT}"
-[ -n "${GRPC_DOMAIN}" ] && log "gRPC:         https://${GRPC_DOMAIN} → 127.0.0.1:${GRPC_PORT}"
-[ -n "${P2P_DOMAIN}" ]  && log "P2P:          http://${P2P_DOMAIN}  → 127.0.0.1:${P2P_PORT}"
-
-# Build envsubst variable list (only substitute our vars, not nginx's $host etc.)
-SUBST_VARS="${RPC_DOMAIN} ${RPC_PORT} ${API_DOMAIN} ${API_PORT} ${GRPC_DOMAIN} ${GRPC_PORT} ${P2P_DOMAIN} ${P2P_PORT} ${TLS_CERT} ${TLS_KEY}"
-
-# Export all vars so envsubst can see them
-export RPC_DOMAIN RPC_PORT API_DOMAIN API_PORT GRPC_DOMAIN GRPC_PORT P2P_DOMAIN P2P_PORT TLS_CERT TLS_KEY
-
-# Generate the full template (with all optional blocks) to a temp file
-NGINX_FULL=$(mktemp /tmp/nginx-full.XXXXXX)
-envsubst "${SUBST_VARS}" < "${NGINX_TEMPLATE}" > "${NGINX_FULL}"
-
-# Strip optional server blocks whose domain is empty.
-# Marks server blocks that contain server_name with an empty value and removes them.
-strip_server_block() {
-    local file="$1"
-    local domain_val="$2"
-    if [ -z "${domain_val}" ]; then
-        # Remove the server block containing server_name ;  (substituted from empty var)
-        awk '
-            /server[[:space:]]*\{/ { buf = $0; depth = 1; next }
-            depth > 0 {
-                buf = buf "\n" $0
-                if (/\{/) depth++
-                if (/\}/) { depth--; if (depth == 0) { print_block = 1 } }
-            }
-            depth == 0 && print_block {
-                if (buf !~ /server_name[[:space:]]*;/) printf "%s\n", buf
-                print_block = 0; buf = ""
-                next
-            }
-            depth == 0 && !print_block { print }
-        ' "${file}" > "${file}.stripped" && mv "${file}.stripped" "${file}"
+# ── 2. fetch each nginx config template based on which flags are being configured  ───────────────────────────────────────────
+log "Fetching nginx config template from ${NGINX_CONFIG_TEMPLATES}"
+for svc in $services; do
+    PORT_VAR="${svc}_PORT"
+    DOMAIN_VAR="${svc}_DOMAIN"
+    port_val=$(printenv "$PORT_VAR" || true)
+    domain_val=$(printenv "$DOMAIN_VAR" || true)
+    NGINX_TEMPLATE=$(mktemp /tmp/nginx-template."${svc}"XXXXXX)
+    if [ -n "$port_val" ] && [ -n "$domain_val" ]; then
+        log "Configuring service: $svc"
+        TEMPLATE_FILE=$(mktemp /tmp/nginx-template."${svc}".XXXXXX)
+        curl -fsSL "${NGINX_CONFIG_TEMPLATES}/${svc}" -o "${TEMPLATE_FILE}" || die "Failed to fetch nginx config template for ${svc}"
+        export "$PORT_VAR=$port_val"
+        export "$DOMAIN_VAR=$domain_val"
+        RENDERED_CONF="${RENDERED_DIR}/${svc}.conf"
+        envsubst < "${TEMPLATE_FILE}" > "${RENDERED_CONF}"
+        log "Rendered config written to ${RENDERED_CONF}"
     fi
-}
+done
+# -------------------------------------------------------------------
+# Update main nginx config (uncomment includes per service)
+# -------------------------------------------------------------------
+cp "${MAIN_NGINX_CONF}" "${NGINX_FULL}"
+for svc in $services; do
+    PORT_VAR="${svc}_PORT"
+    port_val=$(printenv "$PORT_VAR" || true)
+    if [ -n "$port_val" ]; then
+        log "Enabling include for $svc"
+        # Uncomment only the matching service include
+        sed -i.bak "/SERVICE:${svc}/s/^#\s*//" "${NGINX_FULL}"
+    fi
+done
 
-strip_server_block "${NGINX_FULL}" "${API_DOMAIN}"
-strip_server_block "${NGINX_FULL}" "${GRPC_DOMAIN}"
-strip_server_block "${NGINX_FULL}" "${P2P_DOMAIN}"
+# open up ssh to dedicated port (remove default from 22)
+# install ssh server 
+sudo apt install -y openssh-server
+sudo mkdir -p /var/run/sshd ~/.ssh
+chmod 700 ~/.ssh
+# change default port
+sudo sed -i 's/#Port 22/Port ${SSH_PORT}/' /etc/ssh/sshd_config
+sudo sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+sudo sed -i 's/PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+sudo sed -i 's/PubkeyAuthentication no/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+# remove default password (if exists)
+# add authorized ssh pubkey 
+touch ~/.ssh/authorized_keys
+echo "$SSH_PUBKEY" >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+# Start SSH daemon
+sudo /usr/sbin/sshd -D &
 
-# ── 4. bootstrap nginx for certbot HTTP-01 challenge ─────────────────────────
-log "Writing minimal HTTP nginx config for certbot challenge..."
+# ── 5. wait for TLS certificate to be set via sftp ─────────────────────────────────────
+log "Waiting for tls cert & keys to be provided via sftp"
+while [ ! -e "$TLS_CERT_PATH" ] && [ ! -e "$TLS_PRIVKEY_PATH" ]; do
+    sleep 5
+done
+log "Set key & cert at path: $TLS_CERT_PATH & $TLS_PRIVKEY_PATH  "
 
-mkdir -p /var/www/certbot/.well-known/acme-challenge
-
-# Build server_name list for the challenge server (all domains using same cert)
-CHALLENGE_NAMES="${RPC_DOMAIN}"
-[ -n "${API_DOMAIN}" ]  && CHALLENGE_NAMES="${CHALLENGE_NAMES} ${API_DOMAIN}"
-[ -n "${GRPC_DOMAIN}" ] && CHALLENGE_NAMES="${CHALLENGE_NAMES} ${GRPC_DOMAIN}"
-
-cat > /etc/nginx/nginx.conf << NGINX_HTTP_CONF
-events { worker_connections 512; }
-http {
-    server {
-        listen 80;
-        server_name ${CHALLENGE_NAMES};
-        location /.well-known/acme-challenge/ {
-            alias /var/www/certbot/.well-known/acme-challenge/;
-        }
-        location / { return 200 'ok'; }
-    }
-}
-NGINX_HTTP_CONF
-
-log "Starting nginx for ACME challenge..."
-nginx -t && nginx
-
-# ── 5. obtain TLS certificate via certbot ─────────────────────────────────────
-log "Running certbot for ${RPC_DOMAIN}..."
-
-CERTBOT_DOMAINS="-d ${RPC_DOMAIN}"
-[ -n "${API_DOMAIN}" ]  && CERTBOT_DOMAINS="${CERTBOT_DOMAINS} -d ${API_DOMAIN}"
-[ -n "${GRPC_DOMAIN}" ] && CERTBOT_DOMAINS="${CERTBOT_DOMAINS} -d ${GRPC_DOMAIN}"
-
-certbot certonly \
-    --webroot \
-    --webroot-path /var/www/certbot \
-    --non-interactive \
-    --agree-tos \
-    --email "${CERTBOT_EMAIL}" \
-    "${CERTBOT_DOMAINS}" \
-    || {
-        log "WARNING: certbot failed (DNS may not be propagated yet). Continuing without TLS."
-        nginx -s stop 2>/dev/null || true
-        rm -f "${NGINX_TEMPLATE}" "${NGINX_FULL}"
-        # Node will still start — nginx won't be running
-        exit 0
-    }
-
-log "Certificate obtained at ${TLS_CERT}"
-
-# ── 6. stop temporary nginx, apply full HTTPS config, restart ─────────────────
+# ── 6. configure nginx based on flags  ─────────────────
 log "Stopping temporary nginx..."
-nginx -s stop 2>/dev/null || true
-sleep 1
-
-log "Applying full HTTPS nginx config..."
-cp "${NGINX_FULL}" /etc/nginx/nginx.conf
-
-nginx -t || die "nginx config test failed after applying HTTPS config"
-
 log "Starting nginx daemon..."
 nginx
-
-log "nginx running with TLS for ${RPC_DOMAIN}"
+log "nginx running with TLS for:"
 
 # ── 7. patch config.toml ──────────────────────────────────────────────────────
-if [ -f "${CONFIG_DIR}/config.toml" ]; then
-    log "Patching config.toml..."
-
-    # rpc.laddr — bind locally (nginx handles external TLS)
-    sed -i \
-        -e "/^\[rpc\]$/,/^\[/ s|^laddr *=.*|laddr = \"tcp://127.0.0.1:${RPC_PORT}\"|" \
-        "${CONFIG_DIR}/config.toml"
-
-    # rpc.tls_cert_file / rpc.tls_key_file — enable native CometBFT HTTPS on RPC
-    sed -i \
-        -e "/^\[rpc\]$/,/^\[/ s|^tls_cert_file *=.*|tls_cert_file = \"${TLS_CERT}\"|" \
-        -e "/^\[rpc\]$/,/^\[/ s|^tls_key_file *=.*|tls_key_file = \"${TLS_KEY}\"|" \
-        "${CONFIG_DIR}/config.toml"
-
-    # p2p.laddr — P2P always on all interfaces (not proxied by nginx)
-    sed -i \
-        -e "/^\[p2p\]$/,/^\[/ s|^laddr *=.*|laddr = \"tcp://0.0.0.0:${P2P_PORT}\"|" \
-        "${CONFIG_DIR}/config.toml"
-
-    log "config.toml patched"
-else
-    log "WARNING: ${CONFIG_DIR}/config.toml not found — skipping"
-fi
-
-# ── 8. patch app.toml ─────────────────────────────────────────────────────────
-if [ -f "${CONFIG_DIR}/app.toml" ]; then
-    log "Patching app.toml..."
-
-    # api.enabled = true
-    sed -i \
-        -e "/^\[api\]$/,/^\[/ s|^enable *=.*|enable = true|" \
-        "${CONFIG_DIR}/app.toml"
-
-    # api.address — bind locally (nginx handles external TLS)
-    sed -i \
-        -e "/^\[api\]$/,/^\[/ s|^address *=.*|address = \"tcp://127.0.0.1:${API_PORT}\"|" \
-        "${CONFIG_DIR}/app.toml"
-
-    # grpc.address — gRPC on all interfaces (nginx or direct access)
-    sed -i \
-        -e "/^\[grpc\]$/,/^\[/ s|^address *=.*|address = \"0.0.0.0:${GRPC_PORT}\"|" \
-        "${CONFIG_DIR}/app.toml"
-
-    log "app.toml patched"
-else
-    log "WARNING: ${CONFIG_DIR}/app.toml not found — skipping"
-fi
-
-# ── cleanup ───────────────────────────────────────────────────────────────────
-rm -f "${NGINX_TEMPLATE}" "${NGINX_FULL}"
-
-log "TLS setup complete. Handing off to node start command."
+NODE_SCRIPT=node-config.sh
+# download patch file, provide flags to setup ports + comptaible with nginx reverse proxy setup
+curl -fsSL "${NODE_CONFIG_SCRIPT}" -o "$NODE_SCRIPT" || die "Failed to fetch node config template"
+sh $NODE_SCRIPT

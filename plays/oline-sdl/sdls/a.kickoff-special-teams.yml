@@ -13,7 +13,15 @@ services:
         to:
           - global: true
         accept:
-          - statesync.terp.network # ← only for RPC, not P2P
+          - statesync.terp.network
+      - port: 80
+        as: 80
+        to:
+          - global: true
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
     env:
       - MONIKER=${SNAPSHOT_MONIKER}
       - CHAIN_JSON=${CHAIN_JSON}
@@ -44,29 +52,29 @@ services:
       - SNAPSHOT_ON_START=1
       - TLS_CONFIG_URL=${TLS_CONFIG_URL}
       - RPC_DOMAIN=statesync.terp.network
-      - CERTBOT_EMAIL=${CERTBOT_EMAIL}
-    command:
-      - sh
-    args:
-      - -c
-      - curl -fsSL ${ENTRYPOINT_URL} -o /tmp/wrapper.sh; sh /tmp/wrapper.sh
+    # command:
+    #   - sh
+    # args:
+    #   - -c
+    #   - curl -fsSL ${ENTRYPOINT_URL} -o /tmp/wrapper.sh; sh /tmp/wrapper.sh
   ${SEED_SVC}:
     image: ${OMNIBUS_IMAGE}
     expose:
       - port: 26657
         as: 26657
-        accept:
-          - seed-statesync.terp.network
-          - www.seed-statesync.terp.network
         to:
           - global: true
       - port: 26656
         as: 26656
-        accept:
-          - seed.terp.network
-          - www.seed.terp.network
         to:
           - global: true
+      - port: 80
+        as: 80
+        to:
+          - global: true
+        accept:
+          - seed.terp.network
+          - seed-statesync.terp.network
     env:
       - TLS_CONFIG_URL=${TLS_CONFIG_URL}
       - MONIKER=${SEED_MONIKER}
@@ -86,11 +94,11 @@ services:
       - SNAPSHOT_FORMAT=tar.lz4
       - CERTBOT_EMAIL=${CERTBOT_EMAIL}
       - RPC_DOMAIN=seed.terp.network
-    command:
-      - sh
-    args:
-      - -c
-      - curl -fsSL ${ENTRYPOINT_URL} -o /tmp/wrapper.sh; sh /tmp/wrapper.sh
+    # command:
+    #   - sh
+    # args:
+    #   - -c
+    #   - curl -fsSL ${ENTRYPOINT_URL} -o /tmp/wrapper.sh; sh /tmp/wrapper.sh
   ${MINIO_SVC}:
     image: ${MINIO_IPFS_IMAGE}
     expose:
@@ -106,8 +114,9 @@ services:
         as: 9000
         to:
           - service: ${SNAPSHOT_SVC}
-      - port: 80
-        as: 80
+      - port: 443
+        as: 443
+        proto: tcp
         to:
           - global: true
         accept:
@@ -116,11 +125,6 @@ services:
           max_body_size: 104857600
           read_timeout: 60000
           send_timeout: 60000
-      - port: 443
-        as: 443
-        proto: tcp
-        to:
-          - global: true
       - port: 4001
         as: 4001
         proto: tcp
