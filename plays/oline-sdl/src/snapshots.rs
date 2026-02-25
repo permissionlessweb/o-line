@@ -1,6 +1,6 @@
 use crate::{
     cli::{prompt_s3_creds, redact_if_secret, urlencoded},
-    config::{days_to_date, OLineConfig, RuntimeDefaults},
+    config::{days_to_date, OLineConfig},
     crypto::{hmac_sha256, sha256_hex},
 };
 use std::{
@@ -18,7 +18,7 @@ pub const SEED_P2P_DOMAIN: &str = "seed.terp.network";
 /// `s3_key`, `s3_secret`, and `s3_host` are generated/derived at deploy time.
 pub fn insert_s3_vars(
     vars: &mut HashMap<String, String>,
-    config: &OLineConfig,
+    c: &OLineConfig,
     s3_key: &str,
     s3_secret: &str,
     s3_host: &str,
@@ -26,30 +26,20 @@ pub fn insert_s3_vars(
     vars.insert("S3_KEY".into(), s3_key.to_string());
     vars.insert("S3_SECRET".into(), s3_secret.to_string());
     vars.insert("S3_HOST".into(), s3_host.to_string());
-    vars.insert("SNAPSHOT_PATH".into(), config.snapshot_path.clone());
-    vars.insert("SNAPSHOT_TIME".into(), config.snapshot_time.clone());
-    vars.insert(
-        "SNAPSHOT_SAVE_FORMAT".into(),
-        config.snapshot_save_format.clone(),
-    );
+    vars.insert("SNAPSHOT_PATH".into(), c.val("snapshot.path"));
+    vars.insert("SNAPSHOT_TIME".into(), c.val("snapshot.time"));
+    vars.insert("SNAPSHOT_SAVE_FORMAT".into(), c.val("snapshot.save_format"));
+    vars.insert("SNAPSHOT_RETAIN".into(), c.val("snapshot.retain"));
+    vars.insert("SNAPSHOT_KEEP_LAST".into(), c.val("snapshot.keep_last"));
     // Metadata URL uses the public download domain so URLs in snapshot.json are externally accessible
-    vars.insert(
-        "SNAPSHOT_METADATA_URL".into(),
-        format!(
-            "https://{}/{}/snapshot.json",
-            config.snapshot_download_domain,
-            config.snapshot_path.trim_matches('/')
-        ),
+    let dd = c.val("snapshot.download_domain");
+    let meta_url = format!(
+        "https://{}/{}/snapshot.json",
+        dd,
+        c.val("snapshot.path").trim_matches('/')
     );
-    vars.insert(
-        "SNAPSHOT_DOWNLOAD_DOMAIN".into(),
-        config.snapshot_download_domain.clone(),
-    );
-    vars.insert("SNAPSHOT_RETAIN".into(), config.snapshot_retain.clone());
-    vars.insert(
-        "SNAPSHOT_KEEP_LAST".into(),
-        config.snapshot_keep_last.clone(),
-    );
+    vars.insert("SNAPSHOT_METADATA_URL".into(), meta_url);
+    vars.insert("SNAPSHOT_DOWNLOAD_DOMAIN".into(), dd);
 }
 
 /// Helper to insert minio-ipfs variables.
@@ -57,20 +47,23 @@ pub fn insert_s3_vars(
 /// shared between the snapshot node (as S3_KEY/S3_SECRET) and MinIO.
 pub fn insert_minio_vars(
     vars: &mut HashMap<String, String>,
-    config: &OLineConfig,
+    c: &OLineConfig,
     root_user: &str,
     root_password: &str,
 ) {
-    vars.insert("MINIO_IPFS_IMAGE".into(), config.minio_ipfs_image.clone());
+    vars.insert("MINIO_IPFS_IMAGE".into(), c.val("minio.ipfs_image"));
     // Derive MINIO_BUCKET from snapshot_path (first path component, e.g. "snapshots" from "snapshots/terpnetwork")
-    let minio_bucket = config
-        .snapshot_path
+    let minio_bucket = c
+        .val("snapshot.path")
         .split('/')
         .next()
         .unwrap_or("snapshots")
         .to_string();
     vars.insert("MINIO_BUCKET".into(), minio_bucket);
-    vars.insert("AUTOPIN_INTERVAL".into(), config.autopin_interval.clone());
+    vars.insert(
+        "AUTOPIN_INTERVAL".into(),
+        c.val("minio.autopin_interval").clone(),
+    );
     vars.insert("MINIO_ROOT_USER".into(), root_user.to_string());
     vars.insert("MINIO_ROOT_PASSWORD".into(), root_password.to_string());
 }
@@ -185,10 +178,9 @@ async fn s3_request(
 }
 
 pub async fn fetch_latest_snapshot_url(
-    defaults: &RuntimeDefaults,
+    state_url: &str,
+    base_url: &str,
 ) -> Result<String, Box<dyn Error>> {
-    let state_url = &defaults.snapshot_state_url;
-    let base_url = &defaults.snapshot_base_url;
     tracing::info!("Fetching latest snapshot info from {}...", state_url);
     let resp = reqwest::get(state_url).await?.text().await?;
     let trimmed = resp.trim();
@@ -235,7 +227,7 @@ pub async fn fetch_snapshot_url_from_metadata(metadata_url: &str, fallback_url: 
 
 // ── Subcommand: test-s3 ──
 
-pub async fn cmd_test_s3(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Error>> {
+pub async fn cmd_test_s3() -> Result<(), Box<dyn Error>> {
     tracing::info!("=== S3 Connection Test ===\n");
 
     tracing::info!("  Note: S3/MinIO credentials are auto-generated per deployment.");
@@ -273,10 +265,7 @@ pub async fn cmd_test_s3(defaults: &RuntimeDefaults) -> Result<(), Box<dyn Error
         "  Prefix:     {}",
         if prefix.is_empty() { "(root)" } else { &prefix }
     );
-    tracing::info!(
-        "  Access key: {}",
-        redact_if_secret("S3_KEY", &s3_key, defaults)
-    );
+    tracing::info!("  Access key: {}", redact_if_secret("S3_KEY", &s3_key,));
 
     let client = reqwest::Client::new();
     let region = "us-east-1";

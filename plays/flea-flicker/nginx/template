@@ -16,5 +16,8 @@ http {
     # include /etc/nginx/conf.d/api.conf;        # PORT:API_PORT
     # include /etc/nginx/conf.d/grpc.conf;        # PORT:GRPC_PORT
     # include /etc/nginx/conf.d/rpc.conf;        # PORT:RPC_PORT
-    # include /etc/nginx/conf.d/peer.conf;        # PORT:PEER_PORT
+}
+
+stream {
+    include /etc/nginx/conf.d/peer.conf;  # always included
 }

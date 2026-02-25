@@ -11,89 +11,196 @@ use std::{
 };
 
 use crate::{
-    cli::{prompt_continue, read_input, read_secret_input, redact_if_secret},
+    cli::{prompt_continue, read_input},
     crypto::{decrypt_mnemonic, encrypt_mnemonic},
-    snapshots::fetch_latest_snapshot_url,
+    FIELD_DESCRIPTORS,
 };
+
+// ── Field descriptors — the single source of truth for collection logic ───────
+/// c = category\
+/// k = key\
+/// ev = env_var\
+/// p = prompt\
+/// d = default; empty string "" for optional fields\
+/// s = secret
 // ── OLineConfig & OLineDeployer ──
+#[derive(Clone, Debug)]
+pub struct Fd {
+    /// c = category\
+    pub c: &'static str,
+    /// k = key\
+    pub k: &'static str,
+    /// ev = env_var\
+    pub ev: &'static str,
+    /// p = prompt\
+    pub p: &'static str,
+    /// d = default; empty string "" for optional fields\
+    pub d: &'static str,
+    /// s = secret
+    pub s: bool,
+}
 
-#[derive(Serialize, Deserialize, Clone)]
+// ── OLineConfig & OLineDeployer ──
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct OLineConfig {
-    pub mnemonic: String,
-    pub rpc_endpoint: String,
-    pub grpc_endpoint: String,
-    pub snapshot_url: String,
-    pub validator_peer_id: String,
-    pub trusted_providers: Vec<String>,
-    pub auto_select_provider: bool,
-    // S3 snapshot export (credentials auto-generated per deployment)
-    pub snapshot_path: String,
-    pub snapshot_time: String,
-    pub snapshot_save_format: String,
-    pub snapshot_retain: String,
-    pub snapshot_keep_last: String,
-    // MinIO-IPFS
-    pub minio_ipfs_image: String,
-    pub s3_bucket: String,
-    pub autopin_interval: String,
-    pub snapshot_download_domain: String,
-    pub certbot_email: String,
-    // Cloudflare DNS (optional — auto-update CNAME after Phase A deploy)
-    pub cloudflare_api_token: String,
-    pub cloudflare_zone_id: String,
-    pub tls_config_url: String,
-    pub entrypoint_url: String,
+    pub mnemonic: String, // kept typed — always required
+    #[serde(flatten)]
+    pub categories: HashMap<String, ConfigCategory>,
 }
 
-// ── Runtime defaults (loaded from env vars / .env, with hardcoded fallbacks) ──
-
-#[derive(Clone)]
-pub struct RuntimeDefaults {
-    pub secret_keys: Vec<String>,
-    pub env_key: String,
-    pub sdl_dir: PathBuf,
-    pub snapshot_state_url: String,
-    pub snapshot_base_url: String,
-    pub chain_json: String,
-    pub addrbook_url: String,
-    pub omnibus_image: String,
-    pub minio_ipfs_image: String,
-}
-
-impl RuntimeDefaults {
-    pub fn load() -> Self {
-        Self {
-            secret_keys: std::env::var("OLINE_SECRET_KEYS")
-                .unwrap_or_else(|_| "S3_KEY,S3_SECRET,MINIO_ROOT_USER,MINIO_ROOT_PASSWORD,TERPD_P2P_PRIVATE_PEER_IDS,CF_API_TOKEN".into())
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .collect(),
-            env_key: std::env::var("OLINE_ENV_KEY_NAME").unwrap_or_else(|_| "OLINE_ENCRYPTED_MNEMONIC".into()),
-            sdl_dir: PathBuf::from(std::env::var("OLINE_SDL_DIR").unwrap_or_else(|_| "sdls".into())),
-            snapshot_state_url: std::env::var("OLINE_SNAPSHOT_STATE_URL").expect("latest snapshot json"),
-            snapshot_base_url: std::env::var("OLINE_SNAPSHOT_BASE_URL").expect("snapshot server"),
-            chain_json: std::env::var("OLINE_CHAIN_JSON").expect("chain json"),
-            addrbook_url: std::env::var("OLINE_ADDRBOOK_URL").expect("addrbook"),
-            omnibus_image: std::env::var("OLINE_OMNIBUS_IMAGE").expect("omnibus image"),
-            minio_ipfs_image: std::env::var("OLINE_MINIO_IPFS_IMAGE").expect("minio-ipfs version")
-        }
+impl OLineConfig {
+    pub fn sdl_dir(&self) -> PathBuf {
+        PathBuf::from(self.val("default.sdl_dir"))
     }
-
     pub fn load_sdl(&self, filename: &str) -> Result<String, Box<dyn Error>> {
-        let path = self.sdl_dir.join(filename);
+        let path = self.sdl_dir().join(filename);
         std::fs::read_to_string(&path)
             .map_err(|e| format!("Failed to read SDL '{}': {}", path.display(), e).into())
     }
+    pub fn category(&self, name: &str) -> Option<&ConfigCategory> {
+        self.categories.get(name)
+    }
 
-    pub fn is_secret(&self, key: &str) -> bool {
-        self.secret_keys.iter().any(|s| s == key)
+    pub fn category_mut(&mut self, name: &str) -> &mut ConfigCategory {
+        self.categories.entry(name.to_string()).or_default()
+    }
+
+    /// Convenience: read a value from any category with "category.key" dot syntax.
+    pub fn get(&self, path: &str) -> Option<&ConfigValue> {
+        let (cat, key) = path.split_once('.')?;
+        self.category(cat)?.get(key)
+    }
+
+    pub fn get_str(&self, path: &str) -> Option<&str> {
+        self.get(path)?.as_str()
+    }
+    pub fn val(&self, path: &str) -> String {
+        self.get_str(path).unwrap_or("").to_string()
     }
 }
 
-// ── Config collection ──
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct ConfigCategory {
+    #[serde(flatten)]
+    fields: HashMap<String, ConfigValue>,
+}
 
-// ── .env file helpers ──
+impl ConfigCategory {
+    pub fn get(&self, k: &str) -> Option<&ConfigValue> {
+        self.fields.get(k)
+    }
 
+    pub fn set(&mut self, k: impl Into<String>, value: impl Into<ConfigValue>) {
+        self.fields.insert(k.into(), value.into());
+    }
+
+    pub fn get_str(&self, k: &str) -> Option<&str> {
+        self.get(k)?.as_str()
+    }
+
+    pub fn get_str_or<'a>(&'a self, k: &str, d: &'a str) -> &'a str {
+        self.get_str(k).unwrap_or(d)
+    }
+
+    pub fn get_bool(&self, k: &str) -> Option<bool> {
+        self.get(k)?.as_bool()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &ConfigValue)> {
+        self.fields.iter()
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum ConfigValue {
+    Text(String),
+    Bool(bool),
+    List(Vec<String>),
+}
+impl ConfigValue {
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::Text(s) => Some(s),
+            _ => None,
+        }
+    }
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Self::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+    pub fn as_list(&self) -> Option<&Vec<String>> {
+        match self {
+            Self::List(v) => Some(v),
+            _ => None,
+        }
+    }
+}
+impl From<String> for ConfigValue {
+    fn from(s: String) -> Self {
+        Self::Text(s)
+    }
+}
+impl From<&str> for ConfigValue {
+    fn from(s: &str) -> Self {
+        Self::Text(s.to_string())
+    }
+}
+impl From<bool> for ConfigValue {
+    fn from(b: bool) -> Self {
+        Self::Bool(b)
+    }
+}
+impl From<Vec<String>> for ConfigValue {
+    fn from(v: Vec<String>) -> Self {
+        Self::List(v)
+    }
+}
+
+#[macro_export]
+macro_rules! define_fields {
+    (
+        $(
+            $c:literal / $k:literal =>
+                $ev:literal, $p:literal, $d:literal, $s:literal
+        ),*
+        $(,)?
+    ) => {
+        &[
+            $(
+                crate::config::Fd {
+                    c:  $c,
+                    k:  $k,
+                    ev: $ev,
+                    p:  $p,
+                    d:  $d,
+                    s:  $s,
+                }
+            ),*
+        ]
+    };
+}
+// impl RuntimeDefaults {
+//     pub fn load() -> Self {
+//         Self {
+//             secret_keys: std::env::var("OLINE_SECRET_KEYS")
+//                 .unwrap_or_else(|_| "S3_KEY,S3_SECRET,MINIO_ROOT_USER,MINIO_ROOT_PASSWORD,TERPD_P2P_PRIVATE_PEER_IDS,CF_API_TOKEN".into())
+//                 .split(',')
+//                 .map(|s| s.trim().to_string())
+//                 .collect(),
+//             env_key: std::env::var("OLINE_ENV_KEY_NAME").unwrap_or_else(|_| "OLINE_ENCRYPTED_MNEMONIC".into()),
+//             sdl_dir: PathBuf::from(std::env::var("SDL_DIR").unwrap_or_else(|_| "sdls".into())),
+//             snapshot_state_url: std::env::var("OLINE_SNAPSHOT_STATE_URL").expect("latest snapshot json"),
+//             snapshot_base_url: std::env::var("OLINE_SNAPSHOT_BASE_URL").expect("snapshot server"),
+//             chain_json: ,
+//             addrbook_url: ,
+//             omnibus_image:
+//             minio_ipfs_image: std::env::var("OLINE_MINIO_IPFS_IMAGE").expect("minio-ipfs version")
+//         }
+//     }
+// }
 /// Load KEY=VALUE pairs from .env file into process environment.
 /// Skips comments (#), empty lines, and the encrypted mnemonic key.
 /// Does not override env vars that are already set.
@@ -137,12 +244,13 @@ pub fn default_val_opt(env_key: &str, saved: Option<&str>) -> Option<String> {
         .or_else(|| saved.map(String::from))
 }
 
-pub fn read_encrypted_mnemonic_from_env(env_key: &str) -> Result<String, Box<dyn Error>> {
+pub fn read_encrypted_mnemonic_from_env() -> Result<String, Box<dyn Error>> {
     let env_path = Path::new(".env");
     if !env_path.exists() {
         return Err("No .env file found. Run `oline encrypt` first to store your mnemonic.".into());
     }
-
+    let env_key =
+        std::env::var("OLINE_ENV_KEY_NAME").unwrap_or_else(|_| "OLINE_ENCRYPTED_MNEMONIC".into());
     let contents = fs::read_to_string(env_path)?;
     for line in contents.lines() {
         let line = line.trim();
@@ -164,8 +272,10 @@ pub fn read_encrypted_mnemonic_from_env(env_key: &str) -> Result<String, Box<dyn
     .into())
 }
 
-pub fn write_encrypted_mnemonic_to_env(env_key: &str, blob: &str) -> Result<(), Box<dyn Error>> {
+pub fn write_encrypted_mnemonic_to_env(blob: &str) -> Result<(), Box<dyn Error>> {
     let env_path = Path::new(".env");
+    let env_key =
+        std::env::var("OLINE_ENV_KEY_NAME").unwrap_or_else(|_| "OLINE_ENCRYPTED_MNEMONIC".into());
     let entry = format!("{}={}", env_key, blob);
 
     if env_path.exists() {
@@ -221,36 +331,10 @@ pub async fn collect_config(
     password: &str,
     mnemonic: String,
     lines: &mut io::Lines<io::StdinLock<'_>>,
-    defaults: &RuntimeDefaults,
 ) -> Result<OLineConfig, Box<dyn Error>> {
     // Try to load saved config
     let saved = if has_saved_config() {
         if let Some(cfg) = load_config(password) {
-            tracing::info!("  Found saved config:");
-            tracing::info!("    RPC endpoint:     {}", cfg.rpc_endpoint);
-            tracing::info!("    gRPC endpoint:    {}", cfg.grpc_endpoint);
-            tracing::info!("    Snapshot URL:     {}", cfg.snapshot_url);
-            tracing::info!(
-                "    Validator peer:   {}",
-                redact_if_secret(
-                    "TERPD_P2P_PRIVATE_PEER_IDS",
-                    &cfg.validator_peer_id,
-                    defaults
-                )
-            );
-            tracing::info!("    Trusted providers: {:?}", cfg.trusted_providers);
-            tracing::info!("    Snapshot path:    {}", cfg.snapshot_path);
-            tracing::info!("    MinIO-IPFS image: {}", cfg.minio_ipfs_image);
-            tracing::info!("    S3 bucket:        {}", cfg.s3_bucket);
-            tracing::info!(
-                "    Cloudflare DNS:   {}",
-                if cfg.cloudflare_api_token.is_empty() {
-                    "not configured"
-                } else {
-                    "configured"
-                }
-            );
-
             if prompt_continue(lines, "Use saved config?")? {
                 Some(cfg)
             } else {
@@ -263,240 +347,38 @@ pub async fn collect_config(
     } else {
         None
     };
-    let d = default_val(
-        "OLINE_RPC_ENDPOINT",
-        saved.as_ref().map(|s| s.rpc_endpoint.as_str()),
-        "https://rpc.akashnet.net:443",
-    );
-    let rpc_endpoint = read_input(lines, "RPC endpoint", Some(&d))?;
 
-    let d = default_val(
-        "OLINE_GRPC_ENDPOINT",
-        saved.as_ref().map(|s| s.grpc_endpoint.as_str()),
-        "https://grpc.akashnet.net:443",
-    );
-    let grpc_endpoint = read_input(lines, "gRPC endpoint", Some(&d))?;
-
-    let snapshot_url = {
-        let env_url = default_val_opt(
-            "OLINE_SNAPSHOT_URL",
-            saved.as_ref().map(|s| s.snapshot_url.as_str()),
-        );
-        if let Some(url) = env_url {
-            read_input(lines, "Snapshot URL", Some(&url))?
-        } else {
-            match fetch_latest_snapshot_url(defaults).await {
-                Ok(url) => read_input(lines, "Snapshot URL (fetched from itrocket)", Some(&url))?,
-                Err(e) => {
-                    tracing::info!("  Warning: failed to fetch snapshot: {}", e);
-                    let url = read_input(lines, "Enter snapshot URL manually", None)?;
-                    if url.is_empty() {
-                        return Err("Snapshot URL is required.".into());
-                    }
-                    url
-                }
-            }
-        }
-    };
-
-    let d = default_val_opt(
-        "OLINE_VALIDATOR_PEER_ID",
-        saved.as_ref().map(|s| s.validator_peer_id.as_str()),
-    );
-    let validator_peer_id = read_secret_input("Validator peer ID (id@host:port)", d.as_deref())?;
-    if validator_peer_id.is_empty() {
-        return Err("Validator peer ID is required.".into());
-    }
-
-    let d = default_val(
-        "OLINE_TRUSTED_PROVIDERS",
-        saved
-            .as_ref()
-            .map(|s| s.trusted_providers.join(","))
-            .as_deref(),
-        "",
-    );
-    let providers_input = read_input(
-        lines,
-        "Trusted provider addresses (comma-separated, or empty)",
-        Some(&d),
-    )?;
-    let trusted_providers: Vec<String> = if providers_input.is_empty() {
-        vec![]
-    } else {
-        providers_input
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .collect()
-    };
-
-    let auto_default = if saved
-        .as_ref()
-        .map(|s| s.auto_select_provider)
-        .unwrap_or(false)
-    {
-        "n"
-    } else {
-        "n"
-    };
-    let d = default_val("OLINE_AUTO_SELECT_PROVIDER", None, auto_default);
-    let auto_select = read_input(lines, "Auto-select cheapest provider? (y/n)", Some(&d))?;
-    let auto_select_provider = auto_select.is_empty() || auto_select == "y" || auto_select == "yes";
-
-    // Snapshot export config (credentials auto-generated per deployment)
-    tracing::info!("\n── Snapshot Export ──");
-    tracing::info!("  Note: S3/MinIO credentials are auto-generated per deployment.");
-
-    let d = default_val(
-        "OLINE_SNAPSHOT_PATH",
-        saved.as_ref().map(|s| s.snapshot_path.as_str()),
-        "snapshots/terpnetwork",
-    );
-    let snapshot_path = read_input(lines, "S3 snapshot path (bucket/path)", Some(&d))?;
-
-    let d = default_val(
-        "OLINE_SNAPSHOT_TIME",
-        saved.as_ref().map(|s| s.snapshot_time.as_str()),
-        "00:00:00",
-    );
-    let snapshot_time = read_input(lines, "Snapshot schedule time (HH:MM:SS)", Some(&d))?;
-
-    let d = default_val(
-        "OLINE_SNAPSHOT_SAVE_FORMAT",
-        saved.as_ref().map(|s| s.snapshot_save_format.as_str()),
-        "tar.gz",
-    );
-    let snapshot_save_format = read_input(lines, "Snapshot save format", Some(&d))?;
-
-    let d = default_val(
-        "OLINE_SNAPSHOT_RETAIN",
-        saved.as_ref().map(|s| s.snapshot_retain.as_str()),
-        "2 days",
-    );
-    let snapshot_retain = read_input(lines, "Snapshot retention period", Some(&d))?;
-
-    let d = default_val(
-        "OLINE_SNAPSHOT_KEEP_LAST",
-        saved.as_ref().map(|s| s.snapshot_keep_last.as_str()),
-        "2",
-    );
-    let snapshot_keep_last = read_input(lines, "Minimum snapshots to keep", Some(&d))?;
-
-    let d = default_val("TLS_CONFIG_URL", None, "");
-    let tls_config_url = read_input(lines, "TLS setup command", Some(&d))?;
-
-    let d = default_val("ENTRYPOINT_URL", None, "");
-    let entrypoint_url = read_input(lines, "entrypoint url", Some(&d))?;
-
-    // MinIO-IPFS config
-    tracing::info!("\n── MinIO-IPFS ──");
-
-    let d = default_val(
-        "OLINE_MINIO_IPFS_IMAGE",
-        saved.as_ref().map(|s| s.minio_ipfs_image.as_str()),
-        &defaults.minio_ipfs_image,
-    );
-    let minio_ipfs_image = read_input(lines, "MinIO-IPFS image", Some(&d))?;
-
-    let d = default_val(
-        "OLINE_S3_BUCKET",
-        saved.as_ref().map(|s| s.s3_bucket.as_str()),
-        "terp-snapshots",
-    );
-    let s3_bucket = read_input(lines, "S3 bucket name", Some(&d))?;
-
-    let d = default_val(
-        "OLINE_AUTOPIN_INTERVAL",
-        saved.as_ref().map(|s| s.autopin_interval.as_str()),
-        "300",
-    );
-    let autopin_interval = read_input(lines, "IPFS auto-pin interval (seconds)", Some(&d))?;
-
-    let d = default_val(
-        "OLINE_SNAPSHOT_DOWNLOAD_DOMAIN",
-        saved.as_ref().map(|s| s.snapshot_download_domain.as_str()),
-        "snapshots.terp.network",
-    );
-    let snapshot_download_domain =
-        read_input(lines, "Snapshot download domain (public S3 API)", Some(&d))?;
-
-    let d = default_val(
-        "OLINE_CERTBOT_EMAIL",
-        saved.as_ref().map(|s| s.certbot_email.as_str()),
-        "admin@terp.network",
-    );
-    let certbot_email = read_input(
-        lines,
-        "Certbot email (Let's Encrypt registration for nginx-snapshot)",
-        Some(&d),
-    )?;
-
-    // Cloudflare DNS (optional — auto-update CNAME after deploy)
-    tracing::info!("\n── Cloudflare DNS (optional) ──");
-    tracing::info!("  Set these to auto-update CNAME records after deployment.");
-    tracing::info!("  Leave empty to skip automatic DNS updates.\n");
-
-    let d = default_val_opt(
-        "OLINE_CF_API_TOKEN",
-        saved
-            .as_ref()
-            .map(|s| s.cloudflare_api_token.as_str())
-            .filter(|s| !s.is_empty()),
-    );
-    let cloudflare_api_token =
-        read_secret_input("Cloudflare API token (DNS:Edit permission)", d.as_deref())?;
-
-    let d = default_val_opt(
-        "OLINE_CF_ZONE_ID",
-        saved
-            .as_ref()
-            .map(|s| s.cloudflare_zone_id.as_str())
-            .filter(|s| !s.is_empty()),
-    );
-    let cloudflare_zone_id = read_input(lines, "Cloudflare zone ID", d.as_deref())?;
-
-    let config = OLineConfig {
+    let mut cfg = OLineConfig {
         mnemonic,
-        rpc_endpoint,
-        grpc_endpoint,
-        snapshot_url,
-        validator_peer_id,
-        trusted_providers,
-        auto_select_provider,
-        snapshot_path,
-        snapshot_time,
-        snapshot_save_format,
-        snapshot_retain,
-        snapshot_keep_last,
-        minio_ipfs_image,
-        s3_bucket,
-        autopin_interval,
-        snapshot_download_domain,
-        certbot_email,
-        cloudflare_api_token,
-        cloudflare_zone_id,
-        tls_config_url,
-        entrypoint_url,
+        ..Default::default()
     };
+
+    for fd in FIELD_DESCRIPTORS.iter() {
+        let saved_val = saved
+            .as_ref()
+            .and_then(|s| s.get_str(&format!("{}.{}", fd.c, fd.k)));
+
+        let d = default_val(fd.ev, saved_val, fd.d);
+
+        let value = if fd.s && !d.is_empty() {
+            d // don't re-prompt secrets that are already set
+        } else {
+            read_input(lines, fd.p, Some(&d))?
+        };
+
+        cfg.category_mut(fd.c).set(fd.k, value);
+    }
 
     // Offer to save
     if prompt_continue(lines, "Save config for next time?")? {
-        if let Err(e) = save_config(&config, password) {
+        if let Err(e) = save_config(&cfg, password) {
             tracing::info!("  Warning: failed to save config: {}", e);
         } else {
             tracing::info!("  Config saved to {}", config_path().display());
         }
     }
 
-    Ok(config)
-}
-
-/// Helper to insert the shared SDL template variables into a HashMap.
-pub fn insert_sdl_defaults(vars: &mut HashMap<String, String>, defaults: &RuntimeDefaults) {
-    vars.insert("OMNIBUS_IMAGE".into(), defaults.omnibus_image.clone());
-    vars.insert("CHAIN_JSON".into(), defaults.chain_json.clone());
-    vars.insert("ADDRBOOK_URL".into(), defaults.addrbook_url.clone());
-    vars.insert("ADDRBOOK_URL".into(), defaults.addrbook_url.clone());
+    Ok(cfg)
 }
 
 // ── Raw template substitution ──

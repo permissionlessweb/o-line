@@ -7,20 +7,6 @@ upstream grpc_backend {
     server 127.0.0.1:${GRPC_PORT};
 }
 
-# ── gRPC — HTTP redirect ───────────────────────────────────────────────────
-server {
-    listen 80;
-    server_name ${GRPC_DOMAIN};
-
-    location /.well-known/acme-challenge/ {
-        root /var/www/certbot;
-    }
-
-    location / {
-        return 301 https://$host$request_uri;
-    }
-}
-
 # ── gRPC — HTTPS/2 ────────────────────────────────────────────────────────
 server {
     listen 443 ssl http2;

@@ -60,7 +60,7 @@ log "Installing nginx, certbot, gettext..."
 if command -v apt-get > /dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
-    apt-get install -y -qq nginx certbot python3-certbot-nginx gettext-base curl jq
+    apt-get install -y -qq nginx certbot python3-certbot-nginx gettext-base curl jq openssh-server
 elif command -v apk > /dev/null 2>&1; then
     apk add --no-cache nginx certbot certbot-nginx gettext curl jq
 else
@@ -74,7 +74,6 @@ for svc in $services; do
     DOMAIN_VAR="${svc}_DOMAIN"
     port_val=$(printenv "$PORT_VAR" || true)
     domain_val=$(printenv "$DOMAIN_VAR" || true)
-    NGINX_TEMPLATE=$(mktemp /tmp/nginx-template."${svc}"XXXXXX)
     if [ -n "$port_val" ] && [ -n "$domain_val" ]; then
         log "Configuring service: $svc"
         TEMPLATE_FILE=$(mktemp /tmp/nginx-template."${svc}".XXXXXX)
@@ -82,7 +81,9 @@ for svc in $services; do
         export "$PORT_VAR=$port_val"
         export "$DOMAIN_VAR=$domain_val"
         RENDERED_CONF="${RENDERED_DIR}/${svc}.conf"
-        envsubst < "${TEMPLATE_FILE}" > "${RENDERED_CONF}"
+
+        VARS='$'"${PORT_VAR}"',$'"${DOMAIN_VAR}"',$TLS_CERT,$TLS_KEY'
+        envsubst "$VARS" < "${TEMPLATE_FILE}" > "${RENDERED_CONF}"
         log "Rendered config written to ${RENDERED_CONF}"
     fi
 done
@@ -95,28 +96,26 @@ for svc in $services; do
     port_val=$(printenv "$PORT_VAR" || true)
     if [ -n "$port_val" ]; then
         log "Enabling include for $svc"
-        # Uncomment only the matching service include
-        sed -i.bak "/SERVICE:${svc}/s/^#\s*//" "${NGINX_FULL}"
+        sed -i.bak "/PORT:${svc}_PORT/s/^#[[:space:]]*//" "${NGINX_FULL}"
     fi
 done
 
 # open up ssh to dedicated port (remove default from 22)
 # install ssh server 
-sudo apt install -y openssh-server
-sudo mkdir -p /var/run/sshd ~/.ssh
+mkdir -p /var/run/sshd ~/.ssh
 chmod 700 ~/.ssh
 # change default port
-sudo sed -i 's/#Port 22/Port ${SSH_PORT}/' /etc/ssh/sshd_config
-sudo sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
-sudo sed -i 's/PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
-sudo sed -i 's/PubkeyAuthentication no/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+sed -i "s/#Port 22/Port ${SSH_PORT}/" /etc/ssh/sshd_config
+sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
 # remove default password (if exists)
+sed -i 's/PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+sed -i 's/PubkeyAuthentication no/PubkeyAuthentication yes/' /etc/ssh/sshd_config
 # add authorized ssh pubkey 
 touch ~/.ssh/authorized_keys
 echo "$SSH_PUBKEY" >> ~/.ssh/authorized_keys
 chmod 600 ~/.ssh/authorized_keys
 # Start SSH daemon
-sudo /usr/sbin/sshd -D &
+/usr/sbin/sshd -D
 
 # ── 5. wait for TLS certificate to be set via sftp ─────────────────────────────────────
 log "Waiting for tls cert & keys to be provided via sftp"

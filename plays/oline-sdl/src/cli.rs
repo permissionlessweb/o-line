@@ -5,11 +5,21 @@ use std::{
     io::{self, Write},
 };
 
-use crate::config::RuntimeDefaults;
+use crate::{
+    config::{days_to_date, read_encrypted_mnemonic_from_env},
+    crypto::decrypt_mnemonic,
+    FIELD_DESCRIPTORS,
+};
 
 // ── Secret redaction ──
-pub fn redact_if_secret(key: &str, value: &str, defaults: &RuntimeDefaults) -> String {
-    if defaults.is_secret(key) {
+pub fn redact_if_secret(env_var: &str, value: &str) -> String {
+    let is_secret = FIELD_DESCRIPTORS
+        .iter()
+        .find(|fd| fd.ev == env_var)
+        .map(|fd| fd.s)
+        .unwrap_or(false);
+
+    if is_secret {
         if value.len() <= 4 {
             "****".to_string()
         } else {
@@ -97,4 +107,39 @@ pub fn urlencoded(s: &str) -> String {
             _ => format!("%{:02X}", b),
         })
         .collect()
+}
+
+pub fn unlock_mnemonic() -> Result<(String, String), Box<dyn Error>> {
+    let blob = read_encrypted_mnemonic_from_env()?;
+    let password = rpassword::prompt_password("Enter password: ")?;
+    let mnemonic = decrypt_mnemonic(&blob, &password)?;
+    tracing::info!("Mnemonic decrypted successfully.\n");
+    Ok((mnemonic, password))
+}
+
+pub fn truncate(s: &str, max: usize) -> String {
+    if s.len() > max {
+        format!("{}...", &s[..max - 3])
+    } else {
+        s.to_string()
+    }
+}
+pub fn chrono_format_timestamp(ts: u64) -> String {
+    if ts == 0 {
+        return "-".to_string();
+    }
+    // Simple UTC timestamp formatting without chrono dependency
+    let secs = ts;
+    let days = secs / 86400;
+    let rem = secs % 86400;
+    let hours = rem / 3600;
+    let mins = (rem % 3600) / 60;
+
+    // Rough date from epoch (good enough for display)
+    // 1970-01-01 + days
+    let (year, month, day) = days_to_date(days);
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}Z",
+        year, month, day, hours, mins
+    )
 }
