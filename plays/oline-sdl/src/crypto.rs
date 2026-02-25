@@ -5,7 +5,9 @@ use aes_gcm::{
 use argon2::Argon2;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
+use openssh::SessionBuilder;
 use rand::RngCore;
+use ssh_key::LineEnding;
 use std::{error::Error, path::PathBuf};
 
 pub const SALT_LEN: usize = 16; // AES-256-GCM fixed
@@ -13,27 +15,36 @@ pub const NONCE_LEN: usize = 12; // AES-256-GCM fixed
 pub const S3_SECRET: usize = 40;
 pub const S3_KEY: usize = 24;
 
-pub fn gen_ssh_key() -> ssh_key::PublicKey {
+pub fn gen_ssh_key() -> ssh_key::PrivateKey {
     use ssh_key::rand_core::OsRng;
-    // Generate an Ed25519 key pair
-    let sk = ssh_key::PrivateKey::random(&mut OsRng, ssh_key::Algorithm::Ed25519).unwrap();
-    // save to session path
-    // return pubkey
-    sk.public_key().clone()
+    ssh_key::PrivateKey::random(&mut OsRng, ssh_key::Algorithm::Ed25519).unwrap()
+}
+pub fn save_ssh_key(k: ssh_key::PrivateKey, path: PathBuf) {
+    let k = k.to_openssh(LineEnding::LF).unwrap();
+    std::fs::write(&path, k).expect("Failed to save SSH private key");
+}
+// forms ssh://[user@]hostname[:port] from deployment
+pub fn ssh_dest_path(ssh_port: &str, uri: &str) -> String {
+    format!("{}@{}:{}", "root", uri, ssh_port)
 }
 
 /// sends reusable wildcard cert & privkey to node
 pub async fn send_cert_sftp(
     dest: &str,
-    cert: Vec<u8>,
-    privkey: Vec<u8>,
+    cert: &Vec<u8>,
+    privkey: &Vec<u8>,
+    ssh_path: &PathBuf,
 ) -> Result<(), Box<dyn Error>> {
-    use openssh::{KnownHosts, Session as SshSession};
     use openssh_sftp_client::Sftp;
-    // Generate an Ed25519 key pair
-    // dest: "ssh://user@hostname:port" defined from deployment instance
-    let ssh_session = SshSession::connect_mux(dest, KnownHosts::Add).await?;
-    let sftp = Sftp::from_session(ssh_session, Default::default()).await?;
+    // define ssh key to use for session
+    let sftp = Sftp::from_session(
+        SessionBuilder::default()
+            .keyfile(ssh_path)
+            .connect_mux(dest)
+            .await?,
+        Default::default(),
+    )
+    .await?;
     let path = PathBuf::new();
 
     // write cert to node

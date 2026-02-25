@@ -1,6 +1,6 @@
 //! Helpers to inject variables and values into the sdls via use of akash-deploy-rs SDL feature: https://github.com/permissionlessweb/akash-deploy-rs/blob/main/src/sdl/template.rs
 use crate::config::OLineConfig;
-use crate::crypto::{generate_credential, S3_KEY, S3_SECRET};
+use crate::crypto::{gen_ssh_key, generate_credential, save_ssh_key, S3_KEY, S3_SECRET};
 use crate::snapshots::fetch_latest_snapshot_url;
 use std::{collections::HashMap, env::var};
 
@@ -161,6 +161,17 @@ pub async fn build_phase_a_vars(config: &OLineConfig) -> HashMap<String, String>
         config.val("validator.peer_id").clone(),
     );
 
+    // generate ssh-key
+    let ssh_key = gen_ssh_key();
+    vars.insert("SSH_PUBKEY".into(), ssh_key.public_key().to_string());
+    vars.insert(
+        "SSH_PRIVKEY".into(),
+        ssh_key
+            .to_openssh(ssh_key::LineEnding::LF)
+            .unwrap()
+            .to_string(),
+    );
+    // save ssh-key to secrets
     vars
 }
 

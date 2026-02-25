@@ -59,6 +59,7 @@ services:
       - P2P_PORT=${P2P_PORT_SNAPSHOT}
       - GRPC_PORT=${GRPC_PORT_SNAPSHOT}
       - GRPC_DOMAIN=${GRPC_DOMAIN_SNAPSHOT}
+      - SSH_PUBKEY=${SSH_PUBKEY}
     command:
       - sh
     args:

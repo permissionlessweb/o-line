@@ -6,13 +6,18 @@ use akash_deploy_rs::{
 
 use o_line_sdl::{
     self, akash::*, cli::*, config::*, crypto::*, dns::cloudflare::*, snapshots::*,
-    FIELD_DESCRIPTORS,
+    FIELD_DESCRIPTORS, MAX_RETRIES,
 };
 
 use std::{
     collections::HashMap,
+    env::var,
     error::Error,
+    fs,
     io::{self, BufRead, Write},
+    path::PathBuf,
+    thread::sleep,
+    time::Duration,
 };
 
 pub struct OLineDeployer {
@@ -47,14 +52,13 @@ impl OLineDeployer {
     pub async fn deploy_phase_with_selection(
         &self,
         sdl_template: &str,
-        variables: HashMap<String, String>,
-        defaults: HashMap<String, String>,
+        variables: &HashMap<String, String>,
         label: &str,
         lines: &mut io::Lines<io::StdinLock<'_>>,
     ) -> Result<(DeploymentState, Vec<ServiceEndpoint>), DeployError> {
         // Pre-render template using raw substitution so ${VAR} in YAML keys
         // (like service names) are replaced before any YAML parsing.
-        let rendered_sdl = substitute_template_raw(sdl_template, &variables, &defaults)
+        let rendered_sdl = substitute_template_raw(sdl_template, &variables)
             .map_err(|e| DeployError::Template(format!("Template substitution failed: {}", e)))?;
 
         let mut state = DeploymentState::new(label, self.client.address())
@@ -337,24 +341,22 @@ impl OLineDeployer {
             tracing::info!("Aborted.");
             return Ok(());
         }
-
         let a_vars = build_phase_a_vars(&self.config).await;
-        let a_defaults = HashMap::new();
-
-        tracing::info!("  Variables:");
-        for (k, v) in &a_vars {
-            tracing::info!("    {}={}", k, redact_if_secret(k, v,));
-        }
-
-        let sdl_a = self.config.load_sdl("a.kickoff-special-teams.yml")?;
         tracing::info!("  Deploying...");
         let (a_state, a_endpoints) = self
-            .deploy_phase_with_selection(&sdl_a, a_vars, a_defaults, "oline-phase-a", &mut lines)
+            .deploy_phase_with_selection(
+                &self.config.load_sdl("a.kickoff-special-teams.yml")?,
+                &a_vars,
+                "oline-phase-a",
+                &mut lines,
+            )
             .await?;
 
-        tracing::info!("  Deployed! DSEQ: {}", a_state.dseq.unwrap_or(0));
-        let record = DeploymentRecord::from_state(&a_state, &self.password)?;
-        self.deployment_store.save(&record).await.ok();
+        tracing::info!("Deployed! DSEQ: {}", a_state.dseq.unwrap());
+        self.deployment_store
+            .save(&DeploymentRecord::from_state(&a_state, &self.password)?)
+            .await
+            .ok();
 
         if !self.config.val("cloudflare.api_token").is_empty()
             && !self.config.val("cloudflare.zone_id").is_empty()
@@ -371,6 +373,50 @@ impl OLineDeployer {
             }
         } else {
             tracing::info!("  Note: Cloudflare DNS not configured — update CNAMEs for accept domains manually.");
+        }
+
+        // ── Use SFTP to transfer wildcard certs ──
+        tracing::info!(" Using sftp to set tls certificates");
+        let session_ssh_path =
+            format!("{}/{}", var("SECRETS_PATH").unwrap(), a_state.dseq.unwrap()).into();
+        save_ssh_key(
+            ssh_key::PrivateKey::from_openssh(a_vars.get("SSH_PRIVKEY").unwrap().as_bytes())
+                .unwrap(),
+            session_ssh_path,
+        );
+        let ssh_port = var("SSH_PORT").unwrap_or("22".to_string());
+        let uri = a_endpoints
+            .iter()
+            .find(|e| e.internal_port.to_string() == ssh_port)
+            .unwrap();
+        let ssh_path: PathBuf =
+            format!("{}/cert.pem", var("SECRETS_PATH").unwrap_or_default()).into();
+        let cert_path = format!("{}/cert.pem", var("SECRETS_PATH").unwrap_or_default());
+        let privkey_path = format!("{}/privkey.pem", var("SECRETS_PATH").unwrap_or_default());
+        let cert = fs::read(cert_path)?;
+        let privkey = fs::read(privkey_path)?;
+
+        let ssh_dest_path = &ssh_dest_path(&ssh_port, &uri.uri);
+        let mut retries = 0;
+        loop {
+            match send_cert_sftp(ssh_dest_path, &cert, &privkey, &ssh_path).await {
+                Ok(_) => {
+                    println!("Certificate sent successfully.");
+                    break;
+                }
+                Err(e) => {
+                    retries += 1;
+                    if retries >= MAX_RETRIES {
+                        eprintln!("Failed after {} retries: {}", MAX_RETRIES, e);
+                        return Err(e.into());
+                    }
+                    eprintln!(
+                        "Attempt {} failed: {}. Retrying in 2 seconds...",
+                        retries, e
+                    );
+                    sleep(Duration::from_secs(3));
+                }
+            }
         }
 
         // ── Extract peer IDs via DNS domains ──
@@ -496,7 +542,6 @@ impl OLineDeployer {
             &b_snapshot_url,
             &a1_statesync_rpc,
         );
-        let b_defaults = HashMap::new();
 
         tracing::info!("  Variables:");
         for (k, v) in &b_vars {
@@ -506,7 +551,7 @@ impl OLineDeployer {
         let sdl_b = self.config.load_sdl("b.left-and-right-tackle.yml")?;
         tracing::info!("  Deploying...");
         let (b_state, b_endpoints) = self
-            .deploy_phase_with_selection(&sdl_b, b_vars, b_defaults, "oline-phase-b", &mut lines)
+            .deploy_phase_with_selection(&sdl_b, &b_vars, "oline-phase-b", &mut lines)
             .await?;
 
         tracing::info!("  Deployed! DSEQ: {}", b_state.dseq.unwrap_or(0));
@@ -576,7 +621,6 @@ impl OLineDeployer {
             &left_tackle_peer,
             &right_tackle_peer,
         );
-        let c_defaults = HashMap::new();
 
         tracing::info!("  Variables:");
         for (k, v) in &c_vars {
@@ -586,7 +630,7 @@ impl OLineDeployer {
         let sdl_c = self.config.load_sdl("c.left-and-right-forwards.yml")?;
         tracing::info!("  Deploying...");
         let (c_state, _c_endpoints) = self
-            .deploy_phase_with_selection(&sdl_c, c_vars, c_defaults, "oline-phase-c", &mut lines)
+            .deploy_phase_with_selection(&sdl_c, &c_vars, "oline-phase-c", &mut lines)
             .await?;
 
         tracing::info!("  Deployed! DSEQ: {}", c_state.dseq.unwrap_or(0));
@@ -747,8 +791,6 @@ async fn cmd_generate_sdl() -> Result<(), Box<dyn Error>> {
         (String::new(), String::new())
     };
 
-    let template_defaults = HashMap::new();
-
     let sdl_a = config.load_sdl("a.kickoff-special-teams.yml")?;
     let sdl_b = config.load_sdl("b.left-and-right-tackle.yml")?;
     let sdl_c = config.load_sdl("c.left-and-right-forwards.yml")?;
@@ -758,7 +800,7 @@ async fn cmd_generate_sdl() -> Result<(), Box<dyn Error>> {
                   vars: &HashMap<String, String>|
      -> Result<(), Box<dyn Error>> {
         tracing::info!("\n── {} ──", label);
-        let rendered = substitute_template_raw(template, vars, &template_defaults)?;
+        let rendered = substitute_template_raw(template, vars)?;
         tracing::info!("{}", rendered);
         Ok(())
     };

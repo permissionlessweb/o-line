@@ -8,6 +8,7 @@ pub mod dns;
 pub mod error;
 pub mod snapshots;
 
+pub const MAX_RETRIES: u16 = 30;
 pub static FIELD_DESCRIPTORS: LazyLock<Vec<config::Fd>> = LazyLock::new(|| {
     [
         DEFAULT_ND,
@@ -29,6 +30,7 @@ pub const DEFAULT_ND: &[config::Fd] = define_fields![
     "network"/ "rpc_endpoint"=> "OLINE_RPC_ENDPOINT","RPC endpoint","https://rpc.akashnet.net:443",   false,
     "network"/ "grpc_endpoint"=> "OLINE_GRPC_ENDPOINT","gRPC endpoint","https://grpc.akashnet.net:443",  false,
     "validator"/"peer_id"=> "OLINE_VALIDATOR_PEER_ID","Private validator peer id","",false,
+    "ssh"/"pubkey"=> "SSH_PUBKEY","ssh pubkey","",false,
 ];
 
 pub const NETWORKING_FD: &[config::Fd] = define_fields![

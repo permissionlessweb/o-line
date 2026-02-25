@@ -99,6 +99,14 @@ for svc in $services; do
         sed -i.bak "/PORT:${svc}_PORT/s/^#[[:space:]]*//" "${NGINX_FULL}"
     fi
 done
+# # update ssh config block with correct ports
+# TEMPLATE_FILE=$(mktemp /tmp/nginx-template.ssh.XXXXXX)
+# VARS_FOR_SSH='$SSH_PORT'
+# RENDERED_SSH_CONF="${RENDERED_DIR}/ssh.conf"
+# curl -fsSL "${NGINX_CONFIG_TEMPLATES}/ssh" -o "${TEMPLATE_FILE}" || die "Failed to fetch nginx config template for ssh"
+# # Substitute SSH_PORT (and any other needed variables) in the SSH template
+# envsubst "$VARS_FOR_SSH" < "${TEMPLATE_FILE}" > "${RENDERED_SSH_CONF}"
+# log "Rendered SSH config written to ${RENDERED_SSH_CONF}"
 
 # open up ssh to dedicated port (remove default from 22)
 # install ssh server 

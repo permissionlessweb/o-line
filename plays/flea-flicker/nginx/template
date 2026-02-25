@@ -19,5 +19,5 @@ http {
 }
 
 stream {
-    include /etc/nginx/conf.d/peer.conf;  # always included
+    include /etc/nginx/conf.d/peer.conf;
 }

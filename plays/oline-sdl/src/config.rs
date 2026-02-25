@@ -389,15 +389,10 @@ pub async fn collect_config(
 pub fn substitute_template_raw(
     template: &str,
     variables: &HashMap<String, String>,
-    defaults: &HashMap<String, String>,
 ) -> Result<String, Box<dyn Error>> {
-    let mut values = defaults.clone();
-    values.extend(variables.clone());
-
     let mut result = String::new();
     let chars: Vec<char> = template.chars().collect();
     let mut i = 0;
-
     while i < chars.len() {
         if chars[i] == '$' && i + 1 < chars.len() && chars[i + 1] == '{' {
             i += 2; // skip ${
@@ -409,7 +404,7 @@ pub fn substitute_template_raw(
                 return Err("Unclosed ${...} placeholder in template".into());
             }
             let var_name: String = chars[start..i].iter().collect();
-            match values.get(&var_name) {
+            match variables.get(&var_name) {
                 Some(val) => result.push_str(val),
                 None => return Err(format!("Variable '{}' has no value", var_name).into()),
             }
