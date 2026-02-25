@@ -197,7 +197,7 @@ macro_rules! define_fields {
 //             chain_json: ,
 //             addrbook_url: ,
 //             omnibus_image:
-//             minio_ipfs_image: std::env::var("OLINE_MINIO_IPFS_IMAGE").expect("minio-ipfs version")
+//             minio_ipfs_image: std::env::var("MINIO_IPFS_IMAGE").expect("minio-ipfs version")
 //         }
 //     }
 // }

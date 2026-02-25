@@ -50,7 +50,7 @@ pub const SNAPSHOT_FD: &[config::Fd] = define_fields![
 ];
 
 pub const MINIO_FD: &[config::Fd] = define_fields![
-    "minio"      / "image"             => "OLINE_MINIO_IPFS_IMAGE",         "MinIO-IPFS image",                               "minio/minio:latest",             false,
+    "minio"      / "image"             => "MINIO_IPFS_IMAGE",         "MinIO-IPFS image",                               "minio/minio:latest",             false,
     "minio"      / "s3_bucket"         => "OLINE_S3_BUCKET",                "S3 bucket name",                                 "terp-snapshots",                 false,
     "minio"      / "autopin_interval"  => "OLINE_AUTOPIN_INTERVAL",         "IPFS auto-pin interval (seconds)",               "300",                            false,
 ];

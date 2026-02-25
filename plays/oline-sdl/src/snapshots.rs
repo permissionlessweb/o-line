@@ -14,60 +14,6 @@ pub const SNAPSHOT_P2P_DOMAIN: &str = "statesync.terp.network";
 pub const SEED_RPC_DOMAIN: &str = "seed-statesync.terp.network";
 pub const SEED_P2P_DOMAIN: &str = "seed.terp.network";
 
-/// Helper to insert S3 snapshot export variables.
-/// `s3_key`, `s3_secret`, and `s3_host` are generated/derived at deploy time.
-pub fn insert_s3_vars(
-    vars: &mut HashMap<String, String>,
-    c: &OLineConfig,
-    s3_key: &str,
-    s3_secret: &str,
-    s3_host: &str,
-) {
-    vars.insert("S3_KEY".into(), s3_key.to_string());
-    vars.insert("S3_SECRET".into(), s3_secret.to_string());
-    vars.insert("S3_HOST".into(), s3_host.to_string());
-    vars.insert("SNAPSHOT_PATH".into(), c.val("snapshot.path"));
-    vars.insert("SNAPSHOT_TIME".into(), c.val("snapshot.time"));
-    vars.insert("SNAPSHOT_SAVE_FORMAT".into(), c.val("snapshot.save_format"));
-    vars.insert("SNAPSHOT_RETAIN".into(), c.val("snapshot.retain"));
-    vars.insert("SNAPSHOT_KEEP_LAST".into(), c.val("snapshot.keep_last"));
-    // Metadata URL uses the public download domain so URLs in snapshot.json are externally accessible
-    let dd = c.val("snapshot.download_domain");
-    let meta_url = format!(
-        "https://{}/{}/snapshot.json",
-        dd,
-        c.val("snapshot.path").trim_matches('/')
-    );
-    vars.insert("SNAPSHOT_METADATA_URL".into(), meta_url);
-    vars.insert("SNAPSHOT_DOWNLOAD_DOMAIN".into(), dd);
-}
-
-/// Helper to insert minio-ipfs variables.
-/// `root_user` and `root_password` are the auto-generated credentials
-/// shared between the snapshot node (as S3_KEY/S3_SECRET) and MinIO.
-pub fn insert_minio_vars(
-    vars: &mut HashMap<String, String>,
-    c: &OLineConfig,
-    root_user: &str,
-    root_password: &str,
-) {
-    vars.insert("MINIO_IPFS_IMAGE".into(), c.val("minio.ipfs_image"));
-    // Derive MINIO_BUCKET from snapshot_path (first path component, e.g. "snapshots" from "snapshots/terpnetwork")
-    let minio_bucket = c
-        .val("snapshot.path")
-        .split('/')
-        .next()
-        .unwrap_or("snapshots")
-        .to_string();
-    vars.insert("MINIO_BUCKET".into(), minio_bucket);
-    vars.insert(
-        "AUTOPIN_INTERVAL".into(),
-        c.val("minio.autopin_interval").clone(),
-    );
-    vars.insert("MINIO_ROOT_USER".into(), root_user.to_string());
-    vars.insert("MINIO_ROOT_PASSWORD".into(), root_password.to_string());
-}
-
 /// Sign an S3 request using AWS Signature V4 (path-style).
 /// Returns the Authorization header value and headers to add.
 fn s3_signed_headers(
