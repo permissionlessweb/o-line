@@ -137,9 +137,3 @@ log "Stopping temporary nginx..."
 log "Starting nginx daemon..."
 nginx
 log "nginx running with TLS for:"
-
-# ── 7. patch config.toml ──────────────────────────────────────────────────────
-NODE_SCRIPT=node-config.sh
-# download patch file, provide flags to setup ports + comptaible with nginx reverse proxy setup
-curl -fsSL "${NODE_CONFIG_SCRIPT}" -o "$NODE_SCRIPT" || die "Failed to fetch node config template"
-sh $NODE_SCRIPT

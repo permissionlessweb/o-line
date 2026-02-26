@@ -29,9 +29,12 @@ if [ -n "$SSH_PUBKEY" ]; then
 
   SSHD_BIN=$(command -v sshd 2>/dev/null || true)
   if [ -n "$SSHD_BIN" ]; then
-    mkdir -p /var/run/sshd
-    ssh-keygen -A >/dev/null 2>&1 || true   # generate host keys if missing
-    $SSHD_BIN || echo "WARNING: sshd failed to start — SFTP cert delivery unavailable"
+    mkdir -p /run/sshd /var/run/sshd          # both paths used across distros
+    ssh-keygen -A >/dev/null 2>&1 || true     # generate host keys if missing
+    # Ensure root pubkey auth is enabled (appended lines override earlier ones)
+    printf '\nPermitRootLogin yes\nPubkeyAuthentication yes\n' >> /etc/ssh/sshd_config
+    $SSHD_BIN -D &                            # foreground + backgrounded: stays visible, errors go to stderr
+    echo "sshd started (PID $!)"
   else
     echo "WARNING: sshd not available — SFTP cert delivery unavailable"
   fi
@@ -554,6 +557,12 @@ if [[ ! -f "$PROJECT_ROOT/data/priv_validator_state.json" ]]; then
   mkdir -p "$PROJECT_ROOT/data" 2>/dev/null || :
   echo '{"height":"0","round":0,"step":0}' > "$PROJECT_ROOT/data/priv_validator_state.json"
 fi
+
+# ── 7. patch config.toml ──────────────────────────────────────────────────────
+NODE_SCRIPT=node-config.sh
+# download patch file, provide flags to setup ports + comptaible with nginx reverse proxy setup
+curl -fsSL "${NODE_CONFIG_SCRIPT}" -o "$NODE_SCRIPT" || die "Download failed"
+sh "$NODE_SCRIPT"
 
 if [ "$#" -ne 0 ]; then
   export START_CMD="$@"
