@@ -36,8 +36,6 @@ if [ "${OLINE_PHASE:-bootstrap}" = "bootstrap" ]; then
   ssh-keygen -A >/dev/null 2>&1 || true
   printf '\nPermitRootLogin yes\nPubkeyAuthentication yes\n' >> /etc/ssh/sshd_config
 
-  # Create the cert landing directory now so oline's SFTP writes succeed
-  # immediately on connect. SFTP create(true) makes the file but not parents.
   mkdir -p /tmp/tls
 
   # Persist all SDL env vars so start mode (SSH session) can restore them.
@@ -52,18 +50,24 @@ fi
 # ── Start mode (OLINE_PHASE=start) ────────────────────────────────────────────
 # Invoked by oline via SSH after cert verification. Restores the SDL environment
 # saved during bootstrap, runs TLS setup, then falls through to cosmos setup.
+
+# Trap any unexpected exit and log the line number + exit code so we can see
+# exactly where the script died (set -e exits are otherwise silent).
+trap 'rc=$?; [ $rc -ne 0 ] && echo "=== UNEXPECTED EXIT code=$rc at line $LINENO: $BASH_COMMAND ===" >&2' EXIT
+
 [ -f /tmp/oline-env.sh ] && . /tmp/oline-env.sh
 
 if [ -n "$TLS_CONFIG_URL" ]; then
   echo "Running TLS setup..."
   curl -fsSL "$TLS_CONFIG_URL" -o /tmp/tls-setup.sh
   sh /tmp/tls-setup.sh
+  echo "=== TLS setup complete ==="
 fi
 # ─────────────────────────────────────────────────────────────────────────────
 
 echo "=== Cosmos node setup starting ==="
 
-export CHAIN_JSON="${CHAIN_JSON:-$CHAIN_URL}" # deprecate CHAIN_URL
+export CHAIN_JSON="${CHAIN_JSON:-$CHAIN_URL}" 
 if [[ -z "$CHAIN_JSON" && -n "$PROJECT" ]]; then
   CHAIN_JSON="https://raw.githubusercontent.com/cosmos/chain-registry/master/${PROJECT}/chain.json"
 fi
@@ -578,9 +582,21 @@ if [ -z "$START_CMD" ]; then
   fi
 fi
 
-echo "=== Launching cosmos node: $START_CMD ==="
+echo "=== Cosmos node setup complete ==="
+
+# Start nginx now that cosmos setup is fully done — nginx config was prepared
+# by tls-setup.sh earlier but start was deferred to here so setup logs are
+# fully visible and nginx doesn't interfere with the cosmos init workflow.
+if [ -n "$TLS_CONFIG_URL" ]; then
+  echo "=== Starting nginx with TLS ==="
+  nginx
+  echo "=== nginx started ==="
+fi
+
+echo "=== Launching: $START_CMD ==="
+echo "=== Node logs → /tmp/node.log ==="
 if [ -n "$SNAPSHOT_PATH" ]; then
-  exec snapshot.sh "$START_CMD"
+  exec snapshot.sh "$START_CMD" >>/tmp/node.log 2>&1
 else
-  exec $START_CMD
+  exec $START_CMD >>/tmp/node.log 2>&1
 fi

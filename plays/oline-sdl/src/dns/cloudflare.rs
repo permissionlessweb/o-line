@@ -287,16 +287,20 @@ pub async fn cloudflare_update_accept_domains(
             continue;
         }
 
+        tracing::info!(
+            "  [dns] {} — updating {} domain(s): {}",
+            svc_name,
+            accept_domains.len(),
+            accept_domains.join(", ")
+        );
+
         // Build a set for O(1) lookup.
         let accept_set: std::collections::HashSet<&str> =
             accept_domains.iter().map(|s| s.as_str()).collect();
 
-        // The provider-assigned ingress URI comes from the `uris` array in the provider
-        // status response and is always HTTPS (port 443) or HTTP (port 80).
-        // Forwarded-port endpoints use random ports (e.g. 31039) and cannot be CNAME
-        // targets because DNS records don't carry port numbers.
-        // Only look at port-80/443 endpoints so we never create a pointless CNAME
-        // to the bare provider hostname for TCP-only (RANDOM_PORT) services.
+        // Prefer a port-80/443 HTTP ingress endpoint as the CNAME target.
+        // If the service uses proto:tcp (NodePort), Akash may assign a random external
+        // port instead of 443 — in that case fall through to the A-record path.
         let provider_ingress = endpoints
             .iter()
             .filter(|e| e.service == svc_name && (e.port == 80 || e.port == 443))
@@ -305,7 +309,8 @@ pub async fn cloudflare_update_accept_domains(
 
         match provider_ingress {
             Some(ingress) => {
-                // HTTP/HTTPS ingress — set CNAME to the provider-assigned ingress hostname.
+                // HTTP/HTTPS ingress — CNAME each accept domain to the provider hostname.
+                tracing::info!("  [dns] {} — ingress hostname: {}", svc_name, ingress);
                 for domain in &accept_domains {
                     tracing::info!("  Cloudflare CNAME: {} → {}", domain, ingress);
                     if let Err(e) =
@@ -316,12 +321,18 @@ pub async fn cloudflare_update_accept_domains(
                 }
             }
             None => {
-                // No HTTP ingress — service uses RANDOM_PORT (non-80 expose).
-                // CNAMEs can't carry ports, so create A records pointing to the provider IP.
-                // Find the provider hostname from any RANDOM_PORT endpoint for this service.
+                // No HTTP/443 ingress found — service likely uses a NodePort (proto:tcp).
+                // CNAMEs can't carry port numbers, so resolve the provider hostname to IPv4
+                // and create A records instead.
+                tracing::info!(
+                    "  [dns] {} — no port-443 ingress found; falling back to A record",
+                    svc_name
+                );
+
+                // Any endpoint for this service gives us the provider hostname.
                 let provider_host = endpoints
                     .iter()
-                    .find(|e| e.service == svc_name && e.port != 80 && e.port != 443)
+                    .find(|e| e.service == svc_name)
                     .map(|e| endpoint_hostname(&e.uri).to_string());
 
                 let host = match provider_host {
@@ -347,20 +358,17 @@ pub async fn cloudflare_update_accept_domains(
                     }
                 };
 
-                // Collect all forwarded ports for this service.
-                // DNS A records cannot carry port numbers — the A record points to the
-                // provider IP and the operator must use the forwarded port for connections.
-                let port_endpoints: Vec<(u16, String)> = endpoints
+                tracing::info!("  [dns] {} — provider IP: {}", svc_name, ip);
+
+                // Log connection strings for NodePort services (ports not in the A record).
+                let node_ports: Vec<u16> = endpoints
                     .iter()
                     .filter(|e| e.service == svc_name && e.port != 80 && e.port != 443)
-                    .map(|e| (e.port, e.uri.clone()))
+                    .map(|e| e.port)
                     .collect();
-
-                // Print connection strings prominently for each accept domain × port.
-                tracing::info!("  [{}] provider IP: {} (DNS A record)", svc_name, ip);
                 for domain in &accept_domains {
-                    for (port, _) in &port_endpoints {
-                        tracing::info!("  [{}] connection string: {}:{}", svc_name, domain, port);
+                    for port in &node_ports {
+                        tracing::info!("  [dns] connection: {}:{}", domain, port);
                     }
                 }
 

@@ -268,7 +268,14 @@ pub async fn verify_certs_and_signal_start(
         .next()
         .unwrap_or(&ssh_ep.uri);
     tracing::info!(
-        "  [{}] Watch node setup: ssh -i {} -p {} root@{} 'tail -f /tmp/oline-node.log'",
+        "  [{}] Watch setup:     ssh -i {} -p {} root@{} 'tail -f /tmp/oline-node.log'",
+        label,
+        ssh_key_path.display(),
+        ssh_ep.port,
+        provider_host,
+    );
+    tracing::info!(
+        "  [{}] Watch node:      ssh -i {} -p {} root@{} 'tail -f /tmp/node.log'",
         label,
         ssh_key_path.display(),
         ssh_ep.port,

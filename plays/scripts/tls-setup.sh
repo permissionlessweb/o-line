@@ -113,12 +113,10 @@ for svc in $services; do
     fi
 done
 
-# ── 5. start nginx ─────────────────────────────────────────────────────────────
+# ── 5. validate nginx configuration (start deferred to entrypoint) ─────────────
 log "Testing nginx configuration..."
 nginx -t || die "nginx config test failed — check rendered configs above"
-log "Starting nginx..."
-nginx
-log "nginx running with TLS."
+log "nginx config OK — will be started by entrypoint after cosmos setup."
 [ -n "$RPC_DOMAIN"  ] && log "  RPC  -> https://$RPC_DOMAIN"
 [ -n "$API_DOMAIN"  ] && log "  API  -> https://$API_DOMAIN"
 [ -n "$GRPC_DOMAIN" ] && log "  GRPC -> https://$GRPC_DOMAIN"

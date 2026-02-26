@@ -413,6 +413,35 @@ impl OLineDeployer {
         )
         .await?;
 
+        // ── SFTP TLS certs to seed node ──
+        let seed_endpoints: Vec<ServiceEndpoint> = a_endpoints
+            .iter()
+            .filter(|e| e.service == "oline-a-seed")
+            .cloned()
+            .collect();
+        if seed_endpoints.is_empty() {
+            tracing::info!("  Warning: no endpoints found for oline-a-seed — skipping cert delivery");
+        } else {
+            tracing::info!("  Provisioning TLS certificates to seed node via SFTP...");
+            push_tls_certs_sftp(
+                "phase-a-seed",
+                &seed_endpoints,
+                ssh_privkey_pem,
+                &ssh_key_path,
+                &cert,
+                &privkey,
+            )
+            .await?;
+            verify_certs_and_signal_start(
+                "phase-a-seed",
+                &seed_endpoints,
+                &ssh_key_path,
+                &remote_cert,
+                &remote_key,
+            )
+            .await?;
+        }
+
         // ── SFTP TLS certs to minio-ipfs node ──
         // init-nginx on the minio node bootstraps sshd and polls /tmp/tls/ for certs.
         // Once certs land, it renders the nginx config and exits — svc-nginx starts nginx.
