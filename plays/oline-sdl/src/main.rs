@@ -598,6 +598,7 @@ impl OLineDeployer {
         }
 
         let c_vars = build_phase_c_vars(
+            &self.config,
             &seed_peer,
             &snapshot_peer,
             &left_tackle_peer,
@@ -798,6 +799,7 @@ async fn cmd_generate_sdl() -> Result<(), Box<dyn Error>> {
         }
         "c" => {
             let vars = build_phase_c_vars(
+                &config,
                 &seed_peer,
                 &snapshot_peer,
                 &left_tackle_peer,
@@ -810,6 +812,7 @@ async fn cmd_generate_sdl() -> Result<(), Box<dyn Error>> {
                 build_phase_a_vars(&config).await,
                 build_phase_b_vars(&config, &snapshot_peer, &snapshot_url, &statesync_rpc),
                 build_phase_c_vars(
+                    &config,
                     &seed_peer,
                     &snapshot_peer,
                     &left_tackle_peer,

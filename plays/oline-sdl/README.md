@@ -30,6 +30,12 @@ This builds and installs the `oline` binary to `~/.cargo/bin/`. Make sure `~/.ca
 
 ## First-Time Setup: Encrypt Your Mnemonic
 
+First, please copy the env template and populate the values with your specific requirements
+
+```bash
+cp .env.example .env
+```
+
 Before deploying, encrypt your mnemonic so it's stored safely in a `.env` file rather than entered as plaintext each time.
 
 ```bash

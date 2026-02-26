@@ -18,32 +18,20 @@ pub fn endpoint_hostname(uri: &str) -> &str {
 }
 
 /// Helper to insert the shared SDL template variables into a HashMap.
-pub fn insert_sdl_defaults(vars: &mut std::collections::HashMap<String, String>) {
-    vars.insert(
-        "OMNIBUS_IMAGE".into(),
-        std::env::var("OMNIBUS_IMAGE").expect("omnibus image"),
-    );
-    vars.insert(
-        "CHAIN_JSON".into(),
-        std::env::var("OLINE_CHAIN_JSON").expect("chain json"),
-    );
-    vars.insert(
-        "ADDRBOOK_URL".into(),
-        std::env::var("OLINE_ADDRBOOK_URL").expect("addrbook"),
-    );
-    vars.insert(
-        "TLS_CONFIG_URL".into(),
-        var("TLS_CONFIG_URL").unwrap_or_default(),
-    );
-    vars.insert(
-        "CHAIN_ID".into(),
-        var("OLINE_CHAIN_ID").or_else(|_| var("CHAIN_ID")).unwrap_or_default(),
-    );
+/// All values come from the config struct so interactively-entered values
+/// are used, not just env vars that happened to be set at launch.
+pub fn insert_sdl_defaults(vars: &mut HashMap<String, String>, config: &OLineConfig) {
+    vars.insert("OMNIBUS_IMAGE".into(), config.val("default.omnibus_image"));
+    vars.insert("CHAIN_JSON".into(),    config.val("chain.chain_json"));
+    vars.insert("ADDRBOOK_URL".into(),  config.val("chain.addrbook_url"));
+    vars.insert("TLS_CONFIG_URL".into(), config.val("cloudflare.tls_config_url"));
+    vars.insert("CHAIN_ID".into(),      config.val("chain.chain_id"));
 }
 
 /// reusable helper for defining the domain url & ports for each oline step
 pub fn insert_nodes_sdl_variables(
-    vars: &mut std::collections::HashMap<String, String>,
+    vars: &mut HashMap<String, String>,
+    config: &OLineConfig,
     suffix: &str,
 ) {
     let (p2p_port, rpc_port, api_port, grpc_port) = (
@@ -67,14 +55,8 @@ pub fn insert_nodes_sdl_variables(
     vars.insert(api_domain.clone(), var(api_domain).unwrap_or_default());
     vars.insert(grpc_port.clone(), var(grpc_port).unwrap_or_default());
     vars.insert(grpc_domain.clone(), var(grpc_domain).unwrap_or_default());
-    vars.insert(
-        "ENTRYPOINT_URL".into(),
-        var("ENTRYPOINT_URL").unwrap_or_default(),
-    );
-    vars.insert(
-        "SSH_PORT".into(),
-        var("SSH_PORT").unwrap_or("22".to_string()),
-    );
+    vars.insert("ENTRYPOINT_URL".into(), config.val("cloudflare.entrypoint_url"));
+    vars.insert("SSH_PORT".into(), var("SSH_PORT").unwrap_or("22".to_string()));
 }
 
 /// Helper to insert S3 snapshot export variables.
@@ -152,9 +134,9 @@ pub async fn build_phase_a_vars(config: &OLineConfig) -> HashMap<String, String>
         "oline::special::snapshot-node".into(),
     );
     vars.insert("SEED_MONIKER".into(), "oline::special::seed-node".into());
-    insert_nodes_sdl_variables(&mut vars, "SNAPSHOT");
-    insert_nodes_sdl_variables(&mut vars, "SEED");
-    insert_sdl_defaults(&mut vars);
+    insert_nodes_sdl_variables(&mut vars, config, "SNAPSHOT");
+    insert_nodes_sdl_variables(&mut vars, config, "SEED");
+    insert_sdl_defaults(&mut vars, config);
     let s3_key = generate_credential(S3_KEY);
     let s3_secret = generate_credential(S3_SECRET);
     let s3_host = config.val("snapshot.download_domain").clone();
@@ -186,7 +168,7 @@ pub fn build_phase_b_vars(
     statesync_rpc_servers: &str,
 ) -> HashMap<String, String> {
     let mut vars = HashMap::new();
-    insert_sdl_defaults(&mut vars);
+    insert_sdl_defaults(&mut vars, config);
     vars.insert(
         "TERPD_P2P_PERSISTENT_PEERS".into(),
         snapshot_peer.to_string(),
@@ -217,6 +199,7 @@ pub fn build_phase_b_vars(
 }
 
 pub fn build_phase_c_vars(
+    config: &OLineConfig,
     seed_peer: &str,
     snapshot_peer: &str,
     left_tackle_peer: &str,
@@ -224,7 +207,7 @@ pub fn build_phase_c_vars(
 ) -> HashMap<String, String> {
     let tackles_combined = format!("{},{}", left_tackle_peer, right_tackle_peer);
     let mut vars = HashMap::new();
-    insert_sdl_defaults(&mut vars);
+    insert_sdl_defaults(&mut vars, config);
     vars.insert("TERPD_P2P_SEEDS".into(), format!("{} ", seed_peer));
     vars.insert(
         "TERPD_P2P_PRIVATE_PEER_IDS".into(),

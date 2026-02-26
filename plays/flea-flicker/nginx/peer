@@ -1,6 +1,0 @@
-stream {
-    server {
-        listen ${P2P_PORT};
-        proxy_pass 127.0.0.1:${P2P_PORT};
-    }
-}

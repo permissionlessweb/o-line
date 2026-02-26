@@ -1,35 +1,41 @@
 #!/bin/bash
-# tls-setup.sh --rpc <P2P_DOMAIN>:<RPC_PORT> --grpc <GRPC_DOMAIN>:<GRPC_PORT> --p2p <P2P_DOMAIN>:<P2P_PORT> --api <API_DOMAIN>:<API_PORT>
+# tls-setup.sh
 #
-# NOTE: if any flag is omitted, this means this node is not exposing/providing these ports, so we avoid configuring nginx 
+# Sets up nginx TLS termination for RPC, API, P2P, and/or GRPC services.
+# Reads *_DOMAIN + *_PORT env vars (as set by the Akash SDL).
+# TLS cert + key must already exist at $TLS_CERT / $TLS_KEY — placed there by
+# oline-entrypoint.sh via SFTP before this script is invoked.
 #
+# NOTE: sshd is started and managed by oline-entrypoint.sh. Do NOT start it here.
 
 set -e
 log() { echo "[tls-setup] $*"; }
 die() { echo "[tls-setup] ERROR: $*" >&2; exit 1; }
 
-NODE_CONFIG_SCRIPT="${NODE_CONFIG_SCRIPT:-https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/feat/tls/plays/scripts/config-node-endpoints.sh}"
 NGINX_CONFIG_TEMPLATES="${NGINX_CONFIG_TEMPLATES:-https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/feat/tls/plays/flea-flicker/nginx}"
-TLS_CERT_PATH="/etc/letsencrypt/live/cert.pem"
-TLS_PRIVKEY_PATH="/etc/letsencrypt/live/privkey.pem"
 
-# ── defaults ──────────────────────────────────────────────────────────────────
-services="RPC API PEER GRPC"
+# ── paths ──────────────────────────────────────────────────────────────────────
+# Certs are delivered via SFTP to /tmp/tls/ by oline before this script runs.
+TLS_CERT="${TLS_CERT:-/tmp/tls/cert.pem}"
+TLS_KEY="${TLS_KEY:-/tmp/tls/privkey.pem}"
+RENDERED_DIR="${RENDERED_DIR:-/etc/nginx/conf.d}"
+NGINX_FULL="${NGINX_FULL:-/etc/nginx/nginx.conf}"
+
+# ── validation ─────────────────────────────────────────────────────────────────
+# Services use *_DOMAIN + *_PORT naming (SDL env convention: RPC_DOMAIN, P2P_DOMAIN, etc.)
+services="RPC API GRPC"
 at_least_one=false
 for svc in $services; do
-    eval "origin_val=\"\$${svc}_ORIGIN\""
+    eval "domain_val=\"\$${svc}_DOMAIN\""
     eval "port_val=\"\$${svc}_PORT\""
-    # echo "DEBUG: ${svc}_ORIGIN=$origin_val, ${svc}_PORT=$port_val" >&2
-    if [ -n "$origin_val" ] && [ -n "$port_val" ]; then
-        # Check port is numeric using POSIX case statement
+    if [ -n "$domain_val" ] && [ -n "$port_val" ]; then
         case "$port_val" in
             ''|*[!0-9]*)
-                die "port must a numeric value  be numeric"
+                die "${svc}_PORT must be a numeric value"
                 ;;
             *)
-                # Port is numeric - additional validation
                 if [ "$port_val" -lt 1 ] || [ "$port_val" -gt 65535 ]; then
-                   die " ${svc}_PORT $port_val out of range 1-65535"
+                   die "${svc}_PORT $port_val out of range 1-65535"
                 fi
                 at_least_one=true
                 ;;
@@ -37,103 +43,82 @@ for svc in $services; do
     fi
 done
 
-# Fail if no service has both ORIGIN and PORT set
 if [ "$at_least_one" = false ]; then
-    echo "Error: At least one of the following must be fully set (ORIGIN and PORT):" >&2
-    echo "  RPC, API, PEER, or GRPC" >&2
-    echo "Example: RPC_ORIGIN=localhost RPC_PORT=8545 $0" >&2
+    echo "Error: At least one service must have both DOMAIN and PORT set." >&2
+    echo "  Services: RPC, API, GRPC" >&2
+    echo "Example: RPC_DOMAIN=rpc.example.com RPC_PORT=443 $0" >&2
     exit 1
 fi
 log "Configuration validated."
-eval "RPC_ORIGIN=\"\$RPC_ORIGIN\"; RPC_PORT=\"\$RPC_PORT\""
-eval "API_ORIGIN=\"\$API_ORIGIN\"; API_PORT=\"\$API_PORT\""
-eval "PEER_ORIGIN=\"\$PEER_ORIGIN\"; PEER_PORT=\"\$PEER_PORT\""
-eval "GRPC_ORIGIN=\"\$GRPC_ORIGIN\"; GRPC_PORT=\"\$GRPC_PORT\""
-[ -n "$RPC_ORIGIN" ] && [ -n "$RPC_PORT" ] && log "RPC: $RPC_ORIGIN:$RPC_PORT"
-[ -n "$API_ORIGIN" ] && [ -n "$API_PORT" ] && log "API: $API_ORIGIN:$API_PORT"
-[ -n "$PEER_ORIGIN" ] && [ -n "$PEER_PORT" ] && log "PEER: $PEER_ORIGIN:$PEER_PORT"
-[ -n "$GRPC_ORIGIN" ] && [ -n "$GRPC_PORT" ] && log "GRPC: $GRPC_ORIGIN:$GRPC_PORT"
-# die "testing"
+[ -n "$RPC_DOMAIN"  ] && [ -n "$RPC_PORT"  ] && log "  RPC:  $RPC_DOMAIN:$RPC_PORT"
+[ -n "$API_DOMAIN"  ] && [ -n "$API_PORT"  ] && log "  API:  $API_DOMAIN:$API_PORT"
+[ -n "$GRPC_DOMAIN" ] && [ -n "$GRPC_PORT" ] && log "  GRPC: $GRPC_DOMAIN:$GRPC_PORT"
 
-# ── 1. install nginx + certbot ─────────────────────────────────────────────────
-log "Installing nginx, certbot, gettext..."
+# Verify TLS certs are present (SFTP'd by orchestrator before this script runs)
+[ -f "$TLS_CERT" ] || die "TLS cert not found at $TLS_CERT"
+[ -f "$TLS_KEY" ]  || die "TLS key not found at $TLS_KEY"
+log "TLS cert: $TLS_CERT"
+log "TLS key:  $TLS_KEY"
+
+# ── 1. install nginx + gettext ─────────────────────────────────────────────────
+log "Installing nginx, gettext..."
 if command -v apt-get > /dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq
-    apt-get install -y -qq nginx certbot python3-certbot-nginx gettext-base curl jq openssh-server
+    apt-get update -qq >/dev/null 2>&1
+    apt-get install -y -qq nginx gettext-base curl jq >/dev/null 2>&1
 elif command -v apk > /dev/null 2>&1; then
-    apk add --no-cache nginx certbot certbot-nginx gettext curl jq
+    apk add --no-cache nginx gettext curl jq >/dev/null 2>&1
 else
     die "Unsupported package manager (need apt-get or apk)"
 fi
+mkdir -p "$RENDERED_DIR"
 
-# ── 2. fetch each nginx config template based on which flags are being configured  ───────────────────────────────────────────
-log "Fetching nginx config template from ${NGINX_CONFIG_TEMPLATES}"
+# ── 2. fetch main nginx.conf template ──────────────────────────────────────────
+log "Fetching main nginx.conf template..."
+MAIN_NGINX_TMPL=$(mktemp /tmp/nginx-main.XXXXXX)
+curl -fsSL "${NGINX_CONFIG_TEMPLATES}/template" -o "$MAIN_NGINX_TMPL" \
+    || die "Failed to fetch main nginx.conf template"
+cp "$MAIN_NGINX_TMPL" "$NGINX_FULL"
+
+# ── 3. fetch + render per-service config templates ─────────────────────────────
+log "Rendering per-service nginx configs..."
+export TLS_CERT TLS_KEY
 for svc in $services; do
     PORT_VAR="${svc}_PORT"
     DOMAIN_VAR="${svc}_DOMAIN"
     port_val=$(printenv "$PORT_VAR" || true)
     domain_val=$(printenv "$DOMAIN_VAR" || true)
     if [ -n "$port_val" ] && [ -n "$domain_val" ]; then
-        log "Configuring service: $svc"
-        TEMPLATE_FILE=$(mktemp /tmp/nginx-template."${svc}".XXXXXX)
-        curl -fsSL "${NGINX_CONFIG_TEMPLATES}/${svc}" -o "${TEMPLATE_FILE}" || die "Failed to fetch nginx config template for ${svc}"
-        export "$PORT_VAR=$port_val"
-        export "$DOMAIN_VAR=$domain_val"
-        RENDERED_CONF="${RENDERED_DIR}/${svc}.conf"
-
+        log "  Configuring $svc ($domain_val:$port_val)"
+        # Template filenames and rendered conf names are lowercase (rpc, api, p2p, grpc)
+        svc_lower=$(echo "$svc" | tr '[:upper:]' '[:lower:]')
+        TEMPLATE_FILE=$(mktemp /tmp/nginx-tmpl."${svc}".XXXXXX)
+        curl -fsSL "${NGINX_CONFIG_TEMPLATES}/${svc_lower}" -o "${TEMPLATE_FILE}" \
+            || die "Failed to fetch nginx template for ${svc}"
+        export "$PORT_VAR=$port_val" "$DOMAIN_VAR=$domain_val"
+        RENDERED_CONF="${RENDERED_DIR}/${svc_lower}.conf"
         VARS='$'"${PORT_VAR}"',$'"${DOMAIN_VAR}"',$TLS_CERT,$TLS_KEY'
         envsubst "$VARS" < "${TEMPLATE_FILE}" > "${RENDERED_CONF}"
-        log "Rendered config written to ${RENDERED_CONF}"
+        log "  Rendered: ${RENDERED_CONF}"
     fi
 done
-# -------------------------------------------------------------------
-# Update main nginx config (uncomment includes per service)
-# -------------------------------------------------------------------
-cp "${MAIN_NGINX_CONF}" "${NGINX_FULL}"
+
+# ── 4. uncomment service includes in main nginx.conf ──────────────────────────
 for svc in $services; do
     PORT_VAR="${svc}_PORT"
     port_val=$(printenv "$PORT_VAR" || true)
     if [ -n "$port_val" ]; then
-        log "Enabling include for $svc"
-        sed -i.bak "/PORT:${svc}_PORT/s/^#[[:space:]]*//" "${NGINX_FULL}"
+        log "  Enabling $svc include in nginx.conf"
+        sed -i.bak "/PORT:${svc}_PORT/s/^#[[:space:]]*//" "$NGINX_FULL"
     fi
 done
-# # update ssh config block with correct ports
-# TEMPLATE_FILE=$(mktemp /tmp/nginx-template.ssh.XXXXXX)
-# VARS_FOR_SSH='$SSH_PORT'
-# RENDERED_SSH_CONF="${RENDERED_DIR}/ssh.conf"
-# curl -fsSL "${NGINX_CONFIG_TEMPLATES}/ssh" -o "${TEMPLATE_FILE}" || die "Failed to fetch nginx config template for ssh"
-# # Substitute SSH_PORT (and any other needed variables) in the SSH template
-# envsubst "$VARS_FOR_SSH" < "${TEMPLATE_FILE}" > "${RENDERED_SSH_CONF}"
-# log "Rendered SSH config written to ${RENDERED_SSH_CONF}"
 
-# open up ssh to dedicated port (remove default from 22)
-# install ssh server 
-mkdir -p /var/run/sshd ~/.ssh
-chmod 700 ~/.ssh
-# change default port
-sed -i "s/#Port 22/Port ${SSH_PORT}/" /etc/ssh/sshd_config
-sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
-# remove default password (if exists)
-sed -i 's/PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
-sed -i 's/PubkeyAuthentication no/PubkeyAuthentication yes/' /etc/ssh/sshd_config
-# add authorized ssh pubkey 
-touch ~/.ssh/authorized_keys
-echo "$SSH_PUBKEY" >> ~/.ssh/authorized_keys
-chmod 600 ~/.ssh/authorized_keys
-# Start SSH daemon
-/usr/sbin/sshd -D
-
-# ── 5. wait for TLS certificate to be set via sftp ─────────────────────────────────────
-log "Waiting for tls cert & keys to be provided via sftp"
-while [ ! -e "$TLS_CERT_PATH" ] && [ ! -e "$TLS_PRIVKEY_PATH" ]; do
-    sleep 5
-done
-log "Set key & cert at path: $TLS_CERT_PATH & $TLS_PRIVKEY_PATH  "
-
-# ── 6. configure nginx based on flags  ─────────────────
-log "Stopping temporary nginx..."
-log "Starting nginx daemon..."
+# ── 5. start nginx ─────────────────────────────────────────────────────────────
+log "Testing nginx configuration..."
+nginx -t || die "nginx config test failed — check rendered configs above"
+log "Starting nginx..."
 nginx
-log "nginx running with TLS for:"
+log "nginx running with TLS."
+[ -n "$RPC_DOMAIN"  ] && log "  RPC  -> https://$RPC_DOMAIN"
+[ -n "$API_DOMAIN"  ] && log "  API  -> https://$API_DOMAIN"
+[ -n "$GRPC_DOMAIN" ] && log "  GRPC -> https://$GRPC_DOMAIN"

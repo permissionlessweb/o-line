@@ -6,7 +6,7 @@ use akash_deploy_rs::ServiceEndpoint;
 use argon2::Argon2;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
-use openssh::SessionBuilder;
+use openssh::{KnownHosts, SessionBuilder};
 use rand::RngCore;
 use ssh_key::{LineEnding, PrivateKey};
 use std::{env::var, error::Error, path::PathBuf, thread::sleep, time::Duration};
@@ -23,8 +23,9 @@ pub fn gen_ssh_key() -> ssh_key::PrivateKey {
     ssh_key::PrivateKey::random(&mut OsRng, ssh_key::Algorithm::Ed25519).unwrap()
 }
 pub fn save_ssh_key(k: ssh_key::PrivateKey, path: &PathBuf) {
-    let k = k.to_openssh(LineEnding::LF).unwrap();
-    std::fs::write(path, k).expect("Failed to save SSH private key");
+    // write_openssh_file sets 0o600 permissions automatically on Unix
+    k.write_openssh_file(path, LineEnding::LF)
+        .expect("Failed to save SSH private key");
 }
 /// Forms `ssh://root@<host>:<port>` from a deployment endpoint URI + forwarded port.
 /// Strips any `http://` / `https://` scheme and port suffix from `uri` before use.
@@ -58,6 +59,7 @@ pub async fn send_cert_sftp(
     let sftp = Sftp::from_session(
         SessionBuilder::default()
             .keyfile(ssh_key_path)
+            .known_hosts_check(KnownHosts::Accept) // ephemeral Akash node — skip host key verify
             .connect_mux(dest)
             .await?,
         Default::default(),
@@ -133,6 +135,7 @@ pub async fn push_tls_certs_sftp(
         ssh_ep.uri,
         ssh_ep.port
     );
+    tracing::info!("    dest: {}", dest);
     tracing::info!("  [{}] remote cert path: {}", label, remote_cert);
     tracing::info!("  [{}] remote key  path: {}", label, remote_key);
 
