@@ -6,11 +6,23 @@ http {
     # Allow unlimited body size — snapshot archives can be many GB.
     client_max_body_size 0;
 
+    # HTTP → HTTPS redirect
     server {
-        listen 8080; 
+        listen 80;
+        server_name ${SNAPSHOT_DOWNLOAD_DOMAIN};
+        return 301 https://$host$request_uri;
+    }
+
+    # HTTPS — proxy to MinIO
+    server {
+        listen 443 ssl;
         server_name ${SNAPSHOT_DOWNLOAD_DOMAIN};
 
-        # Proxy all S3/MinIO requests to the local MinIO server.
+        ssl_certificate     ${TLS_CERT};
+        ssl_certificate_key ${TLS_KEY};
+        ssl_protocols       TLSv1.2 TLSv1.3;
+        ssl_ciphers         HIGH:!aNULL:!MD5;
+
         location / {
             proxy_pass         http://${MINIO_BACKEND};
             proxy_http_version 1.1;

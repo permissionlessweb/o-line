@@ -153,7 +153,12 @@ services:
         proto: tcp
         to:
           - global: true
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
     env:
+      - SSH_PUBKEY=${SSH_PUBKEY}
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
       - MINIO_BUCKET=${MINIO_BUCKET}

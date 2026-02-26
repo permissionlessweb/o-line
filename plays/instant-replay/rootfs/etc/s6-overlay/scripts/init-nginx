@@ -9,36 +9,79 @@ if [ "$NGINX_ENABLED" != "true" ]; then
 fi
 
 if [ -z "${SNAPSHOT_DOWNLOAD_DOMAIN}" ]; then
-    echo "[init-nginx] SNAPSHOT_DOWNLOAD_DOMAIN not set — skipping TLS setup"
+    echo "[init-nginx] SNAPSHOT_DOWNLOAD_DOMAIN not set — skipping"
     exit 0
 fi
 
 MINIO_PORT="${MINIO_PORT:-9000}"
 export MINIO_BACKEND="localhost:${MINIO_PORT}"
+export TLS_CERT="${TLS_CERT:-/tmp/tls/cert.pem}"
+export TLS_KEY="${TLS_KEY:-/tmp/tls/privkey.pem}"
 
 echo "[init-nginx] Generating nginx config for ${SNAPSHOT_DOWNLOAD_DOMAIN} -> ${MINIO_BACKEND}"
-envsubst '${SNAPSHOT_DOWNLOAD_DOMAIN} ${MINIO_BACKEND}' \
-    < /etc/nginx/nginx.conf.template \
-    > /etc/nginx/nginx.conf
 
-# Start nginx temporarily so certbot can serve the HTTP-01 ACME challenge.
-nginx
+# ── Bootstrap sshd so oline can deliver TLS certs via SFTP ────────────────────
+if [ -n "${SSH_PUBKEY}" ]; then
+    mkdir -p /root/.ssh
+    echo "${SSH_PUBKEY}" >> /root/.ssh/authorized_keys
+    chmod 600 /root/.ssh/authorized_keys
 
-# Obtain/renew a Let's Encrypt certificate.
-# Falls back gracefully if DNS isn't propagated yet on first boot.
-if [ -n "${CERTBOT_EMAIL}" ]; then
-    echo "[init-nginx] Running certbot for ${SNAPSHOT_DOWNLOAD_DOMAIN}"
-    certbot --nginx \
-        -d "${SNAPSHOT_DOWNLOAD_DOMAIN}" \
-        --non-interactive \
-        --agree-tos \
-        --email "${CERTBOT_EMAIL}" \
-        || true
-else
-    echo "[init-nginx] CERTBOT_EMAIL not set — skipping TLS cert"
+    if ! command -v sshd >/dev/null 2>&1; then
+        echo "[init-nginx] Installing openssh-server..."
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssh-server >/dev/null 2>&1 \
+            || apk add --no-cache openssh >/dev/null 2>&1 || true
+    fi
+
+    SSHD_BIN=$(command -v sshd 2>/dev/null) || { echo "[init-nginx] ERROR: sshd not found"; exit 1; }
+    mkdir -p /run/sshd /var/run/sshd
+    ssh-keygen -A >/dev/null 2>&1 || true
+    printf '\nPermitRootLogin yes\nPubkeyAuthentication yes\n' >> /etc/ssh/sshd_config
+
+    # Pre-create the cert landing dir so SFTP create(true) finds the parent.
+    mkdir -p /tmp/tls
+
+    # Persist s6 container env for SSH sessions (SSH starts with minimal env).
+    export -p | grep -v 'SHLVL\|^export _=' > /tmp/minio-env.sh
+
+    "$SSHD_BIN" -D &
+    echo "[init-nginx] sshd started — waiting for TLS certs at ${TLS_CERT}"
+
+    elapsed=0
+    while [ ! -f "$TLS_CERT" ] || [ ! -f "$TLS_KEY" ]; do
+        sleep 5
+        elapsed=$((elapsed + 5))
+        echo "[init-nginx] [${elapsed}s/600s] waiting for certs..."
+        if [ "$elapsed" -ge 600 ]; then
+            echo "[init-nginx] WARNING: TLS certs not received after 600s — starting nginx without TLS"
+            break
+        fi
+    done
 fi
 
-# Stop the temporary nginx.
-nginx -s stop || true
+# ── Render nginx config ────────────────────────────────────────────────────────
+if [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ]; then
+    echo "[init-nginx] Certs found — rendering TLS nginx config"
+    envsubst '${SNAPSHOT_DOWNLOAD_DOMAIN} ${MINIO_BACKEND} ${TLS_CERT} ${TLS_KEY}' \
+        < /etc/nginx/nginx.conf.template \
+        > /etc/nginx/nginx.conf
+else
+    echo "[init-nginx] No certs — rendering HTTP-only nginx config on port 80"
+    # Minimal fallback: HTTP proxy only (no TLS).
+    cat > /etc/nginx/nginx.conf <<NGINX_EOF
+events { worker_connections 1024; }
+http {
+    client_max_body_size 0;
+    server {
+        listen 80;
+        server_name ${SNAPSHOT_DOWNLOAD_DOMAIN};
+        location / {
+            proxy_pass http://${MINIO_BACKEND};
+            proxy_set_header Host \$http_host;
+            proxy_buffering off;
+        }
+    }
+}
+NGINX_EOF
+fi
 
 echo "[init-nginx] Done"

@@ -61,6 +61,8 @@ if [ -n "$TLS_CONFIG_URL" ]; then
 fi
 # ─────────────────────────────────────────────────────────────────────────────
 
+echo "=== Cosmos node setup starting ==="
+
 export CHAIN_JSON="${CHAIN_JSON:-$CHAIN_URL}" # deprecate CHAIN_URL
 if [[ -z "$CHAIN_JSON" && -n "$PROJECT" ]]; then
   CHAIN_JSON="https://raw.githubusercontent.com/cosmos/chain-registry/master/${PROJECT}/chain.json"
@@ -148,7 +150,7 @@ if [ "$GCS_ENABLED" == "1" ]; then
   fi
 fi
 
-[ -z "$CHAIN_ID" ] && echo "ERROR: CHAIN_ID not found" && exit
+[ -z "$CHAIN_ID" ] && echo "ERROR: CHAIN_ID not found — check CHAIN_ID or CHAIN_JSON env vars" && exit 1
 
 if [[ -n "$BINARY_URL" && ! -f "/bin/$PROJECT_BIN" ]]; then
   echo "Download binary $PROJECT_BIN from $BINARY_URL"
@@ -576,10 +578,9 @@ if [ -z "$START_CMD" ]; then
   fi
 fi
 
+echo "=== Launching cosmos node: $START_CMD ==="
 if [ -n "$SNAPSHOT_PATH" ]; then
-  echo "Running '$START_CMD' with snapshot..."
   exec snapshot.sh "$START_CMD"
 else
-  echo "Running '$START_CMD'..."
   exec $START_CMD
 fi

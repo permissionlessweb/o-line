@@ -413,6 +413,29 @@ impl OLineDeployer {
         )
         .await?;
 
+        // ── SFTP TLS certs to minio-ipfs node ──
+        // init-nginx on the minio node bootstraps sshd and polls /tmp/tls/ for certs.
+        // Once certs land, it renders the nginx config and exits — svc-nginx starts nginx.
+        tracing::info!("  Provisioning TLS certificates to minio-ipfs node via SFTP...");
+        let minio_endpoints: Vec<ServiceEndpoint> = a_endpoints
+            .iter()
+            .filter(|e| e.service == "oline-a-minio-ipfs")
+            .cloned()
+            .collect();
+        if minio_endpoints.is_empty() {
+            tracing::info!("  Warning: no endpoints found for oline-a-minio-ipfs — skipping cert delivery");
+        } else {
+            push_tls_certs_sftp(
+                "phase-a-minio",
+                &minio_endpoints,
+                ssh_privkey_pem,
+                &ssh_key_path,
+                &cert,
+                &privkey,
+            )
+            .await?;
+        }
+
         // ── Extract peer IDs via DNS domains ──
         // Find the forwarded NodePorts for each service's RPC (26657) and P2P (26656).
         let snap_rpc_ep =
