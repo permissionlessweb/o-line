@@ -178,6 +178,90 @@ pub async fn push_tls_certs_sftp(
     Ok(())
 }
 
+/// SSH into the deployed node, verify TLS certs are at the expected paths,
+/// then launch the cosmos node setup by re-invoking the entrypoint script
+/// with `OLINE_PHASE=start` under `nohup` so it survives the SSH session close.
+///
+/// This runs immediately after `push_tls_certs_sftp` and gives the orchestrator
+/// explicit confirmation that:
+///   1. SSH is open and accessible
+///   2. The cert files landed at the correct remote paths
+///   3. The cosmos node setup has been triggered and is running in the background
+pub async fn verify_certs_and_signal_start(
+    label: &str,
+    endpoints: &[ServiceEndpoint],
+    ssh_key_path: &PathBuf,
+    remote_cert_path: &str,
+    remote_key_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let ssh_port: u16 = var("SSH_PORT")
+        .unwrap_or_else(|_| "22".into())
+        .parse()
+        .unwrap_or(22);
+
+    let ssh_ep = endpoints
+        .iter()
+        .find(|e| e.internal_port == ssh_port)
+        .ok_or_else(|| {
+            format!(
+                "[{}] No SSH endpoint found for internal port {}",
+                label, ssh_port
+            )
+        })?;
+
+    let dest = ssh_dest_path(&ssh_ep.port.to_string(), &ssh_ep.uri);
+    tracing::info!("  [{}] SSH verify + launch → {}", label, dest);
+
+    let session = SessionBuilder::default()
+        .keyfile(ssh_key_path)
+        .known_hosts_check(KnownHosts::Accept)
+        .connect_mux(&dest)
+        .await?;
+
+    // Step 1: verify both cert files are present at their expected paths.
+    let verify_cmd = format!(
+        "test -f '{cert}' && echo '[OK] {cert}' && test -f '{key}' && echo '[OK] {key}'",
+        cert = remote_cert_path,
+        key = remote_key_path,
+    );
+    let verify = session
+        .command("sh")
+        .arg("-c")
+        .arg(&verify_cmd)
+        .output()
+        .await?;
+
+    let stdout = String::from_utf8_lossy(&verify.stdout);
+    let stderr = String::from_utf8_lossy(&verify.stderr);
+    if !verify.status.success() {
+        return Err(format!(
+            "[{}] Cert verification failed — files not at expected paths.\n  stdout: {}\n  stderr: {}",
+            label,
+            stdout.trim(),
+            stderr.trim()
+        )
+        .into());
+    }
+    for line in stdout.trim().lines() {
+        tracing::info!("  [{}] {}", label, line);
+    }
+
+    // Step 2: launch cosmos node setup in the background.
+    // nohup ensures the process survives after this SSH session closes.
+    // Output is redirected to /tmp/oline-node.log for post-hoc inspection.
+    let launch = session
+        .command("sh")
+        .arg("-c")
+        .arg("OLINE_PHASE=start nohup bash /tmp/wrapper.sh >/tmp/oline-node.log 2>&1 & echo $!")
+        .output()
+        .await?;
+
+    let pid = String::from_utf8_lossy(&launch.stdout);
+    tracing::info!("  [{}] Node setup launched (PID {})", label, pid.trim());
+
+    Ok(())
+}
+
 /// Generate a random alphanumeric credential string of the given length.
 pub fn generate_credential(len: usize) -> String {
     use rand::Rng;

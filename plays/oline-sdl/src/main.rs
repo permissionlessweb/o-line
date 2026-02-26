@@ -401,6 +401,18 @@ impl OLineDeployer {
         )
         .await?;
 
+        // ── SSH verify: confirm certs landed + signal bootstrap to proceed ──
+        let remote_cert = var("TLS_REMOTE_CERT_PATH").unwrap_or_else(|_| "/tmp/tls/cert.pem".into());
+        let remote_key = var("TLS_REMOTE_KEY_PATH").unwrap_or_else(|_| "/tmp/tls/privkey.pem".into());
+        verify_certs_and_signal_start(
+            "phase-a-snapshot",
+            &a_endpoints,
+            &ssh_key_path,
+            &remote_cert,
+            &remote_key,
+        )
+        .await?;
+
         // ── Extract peer IDs via DNS domains ──
         // Find the forwarded NodePorts for each service's RPC (26657) and P2P (26656).
         let snap_rpc_ep =

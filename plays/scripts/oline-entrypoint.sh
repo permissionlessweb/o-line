@@ -4,22 +4,26 @@ set -e
 
 [ "$DEBUG" == "2" ] && set -x
 
-# fail fast, before snapshot is even taken
-if [[ "$SNAPSHOT_RETAIN" != "0" ]] && ! date -d "-$SNAPSHOT_RETAIN" >/dev/null 2>&1; then
-  echo "ERROR: Invalid SNAPSHOT_RETAIN value '$SNAPSHOT_RETAIN'. Expected format: '<N> minutes|hours|days|weeks|months'"
-  exit 1
-fi
+die() { echo "ERROR: $*" >&2; exit 1; }
 
-# ── SSH + TLS bootstrap ───────────────────────────────────────────────────
-# Start sshd in the background immediately so the orchestration engine can
-# SFTP the wildcard cert + key over. Then block here until the files arrive
-# before running any slow operations (snapshot download, genesis, etc.).
-if [ -n "$SSH_PUBKEY" ]; then
+# ── Bootstrap mode (default) ──────────────────────────────────────────────────
+# Installs sshd and registers the oline public key, then execs sshd as the
+# container's main process. oline will SFTP the TLS certs, verify them via SSH,
+# then invoke this script again with OLINE_PHASE=start to run the cosmos setup.
+# No wait loops — SSH access is the synchronization point.
+if [ "${OLINE_PHASE:-bootstrap}" = "bootstrap" ]; then
+  # fail fast before doing any slow work
+  if [[ "$SNAPSHOT_RETAIN" != "0" ]] && ! date -d "-$SNAPSHOT_RETAIN" >/dev/null 2>&1; then
+    echo "ERROR: Invalid SNAPSHOT_RETAIN value '$SNAPSHOT_RETAIN'. Expected format: '<N> minutes|hours|days|weeks|months'"
+    exit 1
+  fi
+
+  [ -n "$SSH_PUBKEY" ] || die "SSH_PUBKEY is required in bootstrap mode"
+
   mkdir -p /root/.ssh
   echo "$SSH_PUBKEY" >> /root/.ssh/authorized_keys
   chmod 600 /root/.ssh/authorized_keys
 
-  # Install openssh-server if sshd is not present in the image
   if ! command -v sshd >/dev/null 2>&1; then
     echo "Installing openssh-server..."
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssh-server >/dev/null 2>&1 \
@@ -27,40 +31,35 @@ if [ -n "$SSH_PUBKEY" ]; then
       || true
   fi
 
-  SSHD_BIN=$(command -v sshd 2>/dev/null || true)
-  if [ -n "$SSHD_BIN" ]; then
-    mkdir -p /run/sshd /var/run/sshd          # both paths used across distros
-    ssh-keygen -A >/dev/null 2>&1 || true     # generate host keys if missing
-    # Ensure root pubkey auth is enabled (appended lines override earlier ones)
-    printf '\nPermitRootLogin yes\nPubkeyAuthentication yes\n' >> /etc/ssh/sshd_config
-    $SSHD_BIN -D &                            # foreground + backgrounded: stays visible, errors go to stderr
-    echo "sshd started (PID $!)"
-  else
-    echo "WARNING: sshd not available — SFTP cert delivery unavailable"
-  fi
+  SSHD_BIN=$(command -v sshd 2>/dev/null) || die "sshd not found after install"
+  mkdir -p /run/sshd /var/run/sshd
+  ssh-keygen -A >/dev/null 2>&1 || true
+  printf '\nPermitRootLogin yes\nPubkeyAuthentication yes\n' >> /etc/ssh/sshd_config
+
+  # Create the cert landing directory now so oline's SFTP writes succeed
+  # immediately on connect. SFTP create(true) makes the file but not parents.
+  mkdir -p /tmp/tls
+
+  # Persist all SDL env vars so start mode (SSH session) can restore them.
+  # SSH sessions begin with a minimal environment — SDL vars won't be present otherwise.
+  export -p | grep -v 'OLINE_PHASE' > /tmp/oline-env.sh
+
+  echo "Bootstrap complete — handing off to sshd. oline will connect shortly."
+  exec "$SSHD_BIN" -D
 fi
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Start mode (OLINE_PHASE=start) ────────────────────────────────────────────
+# Invoked by oline via SSH after cert verification. Restores the SDL environment
+# saved during bootstrap, runs TLS setup, then falls through to cosmos setup.
+[ -f /tmp/oline-env.sh ] && . /tmp/oline-env.sh
 
 if [ -n "$TLS_CONFIG_URL" ]; then
-  _tls_dir="/tmp/tls"
-  mkdir -p "$_tls_dir"
-  echo "Waiting for TLS certificates at $_tls_dir..."
-  _tls_elapsed=0
-  _tls_timeout="${TLS_CERT_TIMEOUT:-300}"
-  while [ ! -f "$_tls_dir/cert.pem" ] || [ ! -f "$_tls_dir/privkey.pem" ]; do
-    if [ "$_tls_elapsed" -ge "$_tls_timeout" ]; then
-      echo "WARNING: TLS certs not received after ${_tls_timeout}s — continuing without TLS"
-      break
-    fi
-    sleep 5
-    _tls_elapsed=$((_tls_elapsed + 5))
-  done
-  if [ -f "$_tls_dir/cert.pem" ] && [ -f "$_tls_dir/privkey.pem" ]; then
-    echo "TLS certificates received — running TLS setup"
-    curl -fsSL "$TLS_CONFIG_URL" -o /tmp/tls-setup.sh
-    sh /tmp/tls-setup.sh
-  fi
+  echo "Running TLS setup..."
+  curl -fsSL "$TLS_CONFIG_URL" -o /tmp/tls-setup.sh
+  sh /tmp/tls-setup.sh
 fi
-# ─────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 export CHAIN_JSON="${CHAIN_JSON:-$CHAIN_URL}" # deprecate CHAIN_URL
 if [[ -z "$CHAIN_JSON" && -n "$PROJECT" ]]; then
@@ -560,7 +559,8 @@ fi
 
 # ── 7. patch config.toml ──────────────────────────────────────────────────────
 NODE_SCRIPT=node-config.sh
-# download patch file, provide flags to setup ports + comptaible with nginx reverse proxy setup
+NODE_CONFIG_SCRIPT="${NODE_CONFIG_SCRIPT:-https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/feat/tls/plays/scripts/config-node-endpoints.sh}"
+# download patch file, provide flags to setup ports + compatible with nginx reverse proxy setup
 curl -fsSL "${NODE_CONFIG_SCRIPT}" -o "$NODE_SCRIPT" || die "Download failed"
 sh "$NODE_SCRIPT"
 

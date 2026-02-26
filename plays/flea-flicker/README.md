@@ -36,3 +36,5 @@ There are many ways to do this. For oline, we employ & demonstrate the use of a 
 
 - reverse proxy blog: <https://medium.com/intrinsic-blog/why-should-i-use-a-reverse-proxy-if-node-js-is-production-ready-5a079408b2ca>
 - ssl certs: <https://www.cloudflare.com/learning/ssl/what-is-an-ssl-certificate/>
+- nginx documentation: <https://docs.nginx.com/nginx/admin-guide/web-server/reverse-proxy>
+- creating a client certificate cloudflare: <https://developers.cloudflare.com/ssl/client-certificates/create-a-client-certificate/>
