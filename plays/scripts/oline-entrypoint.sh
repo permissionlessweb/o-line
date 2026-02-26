@@ -154,7 +154,13 @@ if [ "$GCS_ENABLED" == "1" ]; then
   fi
 fi
 
-[ -z "$CHAIN_ID" ] && echo "ERROR: CHAIN_ID not found — check CHAIN_ID or CHAIN_JSON env vars" && exit 1
+if [ -z "$CHAIN_ID" ]; then
+  echo "ERROR: CHAIN_ID not found — check CHAIN_ID or CHAIN_JSON env vars"
+  echo "  CHAIN_ID='$CHAIN_ID'"
+  echo "  CHAIN_JSON='$CHAIN_JSON'"
+  echo "  CHAIN_JSON_EXISTS=$CHAIN_JSON_EXISTS"
+  exit 1
+fi
 
 if [[ -n "$BINARY_URL" && ! -f "/bin/$PROJECT_BIN" ]]; then
   echo "Download binary $PROJECT_BIN from $BINARY_URL"

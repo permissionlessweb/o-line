@@ -117,6 +117,6 @@ done
 log "Testing nginx configuration..."
 nginx -t || die "nginx config test failed — check rendered configs above"
 log "nginx config OK — will be started by entrypoint after cosmos setup."
-[ -n "$RPC_DOMAIN"  ] && log "  RPC  -> https://$RPC_DOMAIN"
-[ -n "$API_DOMAIN"  ] && log "  API  -> https://$API_DOMAIN"
-[ -n "$GRPC_DOMAIN" ] && log "  GRPC -> https://$GRPC_DOMAIN"
+if [ -n "$RPC_DOMAIN"  ]; then log "  RPC  -> https://$RPC_DOMAIN";  fi
+if [ -n "$API_DOMAIN"  ]; then log "  API  -> https://$API_DOMAIN";  fi
+if [ -n "$GRPC_DOMAIN" ]; then log "  GRPC -> https://$GRPC_DOMAIN"; fi
