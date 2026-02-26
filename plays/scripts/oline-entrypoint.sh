@@ -22,8 +22,8 @@ if [ -n "$SSH_PUBKEY" ]; then
   # Install openssh-server if sshd is not present in the image
   if ! command -v sshd >/dev/null 2>&1; then
     echo "Installing openssh-server..."
-    apt-get install -y -q openssh-server 2>/dev/null \
-      || apk add --no-cache openssh 2>/dev/null \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssh-server >/dev/null 2>&1 \
+      || apk add --no-cache openssh >/dev/null 2>&1 \
       || true
   fi
 
