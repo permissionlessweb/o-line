@@ -6,7 +6,7 @@ use akash_deploy_rs::{
 
 use o_line_sdl::{
     self, akash::*, cli::*, config::*, crypto::*, dns::cloudflare::*, snapshots::*,
-    FIELD_DESCRIPTORS, MAX_RETRIES,
+    FIELD_DESCRIPTORS,
 };
 
 use std::{
@@ -16,8 +16,6 @@ use std::{
     fs,
     io::{self, BufRead, Write},
     path::PathBuf,
-    thread::sleep,
-    time::Duration,
 };
 
 pub struct OLineDeployer {
@@ -33,8 +31,8 @@ impl OLineDeployer {
         Ok(Self {
             client: AkashClient::new_from_mnemonic(
                 &config.mnemonic,
-                &config.val("default.rpc_endpoint"),
-                &config.val("default.grpc_endpoint"),
+                &config.val("network.rpc_endpoint"),
+                &config.val("network.grpc_endpoint"),
             )
             .await?,
             signer: KeySigner::new_mnemonic_str(&config.mnemonic, None)
@@ -376,48 +374,32 @@ impl OLineDeployer {
         }
 
         // ── Use SFTP to transfer wildcard certs ──
-        tracing::info!(" Using sftp to set tls certificates");
-        let session_ssh_path =
-            format!("{}/{}", var("SECRETS_PATH").unwrap(), a_state.dseq.unwrap()).into();
-        save_ssh_key(
-            ssh_key::PrivateKey::from_openssh(a_vars.get("SSH_PRIVKEY").unwrap().as_bytes())
-                .unwrap(),
-            session_ssh_path,
-        );
-        let ssh_port = var("SSH_PORT").unwrap_or("22".to_string());
-        let uri = a_endpoints
-            .iter()
-            .find(|e| e.internal_port.to_string() == ssh_port)
-            .unwrap();
-        let ssh_path: PathBuf =
-            format!("{}/cert.pem", var("SECRETS_PATH").unwrap_or_default()).into();
-        let cert_path = format!("{}/cert.pem", var("SECRETS_PATH").unwrap_or_default());
-        let privkey_path = format!("{}/privkey.pem", var("SECRETS_PATH").unwrap_or_default());
-        let cert = fs::read(cert_path)?;
-        let privkey = fs::read(privkey_path)?;
+        tracing::info!("  Provisioning TLS certificates via SFTP...");
+        let secrets_path = var("SECRETS_PATH").unwrap_or_else(|_| ".".into());
+        let ssh_key_path: PathBuf = format!("{}/{}", secrets_path, a_state.dseq.unwrap()).into();
+        let cert_path = format!("{}/cert.pem", secrets_path);
+        let privkey_path = format!("{}/privkey.pem", secrets_path);
+        let cert = fs::read(&cert_path)
+            .map_err(|e| format!("Failed to read wildcard cert from '{}': {}", cert_path, e))?;
+        let privkey = fs::read(&privkey_path).map_err(|e| {
+            format!(
+                "Failed to read wildcard privkey from '{}': {}",
+                privkey_path, e
+            )
+        })?;
+        let ssh_privkey_pem = a_vars
+            .get("SSH_PRIVKEY")
+            .ok_or("SSH_PRIVKEY missing from phase-A vars")?;
 
-        let ssh_dest_path = &ssh_dest_path(&ssh_port, &uri.uri);
-        let mut retries = 0;
-        loop {
-            match send_cert_sftp(ssh_dest_path, &cert, &privkey, &ssh_path).await {
-                Ok(_) => {
-                    println!("Certificate sent successfully.");
-                    break;
-                }
-                Err(e) => {
-                    retries += 1;
-                    if retries >= MAX_RETRIES {
-                        eprintln!("Failed after {} retries: {}", MAX_RETRIES, e);
-                        return Err(e.into());
-                    }
-                    eprintln!(
-                        "Attempt {} failed: {}. Retrying in 2 seconds...",
-                        retries, e
-                    );
-                    sleep(Duration::from_secs(3));
-                }
-            }
-        }
+        push_tls_certs_sftp(
+            "phase-a-snapshot",
+            &a_endpoints,
+            ssh_privkey_pem,
+            &ssh_key_path,
+            &cert,
+            &privkey,
+        )
+        .await?;
 
         // ── Extract peer IDs via DNS domains ──
         // Find the forwarded NodePorts for each service's RPC (26657) and P2P (26656).
@@ -922,7 +904,7 @@ async fn cmd_manage_deployments() -> Result<(), Box<dyn Error>> {
             let (rpc, grpc) = if has_saved_config() {
                 let pw = rpassword::prompt_password("Enter config password: ")?;
                 if let Some(cfg) = load_config(&pw) {
-                    (cfg.val("rpc_endpoint"), cfg.val("grpc_endpoint"))
+                    (cfg.val("network.rpc_endpoint"), cfg.val("network.grpc_endpoint"))
                 } else {
                     let rpc = read_input(
                         &mut lines,

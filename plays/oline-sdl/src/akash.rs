@@ -1,6 +1,6 @@
 //! Helpers to inject variables and values into the sdls via use of akash-deploy-rs SDL feature: https://github.com/permissionlessweb/akash-deploy-rs/blob/main/src/sdl/template.rs
 use crate::config::OLineConfig;
-use crate::crypto::{gen_ssh_key, generate_credential, save_ssh_key, S3_KEY, S3_SECRET};
+use crate::crypto::{gen_ssh_key, generate_credential, S3_KEY, S3_SECRET};
 use crate::snapshots::fetch_latest_snapshot_url;
 use std::{collections::HashMap, env::var};
 
@@ -34,6 +34,10 @@ pub fn insert_sdl_defaults(vars: &mut std::collections::HashMap<String, String>)
     vars.insert(
         "TLS_CONFIG_URL".into(),
         var("TLS_CONFIG_URL").unwrap_or_default(),
+    );
+    vars.insert(
+        "CHAIN_ID".into(),
+        var("OLINE_CHAIN_ID").or_else(|_| var("CHAIN_ID")).unwrap_or_default(),
     );
 }
 

@@ -16,6 +16,10 @@ release:
 install:
     cargo install --path .
 
+# Install using vendored crates (no network required)
+install-vendored:
+    cargo install --path . --frozen --offline
+
 # Dry run: encrypt + deploy with --raw (no .env needed)
 dry-run:
     cargo run -- deploy --raw

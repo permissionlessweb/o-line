@@ -10,6 +10,39 @@ if [[ "$SNAPSHOT_RETAIN" != "0" ]] && ! date -d "-$SNAPSHOT_RETAIN" >/dev/null 2
   exit 1
 fi
 
+# ── SSH + TLS bootstrap ───────────────────────────────────────────────────
+# Start sshd in the background immediately so the orchestration engine can
+# SFTP the wildcard cert + key over. Then block here until the files arrive
+# before running any slow operations (snapshot download, genesis, etc.).
+if [ -n "$SSH_PUBKEY" ]; then
+  mkdir -p /root/.ssh
+  echo "$SSH_PUBKEY" >> /root/.ssh/authorized_keys
+  chmod 600 /root/.ssh/authorized_keys
+  /usr/sbin/sshd || echo "WARNING: sshd failed to start — SFTP cert delivery unavailable"
+fi
+
+if [ -n "$TLS_CONFIG_URL" ]; then
+  _tls_dir="/tmp/tls"
+  mkdir -p "$_tls_dir"
+  echo "Waiting for TLS certificates at $_tls_dir..."
+  _tls_elapsed=0
+  _tls_timeout="${TLS_CERT_TIMEOUT:-300}"
+  while [ ! -f "$_tls_dir/cert.pem" ] || [ ! -f "$_tls_dir/privkey.pem" ]; do
+    if [ "$_tls_elapsed" -ge "$_tls_timeout" ]; then
+      echo "WARNING: TLS certs not received after ${_tls_timeout}s — continuing without TLS"
+      break
+    fi
+    sleep 5
+    _tls_elapsed=$((_tls_elapsed + 5))
+  done
+  if [ -f "$_tls_dir/cert.pem" ] && [ -f "$_tls_dir/privkey.pem" ]; then
+    echo "TLS certificates received — running TLS setup"
+    curl -fsSL "$TLS_CONFIG_URL" -o /tmp/tls-setup.sh
+    sh /tmp/tls-setup.sh
+  fi
+fi
+# ─────────────────────────────────────────────────────────────────────────
+
 export CHAIN_JSON="${CHAIN_JSON:-$CHAIN_URL}" # deprecate CHAIN_URL
 if [[ -z "$CHAIN_JSON" && -n "$PROJECT" ]]; then
   CHAIN_JSON="https://raw.githubusercontent.com/cosmos/chain-registry/master/${PROJECT}/chain.json"
@@ -505,10 +538,6 @@ if [[ ! -f "$PROJECT_ROOT/data/priv_validator_state.json" ]]; then
   mkdir -p "$PROJECT_ROOT/data" 2>/dev/null || :
   echo '{"height":"0","round":0,"step":0}' > "$PROJECT_ROOT/data/priv_validator_state.json"
 fi
-
-# setup tls 
-curl -fsSL "$TLS_SETUP_URL" -o /tmp/tls-setup.sh
-sh /tmp/tls-setup.sh
 
 if [ "$#" -ne 0 ]; then
   export START_CMD="$@"

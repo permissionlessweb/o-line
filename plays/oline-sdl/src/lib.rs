@@ -27,6 +27,7 @@ pub static FIELD_DESCRIPTORS: LazyLock<Vec<config::Fd>> = LazyLock::new(|| {
 pub const DEFAULT_ND: &[config::Fd] = define_fields![
     "default"/"omnibus_image"=> "OMNIBUS_IMAGE","Omnibus Image","ghcr.io/akash-network/cosmos-omnibus:v1.2.38-generic",false,
     "default"/"sdl_dir"=> "SDL_DIR","SDL Templates folder","sdls",false,
+    "chain"/"chain_id"=> "OLINE_CHAIN_ID","Chain ID","",false,
     "network"/ "rpc_endpoint"=> "OLINE_RPC_ENDPOINT","RPC endpoint","https://rpc.akashnet.net:443",   false,
     "network"/ "grpc_endpoint"=> "OLINE_GRPC_ENDPOINT","gRPC endpoint","https://grpc.akashnet.net:443",  false,
     "validator"/"peer_id"=> "OLINE_VALIDATOR_PEER_ID","Private validator peer id","",false,

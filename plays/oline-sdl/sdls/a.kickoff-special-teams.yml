@@ -12,18 +12,23 @@ services:
         as: ${RPC_PORT_SNAPSHOT}
         to:
           - global: true
-        accept:
-          - ${RPC_DOMAIN_SNAPSHOT}
       - port: 80
         as: 80
         to:
           - global: true
+      - port: 443
+        as: 443
+        to:
+          - global: true
+        accept:
+          - ${RPC_DOMAIN_SNAPSHOT}
       - port: ${SSH_PORT}
         as: ${SSH_PORT}
         to:
           - global: true
     env:
       - MONIKER=${SNAPSHOT_MONIKER}
+      - CHAIN_ID=${CHAIN_ID}
       - CHAIN_JSON=${CHAIN_JSON}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - FASTSYNC_VERSION=v0
@@ -64,7 +69,7 @@ services:
       - sh
     args:
       - -c
-      - curl -fsSL ${ENTRYPOINT_URL} -o /tmp/wrapper.sh; sh /tmp/wrapper.sh
+      - curl -fsSL ${ENTRYPOINT_URL} -o /tmp/wrapper.sh; bash /tmp/wrapper.sh
   ${SEED_SVC}:
     image: ${OMNIBUS_IMAGE}
     expose:
@@ -72,8 +77,6 @@ services:
         as: 26657
         to:
           - global: true
-        accept:
-          - ${RPC_DOMAIN_SEED}
       - port: 26656
         as: 26656
         to:
@@ -82,11 +85,16 @@ services:
         as: 80
         to:
           - global: true
+      - port: 443
+        as: 443
+        to:
+          - global: true
         accept:
-          - ${P2P_DOMAIN_SEED}
+          - ${RPC_DOMAIN_SEED}
     env:
       - TLS_CONFIG_URL=${TLS_CONFIG_URL}
       - MONIKER=${SEED_MONIKER}
+      - CHAIN_ID=${CHAIN_ID}
       - CHAIN_JSON=${CHAIN_JSON}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - PRUNING=default

@@ -2,13 +2,16 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
+use akash_deploy_rs::ServiceEndpoint;
 use argon2::Argon2;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
 use openssh::SessionBuilder;
 use rand::RngCore;
-use ssh_key::LineEnding;
-use std::{error::Error, path::PathBuf};
+use ssh_key::{LineEnding, PrivateKey};
+use std::{env::var, error::Error, path::PathBuf, thread::sleep, time::Duration};
+
+use crate::MAX_RETRIES;
 
 pub const SALT_LEN: usize = 16; // AES-256-GCM fixed
 pub const NONCE_LEN: usize = 12; // AES-256-GCM fixed
@@ -19,52 +22,156 @@ pub fn gen_ssh_key() -> ssh_key::PrivateKey {
     use ssh_key::rand_core::OsRng;
     ssh_key::PrivateKey::random(&mut OsRng, ssh_key::Algorithm::Ed25519).unwrap()
 }
-pub fn save_ssh_key(k: ssh_key::PrivateKey, path: PathBuf) {
+pub fn save_ssh_key(k: ssh_key::PrivateKey, path: &PathBuf) {
     let k = k.to_openssh(LineEnding::LF).unwrap();
-    std::fs::write(&path, k).expect("Failed to save SSH private key");
+    std::fs::write(path, k).expect("Failed to save SSH private key");
 }
-// forms ssh://[user@]hostname[:port] from deployment
+/// Forms `ssh://root@<host>:<port>` from a deployment endpoint URI + forwarded port.
+/// Strips any `http://` / `https://` scheme and port suffix from `uri` before use.
 pub fn ssh_dest_path(ssh_port: &str, uri: &str) -> String {
-    format!("{}@{}:{}", "root", uri, ssh_port)
+    let host = uri
+        .strip_prefix("https://")
+        .or_else(|| uri.strip_prefix("http://"))
+        .unwrap_or(uri);
+    // drop any trailing `:port` that may be present in the provider URI
+    let host = host.split(':').next().unwrap_or(host);
+    format!("ssh://root@{}:{}", host, ssh_port)
 }
 
-/// sends reusable wildcard cert & privkey to node
+/// Upload wildcard cert + private key to a remote node via SFTP.
+///
+/// `remote_cert_path` / `remote_key_path` are absolute paths on the remote host
+/// where the TLS setup script will watch for the files (e.g. `/tmp/tls/cert.pem`).
+/// Uses `create + truncate` so retries succeed even if a previous attempt left
+/// partial files behind.
 pub async fn send_cert_sftp(
     dest: &str,
-    cert: &Vec<u8>,
-    privkey: &Vec<u8>,
-    ssh_path: &PathBuf,
+    cert: &[u8],
+    privkey: &[u8],
+    ssh_key_path: &PathBuf,
+    remote_cert_path: &str,
+    remote_key_path: &str,
 ) -> Result<(), Box<dyn Error>> {
     use openssh_sftp_client::Sftp;
-    // define ssh key to use for session
+    use std::path::Path;
+
     let sftp = Sftp::from_session(
         SessionBuilder::default()
-            .keyfile(ssh_path)
+            .keyfile(ssh_key_path)
             .connect_mux(dest)
             .await?,
         Default::default(),
     )
     .await?;
-    let path = PathBuf::new();
 
-    // write cert to node
+    // write cert — create or overwrite so retries are safe
     sftp.options()
         .write(true)
-        .create_new(true)
-        .open(&path)
+        .create(true)
+        .truncate(true)
+        .open(Path::new(remote_cert_path))
         .await?
-        .write(&cert)
-        .await?;
-    // write privkey to node
-    sftp.options()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .await?
-        .write(&privkey)
+        .write_all(cert)
         .await?;
 
-    // return pubkey
+    // write private key
+    sftp.options()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(Path::new(remote_key_path))
+        .await?
+        .write_all(privkey)
+        .await?;
+
+    Ok(())
+}
+
+/// Upload TLS cert + private key to a deployed service via SFTP.
+///
+/// Finds the SSH-forwarded endpoint in `endpoints` (matched by `SSH_PORT` env,
+/// default 22), saves `ssh_privkey_pem` to `ssh_key_path` on disk, then retries
+/// the SFTP transfer until it succeeds or `MAX_RETRIES` is exhausted.
+///
+/// Remote paths default to `/tmp/tls/cert.pem` and `/tmp/tls/privkey.pem` —
+/// override with `TLS_REMOTE_CERT_PATH` / `TLS_REMOTE_KEY_PATH` env vars, which
+/// must match the paths the node's TLS setup script watches for.
+pub async fn push_tls_certs_sftp(
+    label: &str,
+    endpoints: &[ServiceEndpoint],
+    ssh_privkey_pem: &str,
+    ssh_key_path: &PathBuf,
+    cert: &[u8],
+    privkey: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let ssh_port: u16 = var("SSH_PORT")
+        .unwrap_or_else(|_| "22".into())
+        .parse()
+        .unwrap_or(22);
+
+    let ssh_ep = endpoints
+        .iter()
+        .find(|e| e.internal_port == ssh_port)
+        .ok_or_else(|| {
+            format!(
+                "[{}] No SSH endpoint found for internal port {}",
+                label, ssh_port
+            )
+        })?;
+
+    let k = PrivateKey::from_openssh(ssh_privkey_pem.as_bytes())
+        .map_err(|e| format!("[{}] Failed to parse SSH private key: {}", label, e))?;
+    save_ssh_key(k, ssh_key_path);
+
+    let dest = ssh_dest_path(&ssh_ep.port.to_string(), &ssh_ep.uri);
+    let remote_cert = var("TLS_REMOTE_CERT_PATH").unwrap_or_else(|_| "/tmp/tls/cert.pem".into());
+    let remote_key = var("TLS_REMOTE_KEY_PATH").unwrap_or_else(|_| "/tmp/tls/privkey.pem".into());
+
+    tracing::info!(
+        "  [{}] SFTP → {} (NodePort {})",
+        label,
+        ssh_ep.uri,
+        ssh_ep.port
+    );
+    tracing::info!("  [{}] remote cert path: {}", label, remote_cert);
+    tracing::info!("  [{}] remote key  path: {}", label, remote_key);
+
+    let mut retries: u16 = 0;
+    loop {
+        match send_cert_sftp(
+            &dest,
+            cert,
+            privkey,
+            ssh_key_path,
+            &remote_cert,
+            &remote_key,
+        )
+        .await
+        {
+            Ok(_) => {
+                tracing::info!("  [{}] TLS certificates uploaded successfully.", label);
+                break;
+            }
+            Err(e) => {
+                retries += 1;
+                if retries >= MAX_RETRIES {
+                    return Err(format!(
+                        "[{}] SFTP failed after {} retries: {}",
+                        label, MAX_RETRIES, e
+                    )
+                    .into());
+                }
+                tracing::info!(
+                    "  [{}] SFTP attempt {}/{} failed: {} — retrying in 5s",
+                    label,
+                    retries,
+                    MAX_RETRIES,
+                    e
+                );
+                sleep(Duration::from_secs(5));
+            }
+        }
+    }
     Ok(())
 }
 
