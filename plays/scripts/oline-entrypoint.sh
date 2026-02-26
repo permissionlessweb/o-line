@@ -18,7 +18,23 @@ if [ -n "$SSH_PUBKEY" ]; then
   mkdir -p /root/.ssh
   echo "$SSH_PUBKEY" >> /root/.ssh/authorized_keys
   chmod 600 /root/.ssh/authorized_keys
-  /usr/sbin/sshd || echo "WARNING: sshd failed to start — SFTP cert delivery unavailable"
+
+  # Install openssh-server if sshd is not present in the image
+  if ! command -v sshd >/dev/null 2>&1; then
+    echo "Installing openssh-server..."
+    apt-get install -y -q openssh-server 2>/dev/null \
+      || apk add --no-cache openssh 2>/dev/null \
+      || true
+  fi
+
+  SSHD_BIN=$(command -v sshd 2>/dev/null || true)
+  if [ -n "$SSHD_BIN" ]; then
+    mkdir -p /var/run/sshd
+    ssh-keygen -A >/dev/null 2>&1 || true   # generate host keys if missing
+    $SSHD_BIN || echo "WARNING: sshd failed to start — SFTP cert delivery unavailable"
+  else
+    echo "WARNING: sshd not available — SFTP cert delivery unavailable"
+  fi
 fi
 
 if [ -n "$TLS_CONFIG_URL" ]; then
