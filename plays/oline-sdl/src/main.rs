@@ -404,12 +404,14 @@ impl OLineDeployer {
         // ── SSH verify: confirm certs landed + signal bootstrap to proceed ──
         let remote_cert = var("TLS_REMOTE_CERT_PATH").unwrap_or_else(|_| "/tmp/tls/cert.pem".into());
         let remote_key = var("TLS_REMOTE_KEY_PATH").unwrap_or_else(|_| "/tmp/tls/privkey.pem".into());
+        let entrypoint_url = self.config.val("cloudflare.entrypoint_url");
         verify_certs_and_signal_start(
             "phase-a-snapshot",
             &a_endpoints,
             &ssh_key_path,
             &remote_cert,
             &remote_key,
+            &entrypoint_url,
         )
         .await?;
 
@@ -438,6 +440,7 @@ impl OLineDeployer {
                 &ssh_key_path,
                 &remote_cert,
                 &remote_key,
+                &entrypoint_url,
             )
             .await?;
         }

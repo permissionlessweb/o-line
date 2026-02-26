@@ -193,6 +193,7 @@ pub async fn verify_certs_and_signal_start(
     ssh_key_path: &PathBuf,
     remote_cert_path: &str,
     remote_key_path: &str,
+    entrypoint_url: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let ssh_port: u16 = var("SSH_PORT")
         .unwrap_or_else(|_| "22".into())
@@ -249,10 +250,16 @@ pub async fn verify_certs_and_signal_start(
     // Step 2: launch cosmos node setup in the background.
     // nohup ensures the process survives after this SSH session closes.
     // Output is redirected to /tmp/oline-node.log for post-hoc inspection.
+    // Re-download wrapper.sh first if it was lost (e.g. container restart cleared /tmp/).
+    let launch_cmd = format!(
+        "[ -f /tmp/wrapper.sh ] || curl -fsSL '{url}' -o /tmp/wrapper.sh; \
+         OLINE_PHASE=start nohup bash /tmp/wrapper.sh >/tmp/oline-node.log 2>&1 & echo $!",
+        url = entrypoint_url,
+    );
     let launch = session
         .command("sh")
         .arg("-c")
-        .arg("OLINE_PHASE=start nohup bash /tmp/wrapper.sh >/tmp/oline-node.log 2>&1 & echo $!")
+        .arg(&launch_cmd)
         .output()
         .await?;
 
