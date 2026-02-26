@@ -259,6 +259,22 @@ pub async fn verify_certs_and_signal_start(
     let pid = String::from_utf8_lossy(&launch.stdout);
     tracing::info!("  [{}] Node setup launched (PID {})", label, pid.trim());
 
+    let provider_host = ssh_ep
+        .uri
+        .strip_prefix("https://")
+        .or_else(|| ssh_ep.uri.strip_prefix("http://"))
+        .unwrap_or(&ssh_ep.uri)
+        .split(':')
+        .next()
+        .unwrap_or(&ssh_ep.uri);
+    tracing::info!(
+        "  [{}] Watch node setup: ssh -i {} -p {} root@{} 'tail -f /tmp/oline-node.log'",
+        label,
+        ssh_key_path.display(),
+        ssh_ep.port,
+        provider_host,
+    );
+
     Ok(())
 }
 
