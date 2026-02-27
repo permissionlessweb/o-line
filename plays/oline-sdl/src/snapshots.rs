@@ -8,11 +8,6 @@ use std::{
     io::{self, BufRead, Write},
 };
 
-pub const SNAPSHOT_RPC_DOMAIN: &str = "statesync.terp.network";
-pub const SNAPSHOT_P2P_DOMAIN: &str = "statesync.terp.network";
-pub const SEED_RPC_DOMAIN: &str = "seed-statesync.terp.network";
-pub const SEED_P2P_DOMAIN: &str = "seed.terp.network";
-
 /// Sign an S3 request using AWS Signature V4 (path-style).
 /// Returns the Authorization header value and headers to add.
 fn s3_signed_headers(

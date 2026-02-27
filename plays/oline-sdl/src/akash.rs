@@ -34,29 +34,60 @@ pub fn insert_nodes_sdl_variables(
     config: &OLineConfig,
     suffix: &str,
 ) {
+    let suffix_lower = suffix.to_lowercase();
     let (p2p_port, rpc_port, api_port, grpc_port) = (
-        format!("{}_{}", "P2P_PORT", suffix),
-        format!("{}_{}", "RPC_PORT", suffix),
-        format!("{}_{}", "API_PORT", suffix),
-        format!("{}_{}", "GRPC_PORT", suffix),
+        format!("P2P_PORT_{}", suffix),
+        format!("RPC_PORT_{}", suffix),
+        format!("API_PORT_{}", suffix),
+        format!("GRPC_PORT_{}", suffix),
     );
     let (p2p_domain, rpc_domain, api_domain, grpc_domain) = (
-        format!("{}_{}", "P2P_DOMAIN", suffix),
-        format!("{}_{}", "RPC_DOMAIN", suffix),
-        format!("{}_{}", "API_DOMAIN", suffix),
-        format!("{}_{}", "GRPC_DOMAIN", suffix),
+        format!("P2P_DOMAIN_{}", suffix),
+        format!("RPC_DOMAIN_{}", suffix),
+        format!("API_DOMAIN_{}", suffix),
+        format!("GRPC_DOMAIN_{}", suffix),
     );
 
-    vars.insert(p2p_port.clone(), var(p2p_port).unwrap_or_default());
-    vars.insert(p2p_domain.clone(), var(p2p_domain).unwrap_or_default());
-    vars.insert(rpc_port.clone(), var(rpc_port).unwrap_or_default());
-    vars.insert(rpc_domain.clone(), var(rpc_domain).unwrap_or_default());
-    vars.insert(api_port.clone(), var(api_port).unwrap_or_default());
-    vars.insert(api_domain.clone(), var(api_domain).unwrap_or_default());
-    vars.insert(grpc_port.clone(), var(grpc_port).unwrap_or_default());
-    vars.insert(grpc_domain.clone(), var(grpc_domain).unwrap_or_default());
+    // Env var with fallback to saved config (for fields declared in SPECIAL_TEAMS_FD).
+    // Phase B/C suffixes have no matching config keys and will fall back to "" as before.
+    let cfg = |env_key: &str, field: &str| {
+        var(env_key)
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| config.val(&format!("special_teams.{}_{}", suffix_lower, field)))
+    };
+
+    vars.insert(p2p_port.clone(),    cfg(&p2p_port,    "p2p_port"));
+    vars.insert(p2p_domain.clone(),  cfg(&p2p_domain,  "p2p_domain"));
+    vars.insert(rpc_port.clone(),    cfg(&rpc_port,    "rpc_port"));
+    vars.insert(rpc_domain.clone(),  cfg(&rpc_domain,  "rpc_domain"));
+    vars.insert(api_port.clone(),    cfg(&api_port,    "api_port"));
+    vars.insert(api_domain.clone(),  cfg(&api_domain,  "api_domain"));
+    vars.insert(grpc_port.clone(),   cfg(&grpc_port,   "grpc_port"));
+    vars.insert(grpc_domain.clone(), cfg(&grpc_domain, "grpc_domain"));
     vars.insert("ENTRYPOINT_URL".into(), config.val("cloudflare.entrypoint_url"));
     vars.insert("SSH_PORT".into(), var("SSH_PORT").unwrap_or("22".to_string()));
+}
+
+/// Build a refresh vars map for a specific node by adding unsuffixed TLS service vars
+/// (`RPC_DOMAIN`, `RPC_PORT`, etc.) derived from the suffixed SDL vars
+/// (`RPC_DOMAIN_{SUFFIX}`, `RPC_PORT_{SUFFIX}`, ...).
+///
+/// `verify_certs_and_signal_start` patches `/tmp/oline-env.sh` using this map.
+/// Without this mapping the domain/port vars would never be refreshed — `a_vars` only
+/// stores the suffixed form, but `REFRESH_VARS` in crypto.rs looks for unsuffixed keys.
+pub fn node_refresh_vars(sdl_vars: &HashMap<String, String>, suffix: &str) -> HashMap<String, String> {
+    let mut out = sdl_vars.clone();
+    for field in ["RPC", "API", "GRPC", "P2P"] {
+        for role in ["DOMAIN", "PORT"] {
+            let src = format!("{}_{}_{}", field, role, suffix);
+            let dst = format!("{}_{}", field, role);
+            if let Some(v) = sdl_vars.get(&src) {
+                out.insert(dst, v.clone());
+            }
+        }
+    }
+    out
 }
 
 /// Helper to insert S3 snapshot export variables.

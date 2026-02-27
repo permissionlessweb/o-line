@@ -256,6 +256,18 @@ pub async fn verify_certs_and_signal_start(
         "ADDRBOOK_URL",
         "TLS_CONFIG_URL",
         "OMNIBUS_IMAGE",
+        // TLS service domain/port vars — required by tls-setup.sh validation.
+        // These are stored in sdl_vars as suffixed keys (e.g. RPC_DOMAIN_SNAPSHOT)
+        // but must be refreshed under the unsuffixed names the container uses.
+        // The caller must call node_refresh_vars() to populate these before passing sdl_vars.
+        "RPC_DOMAIN",
+        "RPC_PORT",
+        "API_DOMAIN",
+        "API_PORT",
+        "GRPC_DOMAIN",
+        "GRPC_PORT",
+        "P2P_DOMAIN",
+        "P2P_PORT",
     ];
     let export_lines: Vec<String> = sdl_vars
         .iter()

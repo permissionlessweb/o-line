@@ -402,9 +402,12 @@ impl OLineDeployer {
         .await?;
 
         // ── SSH verify: confirm certs landed + signal bootstrap to proceed ──
-        let remote_cert = var("TLS_REMOTE_CERT_PATH").unwrap_or_else(|_| "/tmp/tls/cert.pem".into());
-        let remote_key = var("TLS_REMOTE_KEY_PATH").unwrap_or_else(|_| "/tmp/tls/privkey.pem".into());
+        let remote_cert =
+            var("TLS_REMOTE_CERT_PATH").unwrap_or_else(|_| "/tmp/tls/cert.pem".into());
+        let remote_key =
+            var("TLS_REMOTE_KEY_PATH").unwrap_or_else(|_| "/tmp/tls/privkey.pem".into());
         let entrypoint_url = self.config.val("cloudflare.entrypoint_url");
+        let snapshot_refresh = node_refresh_vars(&a_vars, "SNAPSHOT");
         verify_certs_and_signal_start(
             "phase-a-snapshot",
             &a_endpoints,
@@ -412,7 +415,7 @@ impl OLineDeployer {
             &remote_cert,
             &remote_key,
             &entrypoint_url,
-            &a_vars,
+            &snapshot_refresh,
         )
         .await?;
 
@@ -423,7 +426,9 @@ impl OLineDeployer {
             .cloned()
             .collect();
         if seed_endpoints.is_empty() {
-            tracing::info!("  Warning: no endpoints found for oline-a-seed — skipping cert delivery");
+            tracing::info!(
+                "  Warning: no endpoints found for oline-a-seed — skipping cert delivery"
+            );
         } else {
             tracing::info!("  Provisioning TLS certificates to seed node via SFTP...");
             push_tls_certs_sftp(
@@ -435,6 +440,7 @@ impl OLineDeployer {
                 &privkey,
             )
             .await?;
+            let seed_refresh = node_refresh_vars(&a_vars, "SEED");
             verify_certs_and_signal_start(
                 "phase-a-seed",
                 &seed_endpoints,
@@ -442,7 +448,7 @@ impl OLineDeployer {
                 &remote_cert,
                 &remote_key,
                 &entrypoint_url,
-                &a_vars,
+                &seed_refresh,
             )
             .await?;
         }
@@ -457,7 +463,9 @@ impl OLineDeployer {
             .cloned()
             .collect();
         if minio_endpoints.is_empty() {
-            tracing::info!("  Warning: no endpoints found for oline-a-minio-ipfs — skipping cert delivery");
+            tracing::info!(
+                "  Warning: no endpoints found for oline-a-minio-ipfs — skipping cert delivery"
+            );
         } else {
             push_tls_certs_sftp(
                 "phase-a-minio",
@@ -479,21 +487,27 @@ impl OLineDeployer {
         let seed_rpc_ep = Self::find_endpoint_by_internal_port(&a_endpoints, "oline-a-seed", 26657);
         let seed_p2p_ep = Self::find_endpoint_by_internal_port(&a_endpoints, "oline-a-seed", 26656);
 
+        // Pull domain names from the SDL vars built at deploy time.
+        let snap_rpc_domain = a_vars.get("RPC_DOMAIN_SNAPSHOT").map(String::as_str).unwrap_or_default();
+        let snap_p2p_domain = a_vars.get("P2P_DOMAIN_SNAPSHOT").map(String::as_str).unwrap_or_default();
+        let seed_rpc_domain = a_vars.get("RPC_DOMAIN_SEED").map(String::as_str).unwrap_or_default();
+        let seed_p2p_domain = a_vars.get("P2P_DOMAIN_SEED").map(String::as_str).unwrap_or_default();
+
         // Construct DNS-based query URLs and peer addresses.
         // Format: <node_id>@<dns_domain>:<nodeport>  — the cosmos-sdk peer string.
         let snap_rpc_url =
-            snap_rpc_ep.map(|e| format!("http://{}:{}", SNAPSHOT_RPC_DOMAIN, e.port));
-        let snap_p2p_addr = snap_p2p_ep.map(|e| format!("{}:{}", SNAPSHOT_P2P_DOMAIN, e.port));
-        let seed_rpc_url = seed_rpc_ep.map(|e| format!("http://{}:{}", SEED_RPC_DOMAIN, e.port));
-        let seed_p2p_addr = seed_p2p_ep.map(|e| format!("{}:{}", SEED_P2P_DOMAIN, e.port));
+            snap_rpc_ep.map(|e| format!("http://{}:{}", snap_rpc_domain, e.port));
+        let snap_p2p_addr = snap_p2p_ep.map(|e| format!("{}:{}", snap_p2p_domain, e.port));
+        let seed_rpc_url = seed_rpc_ep.map(|e| format!("http://{}:{}", seed_rpc_domain, e.port));
+        let seed_p2p_addr = seed_p2p_ep.map(|e| format!("{}:{}", seed_p2p_domain, e.port));
 
         // Statesync RPC servers string for Phase B (cosmos format: "host:port,host:port").
         let a1_statesync_rpc = {
             let s = snap_rpc_ep
-                .map(|e| format!("{}:{}", SNAPSHOT_RPC_DOMAIN, e.port))
+                .map(|e| format!("{}:{}", snap_rpc_domain, e.port))
                 .unwrap_or_default();
             let sd = seed_rpc_ep
-                .map(|e| format!("{}:{}", SEED_RPC_DOMAIN, e.port))
+                .map(|e| format!("{}:{}", seed_rpc_domain, e.port))
                 .unwrap_or_default();
             match (s.is_empty(), sd.is_empty()) {
                 (false, false) => format!("{},{}", s, sd),
@@ -816,8 +830,7 @@ async fn cmd_generate_sdl() -> Result<(), Box<dyn Error>> {
         let statesync_rpc = read_input(
             &mut lines,
             &format!(
-                "Statesync RPC servers (e.g. {}:PORT,{}:PORT)",
-                SNAPSHOT_RPC_DOMAIN, SEED_RPC_DOMAIN
+                "Statesync RPC servers (e.g. statesync.terp.network:PORT,seed.terp.network:PORT)",
             ),
             Some(""),
         )?;
@@ -976,7 +989,10 @@ async fn cmd_manage_deployments() -> Result<(), Box<dyn Error>> {
             let (rpc, grpc) = if has_saved_config() {
                 let pw = rpassword::prompt_password("Enter config password: ")?;
                 if let Some(cfg) = load_config(&pw) {
-                    (cfg.val("network.rpc_endpoint"), cfg.val("network.grpc_endpoint"))
+                    (
+                        cfg.val("network.rpc_endpoint"),
+                        cfg.val("network.grpc_endpoint"),
+                    )
                 } else {
                     let rpc = read_input(
                         &mut lines,

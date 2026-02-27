@@ -25,6 +25,64 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// SSH into the container and read a remote file, returning `(raw_content, parsed_var_map)`.
+///
+/// Parses both forms written by the oline bootstrap/refresh mechanism:
+///   - `declare -x VAR="value"`  — from bootstrap's `export -p`
+///   - `export VAR='value'`      — from orchestrator's `/tmp/oline-env.sh` patch
+///
+/// Only the LAST assignment wins if a var appears multiple times (mimics shell sourcing).
+fn read_container_env_file(ssh_key_path: &str) -> (String, HashMap<String, String>) {
+    let output = Command::new("ssh")
+        .args([
+            "-i",
+            ssh_key_path,
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=5",
+            "-p",
+            &SSH_PORT_HOST.to_string(),
+            &format!("root@{}", SSH_HOST),
+            "cat /tmp/oline-env.sh 2>/dev/null",
+        ])
+        .output()
+        .expect("ssh failed during env file check");
+
+    let raw = String::from_utf8_lossy(&output.stdout).into_owned();
+    let mut map: HashMap<String, String> = HashMap::new();
+
+    for line in raw.lines() {
+        let line = line.trim();
+        let rest = if let Some(r) = line.strip_prefix("declare -x ") {
+            r
+        } else if let Some(r) = line.strip_prefix("export ") {
+            r
+        } else {
+            continue;
+        };
+
+        if let Some(eq) = rest.find('=') {
+            let key = rest[..eq].to_string();
+            let raw_val = &rest[eq + 1..];
+            // strip outer " or ' quotes — handles the two forms above
+            let val = raw_val
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .or_else(|| raw_val.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+                .unwrap_or(raw_val)
+                .to_string();
+            map.insert(key, val);
+        }
+    }
+
+    (raw, map)
+}
+
 const CONTAINER_NAME: &str = "oline-e2e-test";
 const SSH_HOST: &str = "127.0.0.1";
 const SSH_PORT_HOST: u16 = 2222;
@@ -154,9 +212,18 @@ async fn test_tls_workflow_docker() {
     let tls_cert_path = workdir.join("cert.pem");
     let tls_key_path = workdir.join("privkey.pem");
 
-    // ── 4. Idempotent cleanup of any leftover container ───────────────────────
+    // ── 4. Idempotent cleanup of any leftover container + stale known_hosts ──
+    // Remove the container from a previous run first.
     Command::new("docker")
         .args(["rm", "-f", CONTAINER_NAME])
+        .output()
+        .ok();
+    // Evict any stale host-key entry for 127.0.0.1:2222 from ~/.ssh/known_hosts.
+    // Each new container generates a fresh SSH host key; without this removal the
+    // openssh SessionBuilder (KnownHosts::Add) rejects the changed key and every
+    // SFTP attempt fails with "failed to connect to the remote host".
+    Command::new("ssh-keygen")
+        .args(["-R", &format!("[{}]:{}", SSH_HOST, SSH_PORT_HOST)])
         .output()
         .ok();
 
@@ -350,12 +417,19 @@ async fn test_tls_workflow_docker() {
     // ── 11. Verify cert paths + signal node start via SSH ─────────────────────
     // This confirms cert files landed at /tmp/tls/, patches /tmp/oline-env.sh with
     // SDL vars, then launches `OLINE_PHASE=start wrapper.sh` under nohup.
+    //
+    // RPC_DOMAIN and RPC_PORT are added here to exercise the orchestrator refresh path
+    // for domain/port vars — mirroring the production fix where node_refresh_vars()
+    // maps suffixed SDL vars (RPC_DOMAIN_SNAPSHOT) to the unsuffixed names the container
+    // uses (RPC_DOMAIN).  Values match the -e flags set on docker run above.
     let mut sdl_vars: HashMap<String, String> = HashMap::new();
     sdl_vars.insert("CHAIN_ID".into(), String::new()); // populated from CHAIN_JSON by entrypoint
     sdl_vars.insert("CHAIN_JSON".into(), chain_json.clone());
     sdl_vars.insert("TLS_CONFIG_URL".into(), tls_config_url.clone());
     sdl_vars.insert("ADDRBOOK_URL".into(), String::new());
     sdl_vars.insert("OMNIBUS_IMAGE".into(), omnibus_image.clone());
+    sdl_vars.insert("RPC_DOMAIN".into(), "localhost".into()); // matches -e RPC_DOMAIN=localhost
+    sdl_vars.insert("RPC_PORT".into(), "443".into());         // matches -e RPC_PORT=443
 
     println!("  [e2e] Verifying certs + launching node setup...");
     verify_certs_and_signal_start(
@@ -370,6 +444,61 @@ async fn test_tls_workflow_docker() {
     .await
     .expect("verify_certs_and_signal_start failed");
     println!("  [e2e] Node setup launched in background.");
+
+    // ── 11.5. Verify /tmp/oline-env.sh contains the required service vars ─────
+    // This is the regression guard for the production bug where tls-setup.sh failed
+    // because RPC_DOMAIN and RPC_PORT were not being patched into /tmp/oline-env.sh
+    // by the orchestrator (verify_certs_and_signal_start only refreshed CHAIN_ID,
+    // CHAIN_JSON, etc. — the service domain/port vars were never written).
+    //
+    // After the fix:
+    //   - node_refresh_vars() maps RPC_DOMAIN_SNAPSHOT → RPC_DOMAIN before the call
+    //   - REFRESH_VARS now includes RPC_DOMAIN, RPC_PORT, etc.
+    //   - verify_certs_and_signal_start appends them to /tmp/oline-env.sh
+    //
+    // We read the file right after the call (it is patched before the nohup launch)
+    // so the node is already running in the background, but the file is already final.
+    println!("\n  [e2e] Checking /tmp/oline-env.sh for required service vars...");
+    let (env_raw, env_map) = read_container_env_file(ssh_key_path.to_str().unwrap());
+    println!(
+        "  [e2e] Parsed {} entries from /tmp/oline-env.sh",
+        env_map.len()
+    );
+
+    // These vars must be present with correct values.
+    // The values come from sdl_vars above — the orchestrator refresh wrote them.
+    let expected_env: &[(&str, &str)] = &[
+        ("RPC_DOMAIN", "localhost"),
+        ("RPC_PORT", "443"),
+        ("TLS_CONFIG_URL", tls_config_url.as_str()),
+        ("CHAIN_JSON", chain_json.as_str()),
+    ];
+
+    let mut env_ok = true;
+    for (k, expected_v) in expected_env {
+        match env_map.get(*k) {
+            Some(actual) if actual == expected_v => {
+                println!("  [e2e]   [OK]  {}={}", k, actual);
+            }
+            Some(actual) => {
+                eprintln!(
+                    "  [e2e]   [FAIL] {}={:?}  (expected {:?})",
+                    k, actual, expected_v
+                );
+                env_ok = false;
+            }
+            None => {
+                eprintln!("  [e2e]   [FAIL] {} not found in /tmp/oline-env.sh", k);
+                env_ok = false;
+            }
+        }
+    }
+
+    if !env_ok {
+        eprintln!("\n  [e2e] /tmp/oline-env.sh raw content:\n{}", env_raw);
+        panic!("env file check failed — service vars missing or incorrect (see above)");
+    }
+    println!("  [e2e] /tmp/oline-env.sh check passed.\n");
 
     // ── 12. Poll /tmp/oline-node.log for success markers ─────────────────────
     // tls-setup.sh  → "=== TLS setup complete ==="

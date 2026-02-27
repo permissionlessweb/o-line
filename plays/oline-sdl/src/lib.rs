@@ -59,6 +59,23 @@ pub const MINIO_FD: &[config::Fd] = define_fields![
     "minio"      / "autopin_interval"  => "OLINE_AUTOPIN_INTERVAL",         "IPFS auto-pin interval (seconds)",               "300",                            false,
 ];
 
-pub const SPECIAL_TEAMS_FD: &[config::Fd] = define_fields![];
+pub const SPECIAL_TEAMS_FD: &[config::Fd] = define_fields![
+    // Snapshot node — nginx TLS upstream ports + server_name domains
+    "special_teams"/"snapshot_rpc_domain"  => "RPC_DOMAIN_SNAPSHOT",  "Snapshot RPC domain (nginx server_name, e.g. statesync.example.com)", "", false,
+    "special_teams"/"snapshot_rpc_port"    => "RPC_PORT_SNAPSHOT",    "Snapshot RPC upstream port (cosmos RPC, e.g. 26657)",    "26657", false,
+    "special_teams"/"snapshot_p2p_port"    => "P2P_PORT_SNAPSHOT",    "Snapshot P2P port (cosmos P2P, e.g. 26656)",             "26656", false,
+    "special_teams"/"snapshot_api_domain"  => "API_DOMAIN_SNAPSHOT",  "Snapshot API domain (optional, leave blank to skip)",    "",      false,
+    "special_teams"/"snapshot_api_port"    => "API_PORT_SNAPSHOT",    "Snapshot API upstream port (e.g. 1317)",                 "1317",  false,
+    "special_teams"/"snapshot_grpc_domain" => "GRPC_DOMAIN_SNAPSHOT", "Snapshot gRPC domain (optional, leave blank to skip)",   "",      false,
+    "special_teams"/"snapshot_grpc_port"   => "GRPC_PORT_SNAPSHOT",   "Snapshot gRPC upstream port (e.g. 9090)",                "9090",  false,
+    // Seed node — nginx TLS upstream ports + server_name domains
+    "special_teams"/"seed_rpc_domain"      => "RPC_DOMAIN_SEED",      "Seed RPC domain (nginx server_name, e.g. seed.example.com)", "",   false,
+    "special_teams"/"seed_rpc_port"        => "RPC_PORT_SEED",        "Seed RPC upstream port (cosmos RPC, e.g. 26657)",        "26657", false,
+    "special_teams"/"seed_p2p_port"        => "P2P_PORT_SEED",        "Seed P2P port (cosmos P2P, e.g. 26656)",                 "26656", false,
+    "special_teams"/"seed_api_domain"      => "API_DOMAIN_SEED",      "Seed API domain (optional, leave blank to skip)",        "",      false,
+    "special_teams"/"seed_api_port"        => "API_PORT_SEED",        "Seed API upstream port (e.g. 1317)",                     "1317",  false,
+    "special_teams"/"seed_grpc_domain"     => "GRPC_DOMAIN_SEED",     "Seed gRPC domain (optional, leave blank to skip)",       "",      false,
+    "special_teams"/"seed_grpc_port"       => "GRPC_PORT_SEED",       "Seed gRPC upstream port (e.g. 9090)",                    "9090",  false,
+];
 pub const LR_TACKLES_FD: &[config::Fd] = define_fields![];
 pub const LR_FORWARD_FD: &[config::Fd] = define_fields![];

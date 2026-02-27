@@ -55,6 +55,13 @@ fi
 # exactly where the script died (set -e exits are otherwise silent).
 trap 'rc=$?; [ $rc -ne 0 ] && echo "=== UNEXPECTED EXIT code=$rc at line $LINENO: $BASH_COMMAND ===" >&2' EXIT
 
+# Ensure required tools are available — some provider base images do not include all of these.
+if command -v apt-get >/dev/null 2>&1; then
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq file pv lz4 zstd unzip wget >/dev/null 2>&1
+elif command -v apk >/dev/null 2>&1; then
+  apk add --no-cache file pv lz4 zstd unzip wget >/dev/null 2>&1
+fi
+
 [ -f /tmp/oline-env.sh ] && . /tmp/oline-env.sh
 
 if [ -n "$TLS_CONFIG_URL" ]; then
@@ -167,9 +174,9 @@ if [[ -n "$BINARY_URL" && ! -f "/bin/$PROJECT_BIN" ]]; then
   curl -Lso /bin/$PROJECT_BIN $BINARY_URL
   file_description=$(file /bin/$PROJECT_BIN)
   case "${file_description,,}" in
-    *"gzip compressed data"*)   mv /bin/$PROJECT_BIN /bin/$PROJECT_BIN.tgz && tar -xvf /bin/$PROJECT_BIN.tgz -C /bin && rm /bin/$PROJECT_BIN.tgz;;
-    *"tar archive"*)            mv /bin/$PROJECT_BIN /bin/$PROJECT_BIN.tar && tar -xf /bin/$PROJECT_BIN.tar -C /bin && rm /bin/$PROJECT_BIN.tar;;
-    *"zip archive data"*)       mv /bin/$PROJECT_BIN /bin/$PROJECT_BIN.zip && unzip /bin/$PROJECT_BIN.zip -d /bin && rm /bin/$PROJECT_BIN.zip;;
+    *"gzip compressed data"*)  mv /bin/$PROJECT_BIN /bin/$PROJECT_BIN.tgz && tar -xvf /bin/$PROJECT_BIN.tgz -C /bin && rm /bin/$PROJECT_BIN.tgz ;;
+    *"tar archive"*)           mv /bin/$PROJECT_BIN /bin/$PROJECT_BIN.tar && tar -xf /bin/$PROJECT_BIN.tar -C /bin && rm /bin/$PROJECT_BIN.tar ;;
+    *"zip archive data"*)      mv /bin/$PROJECT_BIN /bin/$PROJECT_BIN.zip && unzip /bin/$PROJECT_BIN.zip -d /bin && rm /bin/$PROJECT_BIN.zip ;;
   esac
   [ -n "$BINARY_ZIP_PATH" ] && mv /bin/${BINARY_ZIP_PATH} /bin/$PROJECT_BIN
   chmod +x /bin/$PROJECT_BIN
