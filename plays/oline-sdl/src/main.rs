@@ -6,7 +6,7 @@ use akash_deploy_rs::{
 
 use o_line_sdl::{
     self, akash::*, cli::*, config::*, crypto::*, dns::cloudflare::*, snapshots::*,
-    FIELD_DESCRIPTORS,
+    FIELD_DESCRIPTORS, MAX_RETRIES,
 };
 
 use std::{
@@ -470,6 +470,7 @@ impl OLineDeployer {
                 &ssh_key_path,
                 &cert,
                 &privkey,
+                MAX_RETRIES,
             )
             .await?;
         }
@@ -517,6 +518,7 @@ impl OLineDeployer {
                 &ssh_key_path,
                 &cert,
                 &privkey,
+                MAX_RETRIES,
             )
             .await?;
             let seed_refresh = node_refresh_vars(&a_vars, "SEED");
@@ -533,28 +535,46 @@ impl OLineDeployer {
         }
 
         // ── SFTP TLS certs to minio-ipfs node ──
-        // init-nginx on the minio node bootstraps sshd and polls /tmp/tls/ for certs.
-        // Once certs land, it renders the nginx config and exits — svc-nginx starts nginx.
-        tracing::info!("  Provisioning TLS certificates to minio-ipfs node via SFTP...");
-        let minio_endpoints: Vec<ServiceEndpoint> = a_endpoints
-            .iter()
-            .filter(|e| e.service == "oline-a-minio-ipfs")
-            .cloned()
-            .collect();
-        if minio_endpoints.is_empty() {
-            tracing::info!(
-                "  Warning: no endpoints found for oline-a-minio-ipfs — skipping cert delivery"
-            );
+        // init-nginx on the minio node only installs+starts sshd when SNAPSHOT_DOWNLOAD_DOMAIN
+        // is non-empty (it exits early otherwise). Mirror that guard here — if the domain isn't
+        // configured, there's no nginx TLS to provision and no sshd to connect to.
+        //
+        // Timing note: sshd on minio only starts AFTER the s6 chain completes:
+        //   init-minio → svc-minio → init-minio-bucket → init-nginx (starts sshd)
+        // This takes 2-5 minutes. Use MINIO_SFTP_RETRIES (default 60) × 10s = 10 min max.
+        let snapshot_dl_domain = a_vars
+            .get("OLINE_SNAPSHOT_DOWNLOAD_DOMAIN")
+            .map(|s| s.as_str())
+            .unwrap_or_default();
+        if snapshot_dl_domain.is_empty() {
+            tracing::info!("  Note: OLINE_SNAPSHOT_DOWNLOAD_DOMAIN not set — skipping minio TLS cert delivery (nginx TLS not configured on minio).");
         } else {
-            push_tls_certs_sftp(
-                "phase-a-minio",
-                &minio_endpoints,
-                ssh_privkey_pem,
-                &ssh_key_path,
-                &cert,
-                &privkey,
-            )
-            .await?;
+            let minio_endpoints: Vec<ServiceEndpoint> = a_endpoints
+                .iter()
+                .filter(|e| e.service == "oline-a-minio-ipfs")
+                .cloned()
+                .collect();
+            if minio_endpoints.is_empty() {
+                tracing::info!(
+                    "  Warning: no endpoints found for oline-a-minio-ipfs — skipping cert delivery"
+                );
+            } else {
+                tracing::info!("  Provisioning TLS certificates to minio-ipfs node via SFTP...");
+                let minio_retries: u16 = var("MINIO_SFTP_RETRIES")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(60);
+                push_tls_certs_sftp(
+                    "phase-a-minio",
+                    &minio_endpoints,
+                    ssh_privkey_pem,
+                    &ssh_key_path,
+                    &cert,
+                    &privkey,
+                    minio_retries,
+                )
+                .await?;
+            }
         }
 
         // ── Extract peer IDs via DNS domains ──

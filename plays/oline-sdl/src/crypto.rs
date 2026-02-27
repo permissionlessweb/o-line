@@ -13,7 +13,6 @@ use std::{
     collections::HashMap, env::var, error::Error, path::PathBuf, thread::sleep, time::Duration,
 };
 
-use crate::MAX_RETRIES;
 
 pub const SALT_LEN: usize = 16; // AES-256-GCM fixed
 pub const NONCE_LEN: usize = 12; // AES-256-GCM fixed
@@ -95,7 +94,7 @@ pub async fn send_cert_sftp(
 ///
 /// Finds the SSH-forwarded endpoint in `endpoints` (matched by `SSH_PORT` env,
 /// default 22), saves `ssh_privkey_pem` to `ssh_key_path` on disk, then retries
-/// the SFTP transfer until it succeeds or `MAX_RETRIES` is exhausted.
+/// the SFTP transfer until it succeeds or `max_retries` is exhausted.
 ///
 /// Remote paths default to `/tmp/tls/cert.pem` and `/tmp/tls/privkey.pem` —
 /// override with `TLS_REMOTE_CERT_PATH` / `TLS_REMOTE_KEY_PATH` env vars, which
@@ -107,6 +106,7 @@ pub async fn push_tls_certs_sftp(
     ssh_key_path: &PathBuf,
     cert: &[u8],
     privkey: &[u8],
+    max_retries: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let ssh_port: u16 = var("SSH_PORT")
         .unwrap_or_else(|_| "22".into())
@@ -159,10 +159,10 @@ pub async fn push_tls_certs_sftp(
             }
             Err(e) => {
                 retries += 1;
-                if retries >= MAX_RETRIES {
+                if retries >= max_retries {
                     return Err(format!(
                         "[{}] SFTP failed after {} retries: {}",
-                        label, MAX_RETRIES, e
+                        label, max_retries, e
                     )
                     .into());
                 }
@@ -170,7 +170,7 @@ pub async fn push_tls_certs_sftp(
                     "  [{}] SFTP attempt {}/{} failed: {} — retrying in 5s",
                     label,
                     retries,
-                    MAX_RETRIES,
+                    max_retries,
                     e
                 );
                 sleep(Duration::from_secs(5));

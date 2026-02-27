@@ -215,8 +215,10 @@ pub async fn build_phase_a_vars(config: &OLineConfig) -> HashMap<String, String>
     let s3_secret = generate_credential(S3_SECRET);
     // S3 uploads go directly to minio via the internal Akash service network.
     // Port 9000 is exposed only to the snapshot service in the SDL — no TLS, no Cloudflare.
-    // The public download_domain is kept separate (SNAPSHOT_DOWNLOAD_DOMAIN) for external URLs.
-    let s3_host = "oline-a-minio-ipfs:9000".to_string();
+    // --no-ssl is appended so snapshot.sh's unquoted $aws_args word-splits it into a separate
+    // s3cmd flag — without it s3cmd defaults to HTTPS and gets RECORD_LAYER_FAILURE from the
+    // plain-HTTP minio endpoint.
+    let s3_host = "oline-a-minio-ipfs:9000 --no-ssl".to_string();
     insert_s3_vars(&mut vars, config, &s3_key, &s3_secret, &s3_host).await;
     insert_minio_vars(&mut vars, config, &s3_key, &s3_secret);
     vars.insert(
