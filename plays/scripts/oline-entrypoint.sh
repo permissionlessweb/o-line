@@ -57,6 +57,7 @@ trap 'rc=$?; [ $rc -ne 0 ] && echo "=== UNEXPECTED EXIT code=$rc at line $LINENO
 
 # Ensure required tools are available — some provider base images do not include all of these.
 if command -v apt-get >/dev/null 2>&1; then
+  DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq coreutils file pv lz4 zstd unzip wget >/dev/null 2>&1
 elif command -v apk >/dev/null 2>&1; then
   apk add --no-cache coreutils file pv lz4 zstd unzip wget >/dev/null 2>&1
