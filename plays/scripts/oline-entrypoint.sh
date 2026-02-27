@@ -603,7 +603,10 @@ echo "=== Cosmos node setup complete ==="
 # fully visible and nginx doesn't interfere with the cosmos init workflow.
 if [ -n "$TLS_CONFIG_URL" ]; then
   echo "=== Starting nginx with TLS ==="
-  nginx
+  # apt-get install nginx auto-starts nginx with the default config.
+  # If it is already running, reload it so it picks up the TLS config written
+  # by tls-setup.sh.  If it is not running (e.g. apk-based image), start fresh.
+  nginx -s reload 2>/dev/null || nginx
   echo "=== nginx started ==="
 fi
 
