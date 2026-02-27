@@ -17,6 +17,32 @@ pub fn endpoint_hostname(uri: &str) -> &str {
     s.split(':').next().unwrap_or(s)
 }
 
+/// Build the YAML list items for a node's port-443 `accept:` block.
+///
+/// Akash's ingress controller only routes a request to a service when the request
+/// domain matches an entry in the service's `accept:` list.  nginx differentiates
+/// the domain inside the container via `server_name`, so RPC, API, and GRPC each
+/// need their own entry.  Empty/unconfigured domains are filtered out so the SDL
+/// is never rendered with blank accept entries (which Akash rejects).
+///
+/// Each returned line is indented with 10 spaces to match the SDL expose structure:
+///   expose:           (4 spaces)
+///     - port: 443     (6 spaces)
+///       accept:       (8 spaces)
+///         - domain    (10 spaces)  ← produced here
+pub fn build_accept_items(vars: &HashMap<String, String>, suffix: &str) -> String {
+    ["RPC", "API", "GRPC"]
+        .iter()
+        .filter_map(|svc| {
+            let key = format!("{}_DOMAIN_{}", svc, suffix);
+            vars.get(&key)
+                .filter(|v| !v.is_empty())
+                .map(|v| format!("          - {}", v))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Helper to insert the shared SDL template variables into a HashMap.
 /// All values come from the config struct so interactively-entered values
 /// are used, not just env vars that happened to be set at launch.
@@ -48,13 +74,26 @@ pub fn insert_nodes_sdl_variables(
         format!("GRPC_DOMAIN_{}", suffix),
     );
 
-    // Env var with fallback to saved config (for fields declared in SPECIAL_TEAMS_FD).
-    // Phase B/C suffixes have no matching config keys and will fall back to "" as before.
+    // Env var → saved config → well-known Cosmos default.
+    // Port vars must never be empty: an empty port renders `port:` (null) in the SDL,
+    // which prevents Akash from creating NodePort assignments for that service.
     let cfg = |env_key: &str, field: &str| {
-        var(env_key)
+        let v = var(env_key)
             .ok()
             .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| config.val(&format!("special_teams.{}_{}", suffix_lower, field)))
+            .unwrap_or_else(|| config.val(&format!("special_teams.{}_{}", suffix_lower, field)));
+        if v.is_empty() {
+            match field {
+                "rpc_port"  => "26657",
+                "p2p_port"  => "26656",
+                "api_port"  => "1317",
+                "grpc_port" => "9090",
+                _           => "",
+            }
+            .to_string()
+        } else {
+            v
+        }
     };
 
     vars.insert(p2p_port.clone(),    cfg(&p2p_port,    "p2p_port"));
@@ -168,9 +207,16 @@ pub async fn build_phase_a_vars(config: &OLineConfig) -> HashMap<String, String>
     insert_nodes_sdl_variables(&mut vars, config, "SNAPSHOT");
     insert_nodes_sdl_variables(&mut vars, config, "SEED");
     insert_sdl_defaults(&mut vars, config);
+    // Build port-443 accept lists now that all domain vars are populated.
+    // Akash only routes to a service when the request domain is in its accept list.
+    vars.insert("SNAPSHOT_443_ACCEPTS".into(), build_accept_items(&vars, "SNAPSHOT"));
+    vars.insert("SEED_443_ACCEPTS".into(),     build_accept_items(&vars, "SEED"));
     let s3_key = generate_credential(S3_KEY);
     let s3_secret = generate_credential(S3_SECRET);
-    let s3_host = config.val("snapshot.download_domain").clone();
+    // S3 uploads go directly to minio via the internal Akash service network.
+    // Port 9000 is exposed only to the snapshot service in the SDL — no TLS, no Cloudflare.
+    // The public download_domain is kept separate (SNAPSHOT_DOWNLOAD_DOMAIN) for external URLs.
+    let s3_host = "oline-a-minio-ipfs:9000".to_string();
     insert_s3_vars(&mut vars, config, &s3_key, &s3_secret, &s3_host).await;
     insert_minio_vars(&mut vars, config, &s3_key, &s3_secret);
     vars.insert(

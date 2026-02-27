@@ -1,7 +1,7 @@
 use akash_deploy_rs::{
     AkashBackend, AkashClient, Bid, DeployError, DeploymentRecord, DeploymentState,
     DeploymentStore, DeploymentWorkflow, FileDeploymentStore, InputRequired, KeySigner,
-    ProviderInfo, ServiceEndpoint, StepResult, WorkflowConfig,
+    ProviderAuth, ProviderInfo, ServiceEndpoint, StepResult, WorkflowConfig,
 };
 
 use o_line_sdl::{
@@ -341,7 +341,7 @@ impl OLineDeployer {
         }
         let a_vars = build_phase_a_vars(&self.config).await;
         tracing::info!("  Deploying...");
-        let (a_state, a_endpoints) = self
+        let (a_state, mut a_endpoints) = self
             .deploy_phase_with_selection(
                 &self.config.load_sdl("a.kickoff-special-teams.yml")?,
                 &a_vars,
@@ -351,6 +351,67 @@ impl OLineDeployer {
             .await?;
 
         tracing::info!("Deployed! DSEQ: {}", a_state.dseq.unwrap());
+
+        // ── Supplement missing endpoints from provider status API ──
+        // The workflow fires StepResult::Complete as soon as any service reports `available > 0`.
+        // Large-image services (e.g. cosmos-omnibus) may still be pulling their image at that
+        // moment, so their forwarded_ports are absent from the initial state.endpoints.
+        // Kubernetes NodePort assignments are created at Service creation time (lease acceptance),
+        // before pods start — querying the provider REST API directly gives the complete list.
+        {
+            let missing: Vec<&str> = ["oline-a-snapshot", "oline-a-seed", "oline-a-minio-ipfs"]
+                .iter()
+                .copied()
+                .filter(|svc| !a_endpoints.iter().any(|e| e.service.as_str() == *svc))
+                .collect();
+
+            if !missing.is_empty() {
+                tracing::info!(
+                    "  [endpoints] {} service(s) missing from initial query: {} — refreshing from provider API",
+                    missing.len(),
+                    missing.join(", ")
+                );
+                if let (Some(provider_addr), Some(lease_id), Some(jwt)) = (
+                    a_state.selected_provider.as_deref(),
+                    a_state.lease_id.as_ref(),
+                    a_state.jwt_token.as_deref(),
+                ) {
+                    match self.client.query_provider_info(provider_addr).await {
+                        Ok(Some(info)) => {
+                            let auth = ProviderAuth::Jwt { token: jwt.to_string() };
+                            match self.client.query_provider_status(&info.host_uri, lease_id, &auth).await {
+                                Ok(status) => {
+                                    let before = a_endpoints.len();
+                                    for ep in status.endpoints {
+                                        let dup = a_endpoints.iter().any(|e| {
+                                            e.service == ep.service
+                                                && e.internal_port == ep.internal_port
+                                        });
+                                        if !dup {
+                                            tracing::info!(
+                                                "  [endpoints] {} :{} → NodePort {} ({})",
+                                                ep.service, ep.internal_port, ep.port, ep.uri
+                                            );
+                                            a_endpoints.push(ep);
+                                        }
+                                    }
+                                    tracing::info!(
+                                        "  [endpoints] refreshed: {} → {} total",
+                                        before, a_endpoints.len()
+                                    );
+                                }
+                                Err(e) => tracing::info!("  Warning: provider status query failed: {}", e),
+                            }
+                        }
+                        Ok(None) => tracing::info!("  Warning: provider '{}' not found", provider_addr),
+                        Err(e) => tracing::info!("  Warning: could not query provider info: {}", e),
+                    }
+                } else {
+                    tracing::info!("  Warning: deployment state missing provider/lease/jwt — cannot refresh endpoints");
+                }
+            }
+        }
+
         self.deployment_store
             .save(&DeploymentRecord::from_state(&a_state, &self.password)?)
             .await
@@ -391,15 +452,27 @@ impl OLineDeployer {
             .get("SSH_PRIVKEY")
             .ok_or("SSH_PRIVKEY missing from phase-A vars")?;
 
-        push_tls_certs_sftp(
-            "phase-a-snapshot",
-            &a_endpoints,
-            ssh_privkey_pem,
-            &ssh_key_path,
-            &cert,
-            &privkey,
-        )
-        .await?;
+        // ── SFTP TLS certs to snapshot node ──
+        let snapshot_endpoints: Vec<ServiceEndpoint> = a_endpoints
+            .iter()
+            .filter(|e| e.service == "oline-a-snapshot")
+            .cloned()
+            .collect();
+        if snapshot_endpoints.is_empty() {
+            tracing::info!(
+                "  Warning: no endpoints found for oline-a-snapshot — skipping cert delivery"
+            );
+        } else {
+            push_tls_certs_sftp(
+                "phase-a-snapshot",
+                &snapshot_endpoints,
+                ssh_privkey_pem,
+                &ssh_key_path,
+                &cert,
+                &privkey,
+            )
+            .await?;
+        }
 
         // ── SSH verify: confirm certs landed + signal bootstrap to proceed ──
         let remote_cert =
@@ -407,17 +480,23 @@ impl OLineDeployer {
         let remote_key =
             var("TLS_REMOTE_KEY_PATH").unwrap_or_else(|_| "/tmp/tls/privkey.pem".into());
         let entrypoint_url = self.config.val("cloudflare.entrypoint_url");
-        let snapshot_refresh = node_refresh_vars(&a_vars, "SNAPSHOT");
-        verify_certs_and_signal_start(
-            "phase-a-snapshot",
-            &a_endpoints,
-            &ssh_key_path,
-            &remote_cert,
-            &remote_key,
-            &entrypoint_url,
-            &snapshot_refresh,
-        )
-        .await?;
+        if snapshot_endpoints.is_empty() {
+            tracing::info!(
+                "  Warning: no endpoints found for oline-a-snapshot — skipping verify+start"
+            );
+        } else {
+            let snapshot_refresh = node_refresh_vars(&a_vars, "SNAPSHOT");
+            verify_certs_and_signal_start(
+                "phase-a-snapshot",
+                &snapshot_endpoints,
+                &ssh_key_path,
+                &remote_cert,
+                &remote_key,
+                &entrypoint_url,
+                &snapshot_refresh,
+            )
+            .await?;
+        }
 
         // ── SFTP TLS certs to seed node ──
         let seed_endpoints: Vec<ServiceEndpoint> = a_endpoints
@@ -487,27 +566,25 @@ impl OLineDeployer {
         let seed_rpc_ep = Self::find_endpoint_by_internal_port(&a_endpoints, "oline-a-seed", 26657);
         let seed_p2p_ep = Self::find_endpoint_by_internal_port(&a_endpoints, "oline-a-seed", 26656);
 
-        // Pull domain names from the SDL vars built at deploy time.
-        let snap_rpc_domain = a_vars.get("RPC_DOMAIN_SNAPSHOT").map(String::as_str).unwrap_or_default();
-        let snap_p2p_domain = a_vars.get("P2P_DOMAIN_SNAPSHOT").map(String::as_str).unwrap_or_default();
-        let seed_rpc_domain = a_vars.get("RPC_DOMAIN_SEED").map(String::as_str).unwrap_or_default();
-        let seed_p2p_domain = a_vars.get("P2P_DOMAIN_SEED").map(String::as_str).unwrap_or_default();
-
-        // Construct DNS-based query URLs and peer addresses.
-        // Format: <node_id>@<dns_domain>:<nodeport>  — the cosmos-sdk peer string.
-        let snap_rpc_url =
-            snap_rpc_ep.map(|e| format!("http://{}:{}", snap_rpc_domain, e.port));
-        let snap_p2p_addr = snap_p2p_ep.map(|e| format!("{}:{}", snap_p2p_domain, e.port));
-        let seed_rpc_url = seed_rpc_ep.map(|e| format!("http://{}:{}", seed_rpc_domain, e.port));
-        let seed_p2p_addr = seed_p2p_ep.map(|e| format!("{}:{}", seed_p2p_domain, e.port));
+        // All deployer→node communication uses the Akash-assigned provider host + NodePort.
+        // Domains (RPC_DOMAIN_*, P2P_DOMAIN_*) are only for nginx TLS inside the container
+        // and are not reachable by the deployer at this point in the workflow.
+        let snap_rpc_url = snap_rpc_ep
+            .map(|e| format!("http://{}:{}", endpoint_hostname(&e.uri), e.port));
+        let snap_p2p_addr = snap_p2p_ep
+            .map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port));
+        let seed_rpc_url = seed_rpc_ep
+            .map(|e| format!("http://{}:{}", endpoint_hostname(&e.uri), e.port));
+        let seed_p2p_addr = seed_p2p_ep
+            .map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port));
 
         // Statesync RPC servers string for Phase B (cosmos format: "host:port,host:port").
         let a1_statesync_rpc = {
             let s = snap_rpc_ep
-                .map(|e| format!("{}:{}", snap_rpc_domain, e.port))
+                .map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port))
                 .unwrap_or_default();
             let sd = seed_rpc_ep
-                .map(|e| format!("{}:{}", seed_rpc_domain, e.port))
+                .map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port))
                 .unwrap_or_default();
             match (s.is_empty(), sd.is_empty()) {
                 (false, false) => format!("{},{}", s, sd),

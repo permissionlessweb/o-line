@@ -13,7 +13,7 @@ http {
         return 301 https://$host$request_uri;
     }
 
-    # HTTPS — proxy to MinIO
+    # HTTPS — public S3 API / snapshot downloads
     server {
         listen 443 ssl;
         server_name ${SNAPSHOT_DOWNLOAD_DOMAIN};
@@ -44,6 +44,33 @@ http {
             # Stream responses directly — don't buffer multi-GB files to disk.
             proxy_buffering    off;
             proxy_request_buffering off;
+        }
+    }
+
+    # HTTPS — MinIO console admin UI (encrypted admin access)
+    # Accessed via the Akash-assigned NodePort that maps to container port ${MINIO_CONSOLE_PORT}.
+    # nginx terminates TLS here; minio console runs on the internal port behind it.
+    server {
+        listen ${MINIO_CONSOLE_PORT} ssl;
+        server_name _;
+
+        ssl_certificate     ${TLS_CERT};
+        ssl_certificate_key ${TLS_KEY};
+        ssl_protocols       TLSv1.2 TLSv1.3;
+        ssl_ciphers         HIGH:!aNULL:!MD5;
+
+        location / {
+            proxy_pass         http://${MINIO_CONSOLE_BACKEND};
+            proxy_http_version 1.1;
+
+            # WebSocket support — MinIO console uses WS for live updates.
+            proxy_set_header   Upgrade           $http_upgrade;
+            proxy_set_header   Connection        "upgrade";
+
+            proxy_set_header   Host              $http_host;
+            proxy_set_header   X-Real-IP         $remote_addr;
+            proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Proto $scheme;
         }
     }
 }

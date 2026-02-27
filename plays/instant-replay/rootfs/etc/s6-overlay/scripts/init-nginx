@@ -14,11 +14,16 @@ if [ -z "${SNAPSHOT_DOWNLOAD_DOMAIN}" ]; then
 fi
 
 MINIO_PORT="${MINIO_PORT:-9000}"
+# Console: nginx listens on MINIO_CONSOLE_PORT (9001) over HTTPS and proxies to
+# MINIO_CONSOLE_INTERNAL_PORT (9002) where minio console actually runs.
+MINIO_CONSOLE_INTERNAL_PORT="${MINIO_CONSOLE_INTERNAL_PORT:-9002}"
 export MINIO_BACKEND="localhost:${MINIO_PORT}"
+export MINIO_CONSOLE_BACKEND="localhost:${MINIO_CONSOLE_INTERNAL_PORT}"
+export MINIO_CONSOLE_PORT="${MINIO_CONSOLE_PORT:-9001}"
 export TLS_CERT="${TLS_CERT:-/tmp/tls/cert.pem}"
 export TLS_KEY="${TLS_KEY:-/tmp/tls/privkey.pem}"
 
-echo "[init-nginx] Generating nginx config for ${SNAPSHOT_DOWNLOAD_DOMAIN} -> ${MINIO_BACKEND}"
+echo "[init-nginx] Generating nginx config for ${SNAPSHOT_DOWNLOAD_DOMAIN} -> ${MINIO_BACKEND} (console HTTPS :${MINIO_CONSOLE_PORT} -> ${MINIO_CONSOLE_BACKEND})"
 
 # ── Bootstrap sshd so oline can deliver TLS certs via SFTP ────────────────────
 if [ -n "${SSH_PUBKEY}" ]; then
@@ -61,7 +66,7 @@ fi
 # ── Render nginx config ────────────────────────────────────────────────────────
 if [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ]; then
     echo "[init-nginx] Certs found — rendering TLS nginx config"
-    envsubst '${SNAPSHOT_DOWNLOAD_DOMAIN} ${MINIO_BACKEND} ${TLS_CERT} ${TLS_KEY}' \
+    envsubst '${SNAPSHOT_DOWNLOAD_DOMAIN} ${MINIO_BACKEND} ${TLS_CERT} ${TLS_KEY} ${MINIO_CONSOLE_BACKEND} ${MINIO_CONSOLE_PORT}' \
         < /etc/nginx/nginx.conf.template \
         > /etc/nginx/nginx.conf
 else

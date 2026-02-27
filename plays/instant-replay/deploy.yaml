@@ -8,14 +8,14 @@
 # No FUSE or SYS_ADMIN capability required.
 #
 # Image must be pre-built and pushed to a registry before deploying.
-# Build:  docker build -t ghcr.io/permissionlessweb/minio-ipfs:v0.0.6 .
-# Push:   docker push ghcr.io/permissionlessweb/minio-ipfs:v0.0.6
+# Build:  docker build -t ghcr.io/permissionlessweb/minio-ipfs:v0.0.7 .
+# Push:   docker push ghcr.io/permissionlessweb/minio-ipfs:v0.0.7
 
 version: "2.0"
 
 services:
   minio-ipfs:
-    image: ghcr.io/permissionlessweb/minio-ipfs:v0.0.6
+    image: ghcr.io/permissionlessweb/minio-ipfs:v0.0.7
     env:
       # MinIO
       - "MINIO_ENABLED=true"

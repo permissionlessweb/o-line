@@ -104,10 +104,15 @@ for svc in $services; do
 done
 
 # ── 4. uncomment service includes in main nginx.conf ──────────────────────────
+# Must check BOTH port and domain — port vars have defaults (e.g. API_PORT=1317)
+# even when no domain is configured. Uncommenting without rendering the conf file
+# causes `nginx -t` to fail.
 for svc in $services; do
     PORT_VAR="${svc}_PORT"
+    DOMAIN_VAR="${svc}_DOMAIN"
     port_val=$(printenv "$PORT_VAR" || true)
-    if [ -n "$port_val" ]; then
+    domain_val=$(printenv "$DOMAIN_VAR" || true)
+    if [ -n "$port_val" ] && [ -n "$domain_val" ]; then
         log "  Enabling $svc include in nginx.conf"
         sed -i.bak "/PORT:${svc}_PORT/s/^#[[:space:]]*//" "$NGINX_FULL"
     fi

@@ -21,7 +21,7 @@ services:
         to:
           - global: true
         accept:
-          - ${RPC_DOMAIN_SNAPSHOT}
+${SNAPSHOT_443_ACCEPTS}
       - port: ${SSH_PORT}
         as: ${SSH_PORT}
         to:
@@ -90,7 +90,7 @@ services:
         to:
           - global: true
         accept:
-          - ${RPC_DOMAIN_SEED}
+${SEED_443_ACCEPTS}
       - port: ${SSH_PORT}
         as: ${SSH_PORT}
         to:

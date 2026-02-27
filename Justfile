@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # ── Settings ──────────────────────────────────────────────────────────────────
-minio_ipfs_version := "v0.0.6"
+minio_ipfs_version := "v0.0.7"
 ghcr_image         := "ghcr.io/permissionlessweb/minio-ipfs"
 dh_image           := "docker.io/permissionlessweb/minio-ipfs"
 

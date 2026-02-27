@@ -61,7 +61,7 @@ async fn cloudflare_upsert_cname(
                                 content: target.to_string(),
                             },
                             ttl: Some(60),
-                            proxied: Some(false),
+                            proxied: Some(true),
                         },
                     })
                     .await
@@ -87,7 +87,7 @@ async fn cloudflare_upsert_cname(
                                 content: target.to_string(),
                             },
                             ttl: Some(60),
-                            proxied: Some(false),
+                            proxied: Some(true),
                             priority: None,
                         },
                     })
@@ -177,7 +177,7 @@ pub async fn cloudflare_upsert_a(
                             name,
                             content: DnsContent::A { content: ip },
                             ttl: Some(60),
-                            proxied: Some(false),
+                            proxied: Some(true),
                         },
                     })
                     .await
@@ -201,7 +201,7 @@ pub async fn cloudflare_upsert_a(
                             name,
                             content: DnsContent::A { content: ip },
                             ttl: Some(60),
-                            proxied: Some(false),
+                            proxied: Some(true),
                             priority: None,
                         },
                     })
