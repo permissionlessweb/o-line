@@ -9,7 +9,9 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use openssh::{KnownHosts, SessionBuilder};
 use rand::RngCore;
 use ssh_key::{LineEnding, PrivateKey};
-use std::{env::var, error::Error, path::PathBuf, thread::sleep, time::Duration};
+use std::{
+    collections::HashMap, env::var, error::Error, path::PathBuf, thread::sleep, time::Duration,
+};
 
 use crate::MAX_RETRIES;
 
@@ -59,7 +61,7 @@ pub async fn send_cert_sftp(
     let sftp = Sftp::from_session(
         SessionBuilder::default()
             .keyfile(ssh_key_path)
-            .known_hosts_check(KnownHosts::Accept) // ephemeral Akash node — skip host key verify
+            .known_hosts_check(KnownHosts::Add) // ephemeral node — accept changed host keys
             .connect_mux(dest)
             .await?,
         Default::default(),
@@ -194,6 +196,7 @@ pub async fn verify_certs_and_signal_start(
     remote_cert_path: &str,
     remote_key_path: &str,
     entrypoint_url: &str,
+    sdl_vars: &HashMap<String, String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let ssh_port: u16 = var("SSH_PORT")
         .unwrap_or_else(|_| "22".into())
@@ -215,7 +218,7 @@ pub async fn verify_certs_and_signal_start(
 
     let session = SessionBuilder::default()
         .keyfile(ssh_key_path)
-        .known_hosts_check(KnownHosts::Accept)
+        .known_hosts_check(KnownHosts::Add) // ephemeral node — accept changed host keys
         .connect_mux(&dest)
         .await?;
 
@@ -245,6 +248,44 @@ pub async fn verify_certs_and_signal_start(
     }
     for line in stdout.trim().lines() {
         tracing::info!("  [{}] {}", label, line);
+    }
+
+    const REFRESH_VARS: &[&str] = &[
+        "CHAIN_ID",
+        "CHAIN_JSON",
+        "ADDRBOOK_URL",
+        "TLS_CONFIG_URL",
+        "OMNIBUS_IMAGE",
+    ];
+    let export_lines: Vec<String> = sdl_vars
+        .iter()
+        .filter(|(k, _)| REFRESH_VARS.contains(&k.as_str()))
+        .map(|(k, v)| format!("export {}='{}'", k, v.replace('\'', "'\\''")))
+        .collect();
+    let refresh_cmd = format!(
+        "cat >> /tmp/oline-env.sh <<'__OLINE_ENV__'\n{}\n__OLINE_ENV__",
+        export_lines.join("\n")
+    );
+    let refresh = session
+        .command("sh")
+        .arg("-c")
+        .arg(&refresh_cmd)
+        .output()
+        .await?;
+    if refresh.status.success() {
+        tracing::info!(
+            "  [{}] Patched /tmp/oline-env.sh ({} vars: {})",
+            label,
+            export_lines.len(),
+            REFRESH_VARS.join(", ")
+        );
+    } else {
+        let stderr = String::from_utf8_lossy(&refresh.stderr);
+        tracing::info!(
+            "  [{}] Warning: failed to patch /tmp/oline-env.sh: {}",
+            label,
+            stderr.trim()
+        );
     }
 
     // Step 2: launch cosmos node setup in the background.

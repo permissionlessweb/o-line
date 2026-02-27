@@ -1,10 +1,9 @@
 use crate::{
     cli::{prompt_s3_creds, redact_if_secret, urlencoded},
-    config::{days_to_date, OLineConfig},
+    config::days_to_date,
     crypto::{hmac_sha256, sha256_hex},
 };
 use std::{
-    collections::HashMap,
     error::Error,
     io::{self, BufRead, Write},
 };

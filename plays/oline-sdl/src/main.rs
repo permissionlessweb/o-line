@@ -412,6 +412,7 @@ impl OLineDeployer {
             &remote_cert,
             &remote_key,
             &entrypoint_url,
+            &a_vars,
         )
         .await?;
 
@@ -441,6 +442,7 @@ impl OLineDeployer {
                 &remote_cert,
                 &remote_key,
                 &entrypoint_url,
+                &a_vars,
             )
             .await?;
         }

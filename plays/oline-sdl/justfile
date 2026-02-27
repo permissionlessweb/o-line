@@ -40,6 +40,53 @@ lint:
 fmt:
     cargo fmt
 
+# Run E2E TLS workflow test against a real Docker container.
+# Reads OMNIBUS_IMAGE and OLINE_CHAIN_JSON from .env by default.
+# Override individual vars on the command line if needed:
+#   just e2e                                          # use .env values
+#   just e2e chain_json=https://custom/chain.json     # override chain json only
+e2e omnibus="" chain_json="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Parse only the two keys we need from .env (avoids issues with values
+    # containing spaces, e.g. OLINE_SNAPSHOT_RETAIN=2 days, that break
+    # just's built-in dotenv loader).
+    _dotenv=".env"
+    _read_env() { grep -m1 "^$1=" "$_dotenv" 2>/dev/null | cut -d= -f2-; }
+    OMNIBUS_IMAGE="${omnibus:-$([ -f "$_dotenv" ] && _read_env OMNIBUS_IMAGE || true)}"
+    CHAIN_JSON="${chain_json:-$([ -f "$_dotenv" ] && _read_env OLINE_CHAIN_JSON || true)}"
+    export OMNIBUS_IMAGE CHAIN_JSON
+    exec ../tests/e2e.sh
+
+# Sync the repo to a remote amd64 workstation and open an SSH session.
+# Useful for running e2e tests on the correct architecture.
+# Usage:
+#   just remote user@host             # default port 22
+#   just remote user@host:21212       # custom port
+remote dest:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Split user@host:port — port is optional, defaults to 22
+    DEST="{{dest}}"
+    if [[ "$DEST" =~ :[0-9]+$ ]]; then
+        HOST="${DEST%:*}"
+        PORT="${DEST##*:}"
+    else
+        HOST="$DEST"
+        PORT="22"
+    fi
+    REPO_ROOT="$(cd "$(pwd)/../.." && pwd)"
+    echo "=== Syncing repo to $HOST (port $PORT) ..."
+    rsync -az --progress \
+        --exclude='.git' \
+        --exclude='target/' \
+        --exclude='vendor/' \
+        -e "ssh -p $PORT -o StrictHostKeyChecking=accept-new" \
+        "$REPO_ROOT/" \
+        "$HOST:~/o-line/"
+    echo "=== Running e2e on $HOST ..."
+    exec ssh -p "$PORT" -t "$HOST" 'bash -lc "cd ~/o-line/plays/oline-sdl && just e2e"'
+
 # Clean build artifacts
 clean:
     cargo clean

@@ -9,8 +9,8 @@ path = "src/main.rs"
 
 [dependencies]
 aes-gcm = "0.10"
-# akash-deploy-rs = { version = "0.0.5", features = ["default-client", "sdl-templates"] }
-akash-deploy-rs = { path = "/Users/returniflost/akash-deploy-rs", features = ["default-client", "sdl-templates", "file-storage"] }
+akash-deploy-rs = { git = "https://github.com/permissionlessweb/akash-deploy-rs", branch = "feat/client-improvement", features = ["default-client", "sdl-templates", "file-storage"] }
+#akash-deploy-rs = { path = "/Users/returniflost/akash-deploy-rs", features = ["default-client", "sdl-templates", "file-storage"] }
 argon2 = "0.5"
 base64 = "0.22"
 cloudflare = { version = "0.14.0", default-features = false, features = ["rustls-tls"] }
