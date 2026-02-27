@@ -256,6 +256,9 @@ pub async fn verify_certs_and_signal_start(
         "ADDRBOOK_URL",
         "TLS_CONFIG_URL",
         "OMNIBUS_IMAGE",
+        // Snapshot download — must be present so the node restores state on start
+        // instead of syncing from block 1.
+        "SNAPSHOT_URL",
         // TLS service domain/port vars — required by tls-setup.sh validation.
         // These are stored in sdl_vars as suffixed keys (e.g. RPC_DOMAIN_SNAPSHOT)
         // but must be refreshed under the unsuffixed names the container uses.

@@ -186,11 +186,19 @@ async fn test_tls_workflow_docker() {
     let tls_config_url = std::env::var("TLS_CONFIG_URL").unwrap_or_else(|_| {
         "https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/feat/tls/plays/scripts/tls-setup.sh".into()
     });
+    // Optional: if set, the entrypoint auto-enables snapshot download and restores
+    // state from this URL so the node starts from a real block height instead of 1.
+    // If not set, snapshot is skipped (faster for CI / quick smoke tests).
+    let snapshot_url = std::env::var("SNAPSHOT_URL").ok();
 
     println!("  [e2e] OMNIBUS_IMAGE:  {}", omnibus_image);
     println!("  [e2e] CHAIN_JSON:     {}", chain_json);
     println!("  [e2e] ENTRYPOINT_URL: {}", entrypoint_url);
     println!("  [e2e] TLS_CONFIG_URL: {}", tls_config_url);
+    println!(
+        "  [e2e] SNAPSHOT_URL:   {}",
+        snapshot_url.as_deref().unwrap_or("(not set — snapshot skipped)")
+    );
 
     // ── 1. Set env vars consumed by the crypto functions ──────────────────────
     // SSH_PORT=22 — internal_port in our endpoint; prevents a stale SSH_PORT from leaking in
@@ -282,7 +290,10 @@ async fn test_tls_workflow_docker() {
     // omnibus entrypoint invoked our script in a subshell via its ENTRYPOINT_URL
     // handling).
     // SSH_PUBKEY is injected into /root/.ssh/authorized_keys by the bootstrap script.
-    // DOWNLOAD_SNAPSHOT=0: skip multi-GB snapshot. Genesis (~few MB) is still downloaded.
+    // SNAPSHOT_URL (optional): when set the entrypoint auto-enables snapshot download
+    // and restores chain state so the node starts from a real block height.
+    // When not set, no DOWNLOAD_SNAPSHOT override is injected — the entrypoint
+    // leaves snapshot disabled naturally (no SNAPSHOT_URL → no auto-enable).
     let bootstrap_cmd = format!(
         "curl -fsSL '{}' -o /tmp/wrapper.sh && bash /tmp/wrapper.sh",
         entrypoint_url
@@ -291,36 +302,28 @@ async fn test_tls_workflow_docker() {
         "\n  [e2e] Starting container {} with image {}",
         CONTAINER_NAME, omnibus_image
     );
+    let mut docker_args: Vec<String> = vec![
+        "run".into(),
+        "-d".into(),
+        "--name".into(), CONTAINER_NAME.into(),
+        "--entrypoint".into(), "/bin/bash".into(),
+        "-e".into(), format!("SSH_PUBKEY={}", ssh_pubkey),
+        "-e".into(), "SNAPSHOT_RETAIN=0".into(),
+        "-e".into(), "RPC_DOMAIN=localhost".into(),
+        "-e".into(), "RPC_PORT=443".into(),
+        "-e".into(), format!("TLS_CONFIG_URL={}", tls_config_url),
+        "-e".into(), format!("ENTRYPOINT_URL={}", entrypoint_url),
+        "-e".into(), format!("CHAIN_JSON={}", chain_json),
+        "-p".into(), "2222:22".into(),
+    ];
+    if let Some(ref url) = snapshot_url {
+        docker_args.push("-e".into());
+        docker_args.push(format!("SNAPSHOT_URL={}", url));
+    }
+    docker_args.extend([omnibus_image.clone(), "-c".into(), bootstrap_cmd.clone()]);
+
     let status = Command::new("docker")
-        .args([
-            "run",
-            "-d",
-            "--name",
-            CONTAINER_NAME,
-            "--entrypoint",
-            "/bin/bash",
-            "-e",
-            &format!("SSH_PUBKEY={}", ssh_pubkey),
-            "-e",
-            "SNAPSHOT_RETAIN=0",
-            "-e",
-            "RPC_DOMAIN=localhost",
-            "-e",
-            "RPC_PORT=443",
-            "-e",
-            &format!("TLS_CONFIG_URL={}", tls_config_url),
-            "-e",
-            &format!("ENTRYPOINT_URL={}", entrypoint_url),
-            "-e",
-            &format!("CHAIN_JSON={}", chain_json),
-            "-e",
-            "DOWNLOAD_SNAPSHOT=0",
-            "-p",
-            "2222:22",
-            &omnibus_image,
-            "-c",
-            &bootstrap_cmd,
-        ])
+        .args(&docker_args)
         .status()
         .expect("docker not found — install Docker");
     assert!(status.success(), "docker run failed");
