@@ -199,11 +199,8 @@ pub async fn build_phase_a_vars(config: &OLineConfig) -> HashMap<String, String>
     let mut vars = HashMap::new();
     vars.insert("SNAPSHOT_SVC".into(), "oline-a-snapshot".into());
     vars.insert("SEED_SVC".into(), "oline-a-seed".into());
-    vars.insert(
-        "SNAPSHOT_MONIKER".into(),
-        "oline::special::snapshot-node".into(),
-    );
-    vars.insert("SEED_MONIKER".into(), "oline::special::seed-node".into());
+    vars.insert("SNAPSHOT_MONIKER".into(), generate_credential(12));
+    vars.insert("SEED_MONIKER".into(), generate_credential(12));
     insert_nodes_sdl_variables(&mut vars, config, "SNAPSHOT");
     insert_nodes_sdl_variables(&mut vars, config, "SEED");
     insert_sdl_defaults(&mut vars, config);
@@ -248,6 +245,8 @@ pub fn build_phase_b_vars(
 ) -> HashMap<String, String> {
     let mut vars = HashMap::new();
     insert_sdl_defaults(&mut vars, config);
+    vars.insert("LEFT_TACKLE_MONIKER".into(), generate_credential(12));
+    vars.insert("RIGHT_TACKLE_MONIKER".into(), generate_credential(12));
     vars.insert(
         "TERPD_P2P_PERSISTENT_PEERS".into(),
         snapshot_peer.to_string(),
@@ -287,6 +286,8 @@ pub fn build_phase_c_vars(
     let tackles_combined = format!("{},{}", left_tackle_peer, right_tackle_peer);
     let mut vars = HashMap::new();
     insert_sdl_defaults(&mut vars, config);
+    vars.insert("LEFT_FORWARD_MONIKER".into(), generate_credential(12));
+    vars.insert("RIGHT_FORWARD_MONIKER".into(), generate_credential(12));
     vars.insert("TERPD_P2P_SEEDS".into(), format!("{} ", seed_peer));
     vars.insert(
         "TERPD_P2P_PRIVATE_PEER_IDS".into(),

@@ -6,26 +6,15 @@
         ip_hash;
         server 127.0.0.1:${RPC_PORT};
     }
-   
-    # ── RPC — HTTP redirect ────────────────────────────────────────────────────
+
+    # ── RPC — HTTP proxy (TLS terminated by Akash provider ingress) ────────────
+    # The Akash provider's nginx-ingress handles TLS termination for port 443
+    # with the `accept:` domain routing rule. Traffic arriving at this nginx
+    # instance is already plain HTTP — do NOT add `ssl` here or nginx will
+    # return HTTP 400 when it receives cleartext from the provider.
     server {
-        listen 80;
+        listen 443;
         server_name ${RPC_DOMAIN};
-
-        location / {
-            return 301 https://$host$request_uri;
-        }
-    }
-
-    # ── RPC — HTTPS + WebSocket ────────────────────────────────────────────────
-    server {
-        listen 443 ssl;
-        server_name ${RPC_DOMAIN};
-
-        ssl_certificate     ${TLS_CERT};
-        ssl_certificate_key ${TLS_KEY};
-        ssl_protocols       TLSv1.2 TLSv1.3;
-        ssl_ciphers         HIGH:!aNULL:!MD5;
 
         # WebSocket (/websocket endpoint)
         location /websocket {

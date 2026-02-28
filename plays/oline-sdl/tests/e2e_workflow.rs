@@ -73,7 +73,11 @@ fn read_container_env_file(ssh_key_path: &str) -> (String, HashMap<String, Strin
             let val = raw_val
                 .strip_prefix('"')
                 .and_then(|v| v.strip_suffix('"'))
-                .or_else(|| raw_val.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+                .or_else(|| {
+                    raw_val
+                        .strip_prefix('\'')
+                        .and_then(|v| v.strip_suffix('\''))
+                })
                 .unwrap_or(raw_val)
                 .to_string();
             map.insert(key, val);
@@ -139,11 +143,7 @@ fn poll_ssh_log(ssh_key_path: &str, markers: &[&str], timeout: Duration) -> (boo
         }
 
         let found: Vec<&&str> = markers.iter().filter(|m| last_log.contains(**m)).collect();
-        println!(
-            "  [poll] {}/{} markers found",
-            found.len(),
-            markers.len()
-        );
+        println!("  [poll] {}/{} markers found", found.len(), markers.len());
         if found.len() == markers.len() {
             return (true, last_log);
         }
@@ -178,8 +178,7 @@ async fn test_tls_workflow_docker() {
     // ── 0. Read required env vars ─────────────────────────────────────────────
     let omnibus_image =
         std::env::var("OMNIBUS_IMAGE").expect("OMNIBUS_IMAGE must be set to run this test");
-    let chain_json =
-        std::env::var("CHAIN_JSON").expect("CHAIN_JSON must be set to run this test");
+    let chain_json = std::env::var("CHAIN_JSON").expect("CHAIN_JSON must be set to run this test");
     let entrypoint_url = std::env::var("ENTRYPOINT_URL").unwrap_or_else(|_| {
         "https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/feat/tls/plays/scripts/oline-entrypoint.sh".into()
     });
@@ -197,7 +196,9 @@ async fn test_tls_workflow_docker() {
     println!("  [e2e] TLS_CONFIG_URL: {}", tls_config_url);
     println!(
         "  [e2e] SNAPSHOT_URL:   {}",
-        snapshot_url.as_deref().unwrap_or("(not set — snapshot skipped)")
+        snapshot_url
+            .as_deref()
+            .unwrap_or("(not set — snapshot skipped)")
     );
 
     // ── 1. Set env vars consumed by the crypto functions ──────────────────────
@@ -305,16 +306,26 @@ async fn test_tls_workflow_docker() {
     let mut docker_args: Vec<String> = vec![
         "run".into(),
         "-d".into(),
-        "--name".into(), CONTAINER_NAME.into(),
-        "--entrypoint".into(), "/bin/bash".into(),
-        "-e".into(), format!("SSH_PUBKEY={}", ssh_pubkey),
-        "-e".into(), "SNAPSHOT_RETAIN=0".into(),
-        "-e".into(), "RPC_DOMAIN=localhost".into(),
-        "-e".into(), "RPC_PORT=443".into(),
-        "-e".into(), format!("TLS_CONFIG_URL={}", tls_config_url),
-        "-e".into(), format!("ENTRYPOINT_URL={}", entrypoint_url),
-        "-e".into(), format!("CHAIN_JSON={}", chain_json),
-        "-p".into(), "2222:22".into(),
+        "--name".into(),
+        CONTAINER_NAME.into(),
+        "--entrypoint".into(),
+        "/bin/bash".into(),
+        "-e".into(),
+        format!("SSH_PUBKEY={}", ssh_pubkey),
+        "-e".into(),
+        "SNAPSHOT_RETAIN=0".into(),
+        "-e".into(),
+        "RPC_DOMAIN=localhost".into(),
+        "-e".into(),
+        "RPC_PORT=443".into(),
+        "-e".into(),
+        format!("TLS_CONFIG_URL={}", tls_config_url),
+        "-e".into(),
+        format!("ENTRYPOINT_URL={}", entrypoint_url),
+        "-e".into(),
+        format!("CHAIN_JSON={}", chain_json),
+        "-p".into(),
+        "2222:22".into(),
     ];
     if let Some(ref url) = snapshot_url {
         docker_args.push("-e".into());
@@ -371,12 +382,18 @@ async fn test_tls_workflow_docker() {
         let ssh_test = Command::new("ssh")
             .args([
                 "-v",
-                "-i", ssh_key_path.to_str().unwrap(),
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "BatchMode=yes",
-                "-o", "ConnectTimeout=10",
-                "-p", &SSH_PORT_HOST.to_string(),
+                "-i",
+                ssh_key_path.to_str().unwrap(),
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
+                "-p",
+                &SSH_PORT_HOST.to_string(),
                 &format!("root@{}", SSH_HOST),
                 "echo SSH_OK && cat /root/.ssh/authorized_keys",
             ])
@@ -384,15 +401,23 @@ async fn test_tls_workflow_docker() {
         match ssh_test {
             Ok(out) => {
                 println!("  [diag] plain ssh exit: {}", out.status);
-                println!("  [diag] stdout: {}", String::from_utf8_lossy(&out.stdout).trim());
-                for line in String::from_utf8_lossy(&out.stderr).lines().filter(|l| !l.starts_with("debug1:")) {
+                println!(
+                    "  [diag] stdout: {}",
+                    String::from_utf8_lossy(&out.stdout).trim()
+                );
+                for line in String::from_utf8_lossy(&out.stderr)
+                    .lines()
+                    .filter(|l| !l.starts_with("debug1:"))
+                {
                     println!("  [diag] ssh stderr: {}", line);
                 }
             }
             Err(e) => println!("  [diag] ssh command error: {}", e),
         }
 
-        let logs = Command::new("docker").args(["logs", "--tail", "60", CONTAINER_NAME]).output();
+        let logs = Command::new("docker")
+            .args(["logs", "--tail", "60", CONTAINER_NAME])
+            .output();
         if let Ok(out) = logs {
             println!("  [diag] --- docker logs (last 60 lines) ---");
             let combined = [out.stdout.as_slice(), out.stderr.as_slice()].concat();
@@ -412,6 +437,7 @@ async fn test_tls_workflow_docker() {
         &ssh_key_path,
         &tls_cert,
         &tls_privkey,
+        7,
     )
     .await
     .expect("push_tls_certs_sftp failed");
@@ -432,7 +458,7 @@ async fn test_tls_workflow_docker() {
     sdl_vars.insert("ADDRBOOK_URL".into(), String::new());
     sdl_vars.insert("OMNIBUS_IMAGE".into(), omnibus_image.clone());
     sdl_vars.insert("RPC_DOMAIN".into(), "localhost".into()); // matches -e RPC_DOMAIN=localhost
-    sdl_vars.insert("RPC_PORT".into(), "443".into());         // matches -e RPC_PORT=443
+    sdl_vars.insert("RPC_PORT".into(), "443".into()); // matches -e RPC_PORT=443
 
     println!("  [e2e] Verifying certs + launching node setup...");
     verify_certs_and_signal_start(

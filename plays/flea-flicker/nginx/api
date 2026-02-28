@@ -1,26 +1,13 @@
- 
 upstream api_backend {
     server 127.0.0.1:${API_PORT};
 }
-# ── REST API — HTTP redirect ───────────────────────────────────────────────
+
+# ── REST API — HTTP proxy (TLS terminated by Akash provider ingress) ───────
+# The Akash provider's nginx-ingress handles TLS termination for port 443
+# with the `accept:` domain routing rule. Traffic arriving here is plain HTTP.
 server {
-    listen 80;
+    listen 443;
     server_name ${API_DOMAIN};
-
-    location / {
-        return 301 https://$host$request_uri;
-    }
-}
-
-# ── REST API — HTTPS ───────────────────────────────────────────────────────
-server {
-    listen 443 ssl;
-    server_name ${API_DOMAIN};
-
-    ssl_certificate     ${TLS_CERT};
-    ssl_certificate_key ${TLS_KEY};
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         HIGH:!aNULL:!MD5;
 
     location / {
         add_header Access-Control-Allow-Origin   *;

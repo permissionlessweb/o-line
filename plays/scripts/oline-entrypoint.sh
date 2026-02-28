@@ -70,6 +70,12 @@ if [ -n "$TLS_CONFIG_URL" ]; then
   curl -fsSL "$TLS_CONFIG_URL" -o /tmp/tls-setup.sh
   sh /tmp/tls-setup.sh
   echo "=== TLS setup complete ==="
+  # Activate nginx TLS config NOW so port 443 is live during cosmos setup.
+  # tls-setup.sh installs nginx (which auto-starts with the default config);
+  # reloading here replaces the default config with our rendered TLS config.
+  # Without this, port 443 only becomes active after cosmos finishes (~15-30 min).
+  nginx -s reload 2>/dev/null || nginx
+  echo "=== nginx started — port 443 active ==="
 fi
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -598,16 +604,10 @@ fi
 
 echo "=== Cosmos node setup complete ==="
 
-# Start nginx now that cosmos setup is fully done — nginx config was prepared
-# by tls-setup.sh earlier but start was deferred to here so setup logs are
-# fully visible and nginx doesn't interfere with the cosmos init workflow.
+# Ensure nginx is still running with TLS config (guards against any crash
+# during the long cosmos setup phase; no-op if already running correctly).
 if [ -n "$TLS_CONFIG_URL" ]; then
-  echo "=== Starting nginx with TLS ==="
-  # apt-get install nginx auto-starts nginx with the default config.
-  # If it is already running, reload it so it picks up the TLS config written
-  # by tls-setup.sh.  If it is not running (e.g. apk-based image), start fresh.
   nginx -s reload 2>/dev/null || nginx
-  echo "=== nginx started ==="
 fi
 
 echo "=== Launching: $START_CMD ==="

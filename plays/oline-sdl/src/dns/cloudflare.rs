@@ -110,7 +110,7 @@ async fn cloudflare_upsert_cname(
                         content: target.to_string(),
                     },
                     ttl: Some(60),
-                    proxied: Some(false),
+                    proxied: Some(true),
                     priority: None,
                 },
             })

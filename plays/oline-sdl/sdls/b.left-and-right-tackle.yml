@@ -13,7 +13,7 @@ services:
         to:
           - global: true
     env:
-      - MONIKER=terp-node
+      - MONIKER=${LEFT_TACKLE_MONIKER}
       - CHAIN_JSON=${CHAIN_JSON}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - PRUNING=default
@@ -44,7 +44,7 @@ services:
         to:
           - global: true
     env:
-      - MONIKER=terp-node
+      - MONIKER=${RIGHT_TACKLE_MONIKER}
       - CHAIN_JSON=${CHAIN_JSON}
       - TERPD_P2P_PEX=false
       - SNAPSHOT_URL=${SNAPSHOT_URL}

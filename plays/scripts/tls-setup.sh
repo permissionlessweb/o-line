@@ -1,10 +1,14 @@
 #!/bin/bash
 # tls-setup.sh
 #
-# Sets up nginx TLS termination for RPC, API, P2P, and/or GRPC services.
+# Sets up nginx reverse-proxy for RPC, API, and/or GRPC services.
 # Reads *_DOMAIN + *_PORT env vars (as set by the Akash SDL).
-# TLS cert + key must already exist at $TLS_CERT / $TLS_KEY — placed there by
-# oline-entrypoint.sh via SFTP before this script is invoked.
+#
+# TLS is terminated by the Akash provider's nginx-ingress at port 443.
+# Traffic arriving at this nginx instance is already plain HTTP — the nginx
+# server blocks do NOT use `ssl`.  The TLS cert + key at $TLS_CERT / $TLS_KEY
+# are delivered by oline via SFTP as a startup synchronisation signal; they
+# are verified below to confirm delivery succeeded but are NOT loaded by nginx.
 #
 # NOTE: sshd is started and managed by oline-entrypoint.sh. Do NOT start it here.
 
@@ -97,7 +101,7 @@ for svc in $services; do
             || die "Failed to fetch nginx template for ${svc}"
         export "$PORT_VAR=$port_val" "$DOMAIN_VAR=$domain_val"
         RENDERED_CONF="${RENDERED_DIR}/${svc_lower}.conf"
-        VARS='$'"${PORT_VAR}"',$'"${DOMAIN_VAR}"',$TLS_CERT,$TLS_KEY'
+        VARS='$'"${PORT_VAR}"',$'"${DOMAIN_VAR}"
         envsubst "$VARS" < "${TEMPLATE_FILE}" > "${RENDERED_CONF}"
         log "  Rendered: ${RENDERED_CONF}"
     fi

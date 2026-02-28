@@ -1,21 +1,15 @@
-#   ${GRPC_DOMAIN}  - domain served for gRPC           (optional, omit block if empty)
-#   ${GRPC_PORT}    - internal gRPC port               (default: 9090)
-#   ${TLS_CERT}     - path to fullchain PEM         
-#   ${TLS_KEY}      - path to privkey PEM       
+#   ${GRPC_DOMAIN}  - domain served for gRPC  (optional, omit block if empty)
+#   ${GRPC_PORT}    - internal gRPC port       (default: 9090)
 
 upstream grpc_backend {
     server 127.0.0.1:${GRPC_PORT};
 }
 
-# ── gRPC — HTTPS/2 ────────────────────────────────────────────────────────
+# ── gRPC — HTTP/2 cleartext (TLS terminated by Akash provider ingress) ─────
+# Akash's ingress terminates TLS; this nginx receives plain HTTP/2 (h2c).
 server {
-    listen 443 ssl http2;
+    listen 443 http2;
     server_name ${GRPC_DOMAIN};
-
-    ssl_certificate     ${TLS_CERT};
-    ssl_certificate_key ${TLS_KEY};
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         HIGH:!aNULL:!MD5;
 
     location / {
         grpc_pass         grpc://grpc_backend;

@@ -198,51 +198,66 @@ impl OLineDeployer {
             }
         }
 
-        print!(
-            "    Select provider (1-{}) or 'a' to auto-select cheapest: ",
-            bids.len()
-        );
-        io::stdout().flush()?;
+        loop {
+            print!(
+                "    Select provider (1-{}) or 'a' to auto-select cheapest: ",
+                bids.len()
+            );
+            io::stdout().flush()?;
 
-        let input = lines.next().unwrap_or(Ok(String::new()))?;
-        let input = input.trim().to_lowercase();
+            let input = lines.next().unwrap_or(Ok(String::new()))?;
+            let input = input.trim().to_lowercase();
 
-        if input == "a" || input == "auto" {
-            let cheapest = bids.iter().min_by_key(|b| b.price_uakt).unwrap();
-            tracing::info!("\n    Selected: {}", cheapest.provider);
-            if let Some(ref info) = provider_infos[bids
-                .iter()
-                .position(|b| b.provider == cheapest.provider)
-                .unwrap()]
-            {
+            if input == "a" || input == "auto" {
+                let cheapest = bids.iter().min_by_key(|b| b.price_uakt).unwrap();
+                tracing::info!("\n    Selected: {}", cheapest.provider);
+                if let Some(ref info) = provider_infos[bids
+                    .iter()
+                    .position(|b| b.provider == cheapest.provider)
+                    .unwrap()]
+                {
+                    tracing::info!("    Host:     {}", info.host_uri);
+                }
+                tracing::info!(
+                    "  ═══════════════════════════════════════════════════════════════════════\n"
+                );
+                return Ok(cheapest.provider.clone());
+            }
+
+            let choice: usize = match input.parse() {
+                Ok(n) => n,
+                Err(_) => {
+                    tracing::info!(
+                        "    Invalid input '{}' — enter a number 1-{} or 'a'.",
+                        input,
+                        bids.len()
+                    );
+                    continue;
+                }
+            };
+
+            if choice < 1 || choice > bids.len() {
+                tracing::info!(
+                    "    {} is out of range — enter 1-{} or 'a'.",
+                    choice,
+                    bids.len()
+                );
+                continue;
+            }
+
+            let selected = &bids[choice - 1];
+            let selected_info = &provider_infos[choice - 1];
+
+            tracing::info!("\n    Selected: {}", selected.provider);
+            if let Some(ref info) = selected_info {
                 tracing::info!("    Host:     {}", info.host_uri);
             }
             tracing::info!(
                 "  ═══════════════════════════════════════════════════════════════════════\n"
             );
-            return Ok(cheapest.provider.clone());
+
+            return Ok(selected.provider.clone());
         }
-
-        let choice: usize = input
-            .parse()
-            .map_err(|_| format!("invalid input: '{}'", input))?;
-
-        if choice < 1 || choice > bids.len() {
-            return Err(format!("selection {} out of range (1-{})", choice, bids.len()).into());
-        }
-
-        let selected = &bids[choice - 1];
-        let selected_info = &provider_infos[choice - 1];
-
-        tracing::info!("\n    Selected: {}", selected.provider);
-        if let Some(ref info) = selected_info {
-            tracing::info!("    Host:     {}", info.host_uri);
-        }
-        tracing::info!(
-            "  ═══════════════════════════════════════════════════════════════════════\n"
-        );
-
-        Ok(selected.provider.clone())
     }
 
     /// Query `rpc_url/status` and return `"<node_id>@<p2p_address>"`.
@@ -432,6 +447,27 @@ impl OLineDeployer {
             }
         } else {
             tracing::info!("  Note: Cloudflare DNS not configured — update CNAMEs for accept domains manually.");
+        }
+
+        // ── Phase A public HTTPS endpoint summary ──
+        {
+            let get = |k: &str| a_vars.get(k).map(|s| s.as_str()).unwrap_or("");
+            tracing::info!("\n  ┌── Phase A Public Endpoints ──────────────────────────────────────────");
+            for (label, rpc, api, grpc, p2p, p2p_port) in [
+                ("Snapshot", "RPC_DOMAIN_SNAPSHOT", "API_DOMAIN_SNAPSHOT", "GRPC_DOMAIN_SNAPSHOT", "P2P_DOMAIN_SNAPSHOT", "P2P_PORT_SNAPSHOT"),
+                ("Seed    ", "RPC_DOMAIN_SEED",      "API_DOMAIN_SEED",      "GRPC_DOMAIN_SEED",      "P2P_DOMAIN_SEED",      "P2P_PORT_SEED"),
+            ] {
+                let (rpc_d, api_d, grpc_d, p2p_d, p2p_p) = (get(rpc), get(api), get(grpc), get(p2p), get(p2p_port));
+                if !rpc_d.is_empty()  { tracing::info!("  │  {} RPC:   https://{}", label, rpc_d); }
+                if !api_d.is_empty()  { tracing::info!("  │  {} API:   https://{}", label, api_d); }
+                if !grpc_d.is_empty() { tracing::info!("  │  {} gRPC:  {}", label, grpc_d); }
+                if !p2p_d.is_empty()  { tracing::info!("  │  {} P2P:   {}:{}", label, p2p_d, p2p_p); }
+            }
+            let metadata_url = get("SNAPSHOT_METADATA_URL");
+            let dl_domain    = get("SNAPSHOT_DOWNLOAD_DOMAIN");
+            if !metadata_url.is_empty() { tracing::info!("  │"); tracing::info!("  │  Snapshot metadata: {}", metadata_url); }
+            if !dl_domain.is_empty()    { tracing::info!("  │  MinIO download:    https://{}", dl_domain); }
+            tracing::info!("  └──────────────────────────────────────────────────────────────────────\n");
         }
 
         // ── Use SFTP to transfer wildcard certs ──
@@ -696,6 +732,7 @@ impl OLineDeployer {
         );
         let b_snapshot_url =
             fetch_snapshot_url_from_metadata(&b_snapshot_metadata_url, &b_snapshot_fallback).await;
+        tracing::info!("  Snapshot metadata:    {}", b_snapshot_metadata_url);
         tracing::info!("  Phase B snapshot URL: {}", b_snapshot_url);
 
         let b_vars = build_phase_b_vars(
@@ -804,6 +841,33 @@ impl OLineDeployer {
         tracing::info!("  Phase A1 DSEQ: {}", a_state.dseq.unwrap_or(0));
         tracing::info!("  Phase B  DSEQ: {}", b_state.dseq.unwrap_or(0));
         tracing::info!("  Phase C  DSEQ: {}", c_state.dseq.unwrap_or(0));
+
+        // ── Final public endpoint recap ──
+        {
+            let get = |k: &str| a_vars.get(k).map(|s| s.as_str()).unwrap_or("");
+            tracing::info!("\n  ┌── Public Endpoints ──────────────────────────────────────────────────");
+            for (label, rpc, api, grpc, p2p, p2p_port) in [
+                ("Snapshot", "RPC_DOMAIN_SNAPSHOT", "API_DOMAIN_SNAPSHOT", "GRPC_DOMAIN_SNAPSHOT", "P2P_DOMAIN_SNAPSHOT", "P2P_PORT_SNAPSHOT"),
+                ("Seed    ", "RPC_DOMAIN_SEED",      "API_DOMAIN_SEED",      "GRPC_DOMAIN_SEED",      "P2P_DOMAIN_SEED",      "P2P_PORT_SEED"),
+            ] {
+                let (rpc_d, api_d, grpc_d, p2p_d, p2p_p) = (get(rpc), get(api), get(grpc), get(p2p), get(p2p_port));
+                if !rpc_d.is_empty()  { tracing::info!("  │  {} RPC:   https://{}", label, rpc_d); }
+                if !api_d.is_empty()  { tracing::info!("  │  {} API:   https://{}", label, api_d); }
+                if !grpc_d.is_empty() { tracing::info!("  │  {} gRPC:  {}", label, grpc_d); }
+                if !p2p_d.is_empty()  { tracing::info!("  │  {} P2P:   {}:{}", label, p2p_d, p2p_p); }
+            }
+            let metadata_url = get("SNAPSHOT_METADATA_URL");
+            let dl_domain    = get("SNAPSHOT_DOWNLOAD_DOMAIN");
+            if !metadata_url.is_empty() {
+                tracing::info!("  │");
+                tracing::info!("  │  Snapshot metadata: {}", metadata_url);
+            }
+            if !dl_domain.is_empty() {
+                tracing::info!("  │  MinIO download:    https://{}", dl_domain);
+            }
+            tracing::info!("  └──────────────────────────────────────────────────────────────────────");
+        }
+
         Ok(())
     }
 }
