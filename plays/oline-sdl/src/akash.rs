@@ -204,10 +204,10 @@ pub async fn build_phase_a_vars(config: &OLineConfig) -> HashMap<String, String>
     insert_nodes_sdl_variables(&mut vars, config, "SNAPSHOT");
     insert_nodes_sdl_variables(&mut vars, config, "SEED");
     insert_sdl_defaults(&mut vars, config);
-    // Build port-443 accept lists now that all domain vars are populated.
-    // Akash only routes to a service when the request domain is in its accept list.
-    vars.insert("SNAPSHOT_443_ACCEPTS".into(), build_accept_items(&vars, "SNAPSHOT"));
-    vars.insert("SEED_443_ACCEPTS".into(),     build_accept_items(&vars, "SEED"));
+    // Build port-80 accept lists now that all domain vars are populated.
+    // Akash HTTP ingress terminates TLS and forwards plain HTTP to container port 80.
+    vars.insert("SNAPSHOT_80_ACCEPTS".into(), build_accept_items(&vars, "SNAPSHOT"));
+    vars.insert("SEED_80_ACCEPTS".into(),     build_accept_items(&vars, "SEED"));
     let s3_key = generate_credential(S3_KEY);
     let s3_secret = generate_credential(S3_SECRET);
     // S3 uploads go directly to minio via the internal Akash service network.

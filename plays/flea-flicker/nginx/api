@@ -6,7 +6,7 @@ upstream api_backend {
 # The Akash provider's nginx-ingress handles TLS termination for port 443
 # with the `accept:` domain routing rule. Traffic arriving here is plain HTTP.
 server {
-    listen 443;
+    listen 80;
     server_name ${API_DOMAIN};
 
     location / {

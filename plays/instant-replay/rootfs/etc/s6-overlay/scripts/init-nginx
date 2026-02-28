@@ -70,8 +70,10 @@ if [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ]; then
         < /etc/nginx/nginx.conf.template \
         > /etc/nginx/nginx.conf
 else
-    echo "[init-nginx] No certs — rendering HTTP-only nginx config on port 80"
-    # Minimal fallback: HTTP proxy only (no TLS).
+    echo "[init-nginx] No certs — rendering config without console TLS (port 443 still active)"
+    # Port 80 is not exposed in the Akash SDL; the port-443 download proxy does not
+    # need ssl (Akash ingress terminates TLS upstream). Console HTTPS is unavailable
+    # without certs, so it is omitted from this fallback.
     cat > /etc/nginx/nginx.conf <<NGINX_EOF
 events { worker_connections 1024; }
 http {
@@ -82,7 +84,14 @@ http {
         location / {
             proxy_pass http://${MINIO_BACKEND};
             proxy_set_header Host \$http_host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
             proxy_buffering off;
+            proxy_request_buffering off;
+            proxy_connect_timeout 300s;
+            proxy_send_timeout    300s;
+            proxy_read_timeout    300s;
         }
     }
 }

@@ -69,9 +69,9 @@ if [ -f "$RPC_TMPL" ]; then
         && ok "RPC: upstream port rendered" \
         || fail "RPC: upstream port not rendered"
 
-    grep -qE 'listen[[:space:]]+443[^;]*;' "$CONF_D/rpc.conf" \
-        && ok "RPC: listen 443 present" \
-        || fail "RPC: listen 443 missing"
+    grep -qE 'listen[[:space:]]+80[^;]*;' "$CONF_D/rpc.conf" \
+        && ok "RPC: listen 80 present" \
+        || fail "RPC: listen 80 missing"
 
     if grep -qE 'listen[[:space:]]+.*ssl' "$CONF_D/rpc.conf"; then
         fail "RPC: 'ssl' found in listen directive — must not be present (Akash ingress handles TLS)"
@@ -131,9 +131,9 @@ if [ -f "$GRPC_TMPL" ]; then
         || fail "gRPC: upstream port not rendered"
 
     # Must use http2 for gRPC cleartext, must NOT have ssl
-    grep -qE 'listen[[:space:]]+443[[:space:]]+http2' "$CONF_D/grpc.conf" \
-        && ok "gRPC: listen 443 http2 (h2c cleartext)" \
-        || fail "gRPC: missing 'listen 443 http2'"
+    grep -qE 'listen[[:space:]]+80[[:space:]]+http2' "$CONF_D/grpc.conf" \
+        && ok "gRPC: listen 80 http2 (h2c cleartext)" \
+        || fail "gRPC: missing 'listen 80 http2'"
 
     if grep -qE 'listen[[:space:]]+.*ssl' "$CONF_D/grpc.conf"; then
         fail "gRPC: 'ssl' found in listen directive"

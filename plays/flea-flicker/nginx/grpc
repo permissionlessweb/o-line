@@ -8,7 +8,7 @@ upstream grpc_backend {
 # ── gRPC — HTTP/2 cleartext (TLS terminated by Akash provider ingress) ─────
 # Akash's ingress terminates TLS; this nginx receives plain HTTP/2 (h2c).
 server {
-    listen 443 http2;
+    listen 80 http2;
     server_name ${GRPC_DOMAIN};
 
     location / {

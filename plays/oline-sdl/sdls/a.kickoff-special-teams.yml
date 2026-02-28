@@ -16,12 +16,8 @@ services:
         as: 80
         to:
           - global: true
-      - port: 443
-        as: 443
-        to:
-          - global: true
         accept:
-${SNAPSHOT_443_ACCEPTS}
+${SNAPSHOT_80_ACCEPTS}
       - port: ${SSH_PORT}
         as: ${SSH_PORT}
         to:
@@ -85,12 +81,8 @@ ${SNAPSHOT_443_ACCEPTS}
         as: 80
         to:
           - global: true
-      - port: 443
-        as: 443
-        to:
-          - global: true
         accept:
-${SEED_443_ACCEPTS}
+${SEED_80_ACCEPTS}
       - port: ${SSH_PORT}
         as: ${SSH_PORT}
         to:
@@ -142,8 +134,8 @@ ${SEED_443_ACCEPTS}
         as: 9000
         to:
           - service: ${SNAPSHOT_SVC}
-      - port: 443
-        as: 443
+      - port: 80
+        as: 80
         to:
           - global: true
         accept:

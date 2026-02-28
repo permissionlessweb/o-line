@@ -13,7 +13,7 @@
     # instance is already plain HTTP — do NOT add `ssl` here or nginx will
     # return HTTP 400 when it receives cleartext from the provider.
     server {
-        listen 443;
+        listen 80;
         server_name ${RPC_DOMAIN};
 
         # WebSocket (/websocket endpoint)

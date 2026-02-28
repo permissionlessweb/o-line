@@ -6,22 +6,12 @@ http {
     # Allow unlimited body size — snapshot archives can be many GB.
     client_max_body_size 0;
 
-    # HTTP → HTTPS redirect
+    # Snapshot downloads — TLS terminated by Akash provider nginx-ingress (port 443
+    # with `accept:` in SDL). Traffic arriving here is already plain HTTP.
+    # Do NOT add `ssl` — nginx would return HTTP 400 on cleartext from the ingress.
     server {
         listen 80;
         server_name ${SNAPSHOT_DOWNLOAD_DOMAIN};
-        return 301 https://$host$request_uri;
-    }
-
-    # HTTPS — public S3 API / snapshot downloads
-    server {
-        listen 443 ssl;
-        server_name ${SNAPSHOT_DOWNLOAD_DOMAIN};
-
-        ssl_certificate     ${TLS_CERT};
-        ssl_certificate_key ${TLS_KEY};
-        ssl_protocols       TLSv1.2 TLSv1.3;
-        ssl_ciphers         HIGH:!aNULL:!MD5;
 
         location / {
             proxy_pass         http://${MINIO_BACKEND};
@@ -47,9 +37,8 @@ http {
         }
     }
 
-    # HTTPS — MinIO console admin UI (encrypted admin access)
-    # Accessed via the Akash-assigned NodePort that maps to container port ${MINIO_CONSOLE_PORT}.
-    # nginx terminates TLS here; minio console runs on the internal port behind it.
+    # MinIO console admin UI — accessed directly via Akash NodePort (not via HTTP ingress),
+    # so there is no upstream TLS termination. nginx must terminate TLS itself here.
     server {
         listen ${MINIO_CONSOLE_PORT} ssl;
         server_name _;
