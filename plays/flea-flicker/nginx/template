@@ -11,9 +11,8 @@ http {
     sendfile        on;
     keepalive_timeout  65;
 
-    # --- Service Includes (uncommented per configured service) ---
-    # include /etc/nginx/conf.d/api.conf;    # PORT:API_PORT
-    # include /etc/nginx/conf.d/grpc.conf;   # PORT:GRPC_PORT
-    # include /etc/nginx/conf.d/rpc.conf;    # PORT:RPC_PORT
+    # Only files written to conf.d/ by tls-setup.sh are included here.
+    # Services are activated by writing their conf file, not by editing this file.
+    include /etc/nginx/conf.d/*.conf;
 }
 

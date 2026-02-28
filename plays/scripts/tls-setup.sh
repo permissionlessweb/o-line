@@ -76,6 +76,9 @@ else
     die "Unsupported package manager (need apt-get or apk)"
 fi
 mkdir -p "$RENDERED_DIR"
+# Clear any stale .conf files from a previous run so the glob include
+# in nginx.conf only picks up services configured for this deployment.
+rm -f "$RENDERED_DIR"/*.conf "$RENDERED_DIR"/*.conf.bak 2>/dev/null || true
 
 # ── 2. fetch main nginx.conf template ──────────────────────────────────────────
 log "Fetching main nginx.conf template..."
@@ -85,8 +88,9 @@ curl -fsSL "${NGINX_CONFIG_TEMPLATES}/template" -o "$MAIN_NGINX_TMPL" \
 cp "$MAIN_NGINX_TMPL" "$NGINX_FULL"
 
 # ── 3. fetch + render per-service config templates ─────────────────────────────
+# nginx.conf uses `include /etc/nginx/conf.d/*.conf` — a service becomes active
+# simply by writing its .conf file here.  No sed editing of nginx.conf needed.
 log "Rendering per-service nginx configs..."
-export TLS_CERT TLS_KEY
 for svc in $services; do
     PORT_VAR="${svc}_PORT"
     DOMAIN_VAR="${svc}_DOMAIN"
@@ -107,24 +111,9 @@ for svc in $services; do
     fi
 done
 
-# ── 4. uncomment service includes in main nginx.conf ──────────────────────────
-# Must check BOTH port and domain — port vars have defaults (e.g. API_PORT=1317)
-# even when no domain is configured. Uncommenting without rendering the conf file
-# causes `nginx -t` to fail.
-for svc in $services; do
-    PORT_VAR="${svc}_PORT"
-    DOMAIN_VAR="${svc}_DOMAIN"
-    port_val=$(printenv "$PORT_VAR" || true)
-    domain_val=$(printenv "$DOMAIN_VAR" || true)
-    if [ -n "$port_val" ] && [ -n "$domain_val" ]; then
-        log "  Enabling $svc include in nginx.conf"
-        sed -i.bak "/PORT:${svc}_PORT/s/^#[[:space:]]*//" "$NGINX_FULL"
-    fi
-done
-
-# ── 5. validate nginx configuration (start deferred to entrypoint) ─────────────
+# ── 4. validate nginx configuration (start deferred to entrypoint) ─────────────
 log "Testing nginx configuration..."
-nginx -t || die "nginx config test failed — check rendered configs above"
+nginx -t 2>&1 || die "nginx config test failed — check rendered configs above"
 log "nginx config OK — will be started by entrypoint after cosmos setup."
 if [ -n "$RPC_DOMAIN"  ]; then log "  RPC  -> https://$RPC_DOMAIN";  fi
 if [ -n "$API_DOMAIN"  ]; then log "  API  -> https://$API_DOMAIN";  fi
