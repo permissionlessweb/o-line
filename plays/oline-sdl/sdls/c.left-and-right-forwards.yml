@@ -1,60 +1,117 @@
 ---
 version: "2.0"
 services:
-  oline-forward-left-node:
+  ${LF_SVC}:
     image: ${OMNIBUS_IMAGE}
     expose:
-      - port: 26656
-        as: 26656
+      - port: ${RPC_PORT_FORWARD_L}
+        as: ${RPC_PORT_FORWARD_L}
         to:
           - global: true
-      - port: 26657
-        as: 26657
+      - port: ${RPC_PORT_TACKLE_L}
+        as: ${RPC_PORT_TACKLE_L}
+        to:
+          - global: true
+      - port: ${API_PORT_TACKLE_L}
+        as: ${API_PORT_TACKLE_L}
+        to:
+          - global: true
+      - port: ${GRPC_PORT_TACKLE_L}
+        as: ${GRPC_PORT_TACKLE_L}1
+        to:
+          - global: true
+      - port: 80
+        as: 80
+        to:
+          - global: true
+${LF_80_ACCEPTS}
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
         to:
           - global: true
     env:
       - MONIKER=${LEFT_FORWARD_MONIKER}
       - CHAIN_JSON=${CHAIN_JSON}
+      - CHAIN_ID=${CHAIN_ID}
       - MINIMUM_GAS_PRICES=0.05uthiol
-      - TERPD_P2P_SEEDS=${TERPD_P2P_SEEDS}
-      # - SNAPSHOT_URL=https://snapshots.nodejumper.io/terp/terp_latest.tar.lz4
-      - FASTSYNC_VERSION=v0
-      - STATESYNC_SNAPSHOT_INTERVAL=500
-      - STATESYNC_RPC_SERVERS=<https://statesync-a.terp.network:443,https://statesync-b.terp.network:443>
-      - ADDRBOOK_URL=${ADDRBOOK_URL}
       - PRUNING=default
+      - ADDRBOOK_URL=${ADDRBOOK_URL}
+      - TERPD_P2P_SEEDS=${TERPD_P2P_SEEDS}
       - TERPD_P2P_PEX=true
       - TERPD_P2P_PRIVATE_PEER_IDS=${TERPD_P2P_PRIVATE_PEER_IDS}
       - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${TERPD_P2P_UNCONDITIONAL_PEER_IDS}
       - TERPD_P2P_PERSISTENT_PEERS=${TERPD_P2P_PERSISTENT_PEERS}
-      - START_CMD=/bin/sh -c "curl -fsSL ${TLS_CONFIG_URL} | sh -s -- terpd start"
-  oline-forward-right-node:
+      - SNAPSHOT_URL=${SNAPSHOT_URL}
+      - SNAPSHOT_FORMAT=${SNAPSHOT_SAVE_FORMAT}
+      - FASTSYNC_VERSION=v0
+      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - STATESYNC_RPC_SERVERS=${STATESYNC_RPC_SERVERS}
+      - RPC_DOMAIN=${RPC_DOMAIN_FORWARD_L}
+      - RPC_PORT=${RPC_PORT_FORWARD_L}
+      - API_DOMAIN=${API_DOMAIN_FORWARD_L}
+      - API_PORT=${API_PORT_FORWARD_L}
+      - P2P_DOMAIN=${P2P_DOMAIN_FORWARD_L}
+      - P2P_PORT=${P2P_PORT_FORWARD_L}
+      - GRPC_PORT=${GRPC_PORT_FORWARD_L}
+      - GRPC_DOMAIN=${GRPC_DOMAIN_FORWARD_L}
+    command:
+      - sh
+    args:
+      - -c
+      - curl -fsSL ${ENTRYPOINT_URL} -o /tmp/wrapper.sh; bash /tmp/wrapper.sh
+  ${RF_SVC}:
     image: ${OMNIBUS_IMAGE}
     expose:
-      - port: 26656
-        as: 26656
+      - port: ${RPC_PORT_FORWARD_R}
+        as: ${RPC_PORT_FORWARD_R}
         to:
           - global: true
-      - port: 26657
-        as: 26657
+      - port: ${RPC_PORT_TACKLE_R}
+        as: ${RPC_PORT_TACKLE_R}
+        to:
+          - global: true
+      - port: ${API_PORT_TACKLE_R}
+        as: ${API_PORT_TACKLE_R}
+        to:
+          - global: true
+      - port: ${GRPC_PORT_TACKLE_R}
+        as: ${GRPC_PORT_TACKLE_R}
+        to:
+          - global: true
+      - port: 80
+        as: 80
+        to:
+          - global: true
+${LT_80_ACCEPTS}
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
         to:
           - global: true
     env:
       - MONIKER=${RIGHT_FORWARD_MONIKER}
       - CHAIN_JSON=${CHAIN_JSON}
+      - CHAIN_ID=${CHAIN_ID}
       - MINIMUM_GAS_PRICES=0.05uthiol
-      - FASTSYNC_VERSION=v0
-      - STATESYNC_SNAPSHOT_INTERVAL=500
-      - STATESYNC_RPC_SERVERS=<https://statesync-a.terp.network:443,https://statesync-b.terp.network:443>
+      - PRUNING=default
       - ADDRBOOK_URL=${ADDRBOOK_URL}
       - TERPD_P2P_SEEDS=${TERPD_P2P_SEEDS}
-      # - SNAPSHOT_URL=https://snapshots.nodejumper.io/terp/terp_latest.tar.lz4
-      - PRUNING=default
       - TERPD_P2P_PEX=true
       - TERPD_P2P_PRIVATE_PEER_IDS=${TERPD_P2P_PRIVATE_PEER_IDS}
       - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${TERPD_P2P_UNCONDITIONAL_PEER_IDS}
       - TERPD_P2P_PERSISTENT_PEERS=${TERPD_P2P_PERSISTENT_PEERS}
-      - START_CMD=/bin/sh -c "curl -fsSL ${TLS_CONFIG_URL} | sh -s -- terpd start"
+      - SNAPSHOT_URL=${SNAPSHOT_URL}
+      - SNAPSHOT_FORMAT=${SNAPSHOT_SAVE_FORMAT}
+      - FASTSYNC_VERSION=v0
+      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - STATESYNC_RPC_SERVERS=${STATESYNC_RPC_SERVERS}
+      - RPC_DOMAIN=${RPC_DOMAIN_FORWARD_R}
+      - RPC_PORT=${RPC_PORT_FORWARD_R}
+      - API_DOMAIN=${API_DOMAIN_FORWARD_R}
+      - API_PORT=${API_PORT_FORWARD_R}
+      - P2P_DOMAIN=${P2P_DOMAIN_FORWARD_R}
+      - P2P_PORT=${P2P_PORT_FORWARD_R}
+      - GRPC_PORT=${GRPC_PORT_FORWARD_R}
+      - GRPC_DOMAIN=${GRPC_DOMAIN_FORWARD_R}
 profiles:
   compute:
     oline-forward-left-node:

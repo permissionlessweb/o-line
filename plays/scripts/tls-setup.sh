@@ -48,10 +48,11 @@ for svc in $services; do
 done
 
 if [ "$at_least_one" = false ]; then
-    echo "Error: At least one service must have both DOMAIN and PORT set." >&2
-    echo "  Services: RPC, API, GRPC" >&2
-    echo "Example: RPC_DOMAIN=rpc.example.com RPC_PORT=443 $0" >&2
-    exit 1
+    log "No service domains configured — nginx setup skipped."
+    # When invoked as START_CMD (e.g. 'tls-setup.sh terpd start'), exec the
+    # remaining args directly so the node process still starts.
+    [ "$#" -gt 0 ] && exec "$@"
+    exit 0
 fi
 log "Configuration validated."
 [ -n "$RPC_DOMAIN"  ] && [ -n "$RPC_PORT"  ] && log "  RPC:  $RPC_DOMAIN:$RPC_PORT"
@@ -114,7 +115,10 @@ done
 # ── 4. validate nginx configuration (start deferred to entrypoint) ─────────────
 log "Testing nginx configuration..."
 nginx -t 2>&1 || die "nginx config test failed — check rendered configs above"
-log "nginx config OK — will be started by entrypoint after cosmos setup."
 if [ -n "$RPC_DOMAIN"  ]; then log "  RPC  -> https://$RPC_DOMAIN";  fi
 if [ -n "$API_DOMAIN"  ]; then log "  API  -> https://$API_DOMAIN";  fi
 if [ -n "$GRPC_DOMAIN" ]; then log "  GRPC -> https://$GRPC_DOMAIN"; fi
+# When invoked as START_CMD with a command (e.g. 'terpd start'), exec it now.
+# When called with no args (from oline-entrypoint.sh), exit 0 — the entrypoint
+# starts nginx and the cosmos node separately.
+[ "$#" -gt 0 ] && exec "$@"

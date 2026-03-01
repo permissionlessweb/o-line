@@ -125,29 +125,41 @@ pub async fn fetch_latest_snapshot_url(
     let resp = reqwest::get(state_url).await?.text().await?;
     let trimmed = resp.trim();
     let state: serde_json::Value = serde_json::from_str(trimmed)
-        .map_err(|e| format!("Failed to parse .current_state.json: {}", e))?;
-    let snapshot_name = state["snapshot_name"]
-        .as_str()
-        .ok_or("missing snapshot_name in .current_state.json")?;
-    let url = format!("{}{}", base_url, snapshot_name);
-    tracing::info!("  Latest snapshot: {}", url);
+        .map_err(|e| format!("Failed to parse snapshot state JSON: {}", e))?;
 
+    // Try `latest` field first (cosmos-omnibus format: {"chain_id":…, "latest":…, "snapshots":[…]})
+    // Fall back to legacy format: {"snapshot_name":…} with base_url prefix.
+    let url = if let Some(u) = state["latest"].as_str() {
+        u.to_string()
+    } else if let Some(name) = state["snapshot_name"].as_str() {
+        format!("{}{}", base_url, name)
+    } else {
+        return Err("missing 'latest' or 'snapshot_name' in snapshot state JSON".into());
+    };
+
+    tracing::info!("  Latest snapshot: {}", url);
     Ok(url)
 }
 
-/// Fetch the snapshot metadata JSON and return the `url` field.
+/// Fetch the snapshot metadata JSON and return the latest snapshot download URL.
+/// Tries the `latest` field (cosmos-omnibus format) then the `url` field (legacy).
 /// Falls back to `fallback_url` if the metadata is unavailable or malformed.
 pub async fn fetch_snapshot_url_from_metadata(metadata_url: &str, fallback_url: &str) -> String {
     tracing::info!("  Fetching snapshot metadata from {}", metadata_url);
     match reqwest::get(metadata_url).await {
         Ok(resp) => match resp.json::<serde_json::Value>().await {
             Ok(json) => {
-                if let Some(url) = json.get("url").and_then(|u| u.as_str()) {
+                // Try `latest` field first (cosmos-omnibus: {"chain_id":…, "latest":…})
+                // then fall back to legacy `url` field.
+                let url = json.get("latest")
+                    .or_else(|| json.get("url"))
+                    .and_then(|u| u.as_str());
+                if let Some(url) = url {
                     tracing::info!("  Snapshot URL from metadata: {}", url);
                     return url.to_string();
                 }
                 tracing::info!(
-                    "  Warning: snapshot metadata JSON has no 'url' field — using fallback"
+                    "  Warning: snapshot metadata JSON has no 'latest' or 'url' field — using fallback"
                 );
             }
             Err(e) => tracing::info!(

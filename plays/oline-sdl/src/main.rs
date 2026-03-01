@@ -820,6 +820,8 @@ impl OLineDeployer {
             &snapshot_peer,
             &left_tackle_peer,
             &right_tackle_peer,
+            &b_snapshot_url,
+            &a1_statesync_rpc,
         );
 
         tracing::info!("  Variables:");
@@ -837,10 +839,51 @@ impl OLineDeployer {
         let record = DeploymentRecord::from_state(&c_state, &self.password)?;
         self.deployment_store.save(&record).await.ok();
 
+        // ── Phase E: IBC Relayer (optional) ──
+        tracing::info!("\n── Phase 5: Deploy IBC Relayer ──");
+        let e_dseq = if prompt_continue(&mut lines, "Deploy e.relayer.yml?")? {
+            let e_vars = build_phase_rly_vars(&self.config);
+            tracing::info!("  Variables:");
+            for (k, v) in &e_vars {
+                tracing::info!("    {}={}", k, redact_if_secret(k, v));
+            }
+            let sdl_e = self.config.load_sdl("e.relayer.yml")?;
+            tracing::info!("  Deploying...");
+            let (e_state, e_endpoints) = self
+                .deploy_phase_with_selection(&sdl_e, &e_vars, "oline-phase-e", &mut lines)
+                .await?;
+            let e_dseq = e_state.dseq.unwrap_or(0);
+            tracing::info!("  Deployed! DSEQ: {}", e_dseq);
+
+            if !self.config.val("cloudflare.api_token").is_empty()
+                && !self.config.val("cloudflare.zone_id").is_empty()
+            {
+                if let Some(sdl) = &e_state.sdl_content {
+                    cloudflare_update_accept_domains(
+                        sdl,
+                        &e_endpoints,
+                        &self.config.val("cloudflare.api_token"),
+                        &self.config.val("cloudflare.zone_id"),
+                    )
+                    .await;
+                }
+            }
+
+            let record = DeploymentRecord::from_state(&e_state, &self.password)?;
+            self.deployment_store.save(&record).await.ok();
+            e_dseq
+        } else {
+            tracing::info!("  Skipped.");
+            0
+        };
+
         tracing::info!("\n=== All deployments complete! ===");
         tracing::info!("  Phase A1 DSEQ: {}", a_state.dseq.unwrap_or(0));
         tracing::info!("  Phase B  DSEQ: {}", b_state.dseq.unwrap_or(0));
         tracing::info!("  Phase C  DSEQ: {}", c_state.dseq.unwrap_or(0));
+        if e_dseq > 0 {
+            tracing::info!("  Phase E  DSEQ: {}", e_dseq);
+        }
 
         // ── Final public endpoint recap ──
         {
@@ -913,6 +956,8 @@ async fn cmd_generate_sdl() -> Result<(), Box<dyn Error>> {
     tracing::info!("    a2 - Phase A2: Backup Kickoff");
     tracing::info!("    b  - Phase B: Left & Right Tackles");
     tracing::info!("    c  - Phase C: Left & Right Forwards");
+    tracing::info!("    e  - Phase E: IBC Relayer");
+    tracing::info!("    f  - Phase F: Argus Indexer");
     tracing::info!("    all - All phases");
     let phase = read_input(&mut lines, "Phase", Some("all"))?;
     // Load config (optionally from saved)
@@ -1020,6 +1065,8 @@ async fn cmd_generate_sdl() -> Result<(), Box<dyn Error>> {
     let sdl_a = config.load_sdl("a.kickoff-special-teams.yml")?;
     let sdl_b = config.load_sdl("b.left-and-right-tackle.yml")?;
     let sdl_c = config.load_sdl("c.left-and-right-forwards.yml")?;
+    let sdl_e = config.load_sdl("e.relayer.yml")?;
+    let sdl_f = config.load_sdl("f.argus-indexer.yml")?;
 
     let render = |label: &str,
                   template: &str,
@@ -1047,11 +1094,21 @@ async fn cmd_generate_sdl() -> Result<(), Box<dyn Error>> {
                 &snapshot_peer,
                 &left_tackle_peer,
                 &right_tackle_peer,
+                &snapshot_url,
+                &statesync_rpc,
             );
             render("Phase C: Left & Right Forwards", &sdl_c, &vars)?;
         }
+        "e" => {
+            let vars = build_phase_rly_vars(&config);
+            render("Phase E: IBC Relayer", &sdl_e, &vars)?;
+        }
+        "f" => {
+            let vars = build_phase_f_vars(&config, &snapshot_url, &statesync_rpc);
+            render("Phase F: Argus Indexer", &sdl_f, &vars)?;
+        }
         "all" => {
-            let (a, b, c) = (
+            let (a, b, c, e, f) = (
                 build_phase_a_vars(&config).await,
                 build_phase_b_vars(&config, &snapshot_peer, &snapshot_url, &statesync_rpc),
                 build_phase_c_vars(
@@ -1060,14 +1117,20 @@ async fn cmd_generate_sdl() -> Result<(), Box<dyn Error>> {
                     &snapshot_peer,
                     &left_tackle_peer,
                     &right_tackle_peer,
+                    &snapshot_url,
+                    &statesync_rpc,
                 ),
+                build_phase_rly_vars(&config),
+                build_phase_f_vars(&config, &snapshot_url, &statesync_rpc),
             );
             render("Phase A: Kickoff Special Teams", &sdl_a, &a)?;
             render("Phase B: Left & Right Tackles", &sdl_b, &b)?;
             render("Phase C: Left & Right Forwards", &sdl_c, &c)?;
+            render("Phase E: IBC Relayer", &sdl_e, &e)?;
+            render("Phase F: Argus Indexer", &sdl_f, &f)?;
         }
         _ => {
-            tracing::info!("Unknown phase: {}. Choose a, a2, b, c, or all.", phase);
+            tracing::info!("Unknown phase: {}. Choose a, a2, b, c, e, f, or all.", phase);
         }
     }
 
