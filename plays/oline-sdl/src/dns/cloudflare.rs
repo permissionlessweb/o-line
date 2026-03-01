@@ -218,7 +218,7 @@ pub async fn cloudflare_upsert_a(
                     name,
                     content: DnsContent::A { content: ip },
                     ttl: Some(60),
-                    proxied: Some(false),
+                    proxied: Some(true),
                     priority: None,
                 },
             })

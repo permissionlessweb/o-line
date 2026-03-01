@@ -70,12 +70,8 @@ if [ -n "$TLS_CONFIG_URL" ]; then
   curl -fsSL "$TLS_CONFIG_URL" -o /tmp/tls-setup.sh
   sh /tmp/tls-setup.sh
   echo "=== TLS setup complete ==="
-  # Activate nginx TLS config NOW so port 443 is live during cosmos setup.
-  # tls-setup.sh installs nginx (which auto-starts with the default config);
-  # reloading here replaces the default config with our rendered TLS config.
-  # Without this, port 443 only becomes active after cosmos finishes (~15-30 min).
   nginx -s reload 2>/dev/null || nginx
-  echo "=== nginx started — port 443 active ==="
+  echo "=== nginx started ==="
 fi
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -611,9 +607,10 @@ if [ -n "$TLS_CONFIG_URL" ]; then
 fi
 
 echo "=== Launching: $START_CMD ==="
-echo "=== Node logs → /tmp/node.log ==="
+# Route node output to container PID 1 stdout (Akash log stream) so logs are
+# visible via `akash provider lease-logs` without consuming disk storage.
 if [ -n "$SNAPSHOT_PATH" ]; then
-  exec snapshot.sh "$START_CMD" >>/tmp/node.log 2>&1
+  exec snapshot.sh "$START_CMD" >>/proc/1/fd/1 2>&1
 else
-  exec $START_CMD >>/tmp/node.log 2>&1
+  exec $START_CMD >>/proc/1/fd/1 2>&1
 fi
