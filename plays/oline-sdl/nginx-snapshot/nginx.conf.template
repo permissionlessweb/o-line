@@ -1,0 +1,37 @@
+events {
+    worker_connections 1024;
+}
+
+http {
+    # Allow unlimited body size — snapshot archives can be many GB.
+    client_max_body_size 0;
+
+    server {
+        listen 80;
+        server_name ${SNAPSHOT_DOWNLOAD_DOMAIN};
+
+        # Proxy all S3/MinIO requests to the backend container.
+        location / {
+            proxy_pass         http://${MINIO_BACKEND};
+            proxy_http_version 1.1;
+
+            # Required for S3 virtual-hosted-style bucket routing.
+            proxy_set_header   Host              $http_host;
+            proxy_set_header   X-Real-IP         $remote_addr;
+            proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Proto $scheme;
+
+            # Keep-alive for chunked large file transfers.
+            proxy_set_header   Connection        "";
+
+            # Generous timeouts for large snapshot downloads/uploads.
+            proxy_connect_timeout 300s;
+            proxy_send_timeout    300s;
+            proxy_read_timeout    300s;
+
+            # Stream responses directly — don't buffer multi-GB files to disk.
+            proxy_buffering    off;
+            proxy_request_buffering off;
+        }
+    }
+}

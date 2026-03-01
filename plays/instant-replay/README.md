@@ -26,7 +26,7 @@ docker run -d --name minio-ipfs \
   -p 9000:9000 -p 9001:9001 -p 8081:8081 \
   -v minio_data:/data/minio \
   -v ipfs_data:/data/ipfs \
-  ghcr.io/permissionlessweb/minio-ipfs:v0.0.2
+  ghcr.io/permissionlessweb/minio-ipfs:v0.0.9
 ```
 
 Upload a file (authenticated):

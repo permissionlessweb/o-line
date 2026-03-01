@@ -9,8 +9,8 @@ path = "src/main.rs"
 
 [dependencies]
 aes-gcm = "0.10"
-# akash-deploy-rs = { version = "0.0.5", features = ["default-client", "sdl-templates"] }
-akash-deploy-rs = { path = "/Users/returniflost/akash-deploy-rs", features = ["default-client", "sdl-templates", "file-storage"] }
+akash-deploy-rs = { git = "https://github.com/permissionlessweb/akash-deploy-rs", branch = "feat/client-improvement", features = ["default-client", "sdl-templates", "file-storage"] }
+#akash-deploy-rs = { path = "/Users/returniflost/akash-deploy-rs", features = ["default-client", "sdl-templates", "file-storage"] }
 argon2 = "0.5"
 base64 = "0.22"
 cloudflare = { version = "0.14.0", default-features = false, features = ["rustls-tls"] }
@@ -27,3 +27,8 @@ serde_json = "1.0"
 sha2 = "0.10"
 tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "time"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing = "0.1"
+ssh-key = { version = "0.6", features = ["rsa", "ed25519"] }
+openssh-sftp-client  = { version = "0.15", features = ["openssh"] }
+openssh = { version = "0.11", features = ["native-mux"] }
+

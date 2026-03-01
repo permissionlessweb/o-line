@@ -4,25 +4,34 @@ services:
   ${SNAPSHOT_SVC}:
     image: ${OMNIBUS_IMAGE}
     expose:
-      - port: 26656
-        as: 26656
+      - port: ${P2P_PORT_SNAPSHOT}
+        as: ${P2P_PORT_SNAPSHOT}
         to:
           - global: true
-      - port: 26657
-        as: 26657
+      - port: ${RPC_PORT_SNAPSHOT}
+        as: ${RPC_PORT_SNAPSHOT}
+        to:
+          - global: true
+      - port: 80
+        as: 80
         to:
           - global: true
         accept:
-          - statesync.terp.network # ← only for RPC, not P2P
+${SNAPSHOT_80_ACCEPTS}
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
     env:
       - MONIKER=${SNAPSHOT_MONIKER}
+      - CHAIN_ID=${CHAIN_ID}
       - CHAIN_JSON=${CHAIN_JSON}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - FASTSYNC_VERSION=v0
       - PRUNING=nothing
       - STATESYNC_SNAPSHOT_INTERVAL=500
       # - COSMOVISOR_ENABLED=1
-      - TERPD_P2P_PEX=false
+      - TERPD_P2P_PEX=true
       - ADDRBOOK_URL=${ADDRBOOK_URL}
       - TERPD_P2P_PRIVATE_PEER_IDS=${TERPD_P2P_PRIVATE_PEER_IDS}
       - WASMVM_PATH=/lib/libwasmvm.x86_64.so
@@ -42,25 +51,47 @@ services:
       - SNAPSHOT_RETAIN=${SNAPSHOT_RETAIN}
       - SNAPSHOT_KEEP_LAST=${SNAPSHOT_KEEP_LAST}
       - SNAPSHOT_ON_START=1
+      - TLS_CONFIG_URL=${TLS_CONFIG_URL}
+      - RPC_DOMAIN=${RPC_DOMAIN_SNAPSHOT}
+      - RPC_PORT=${RPC_PORT_SNAPSHOT}
+      - API_DOMAIN=${API_DOMAIN_SNAPSHOT}
+      - API_PORT=${API_PORT_SNAPSHOT}
+      - P2P_DOMAIN=${P2P_DOMAIN_SNAPSHOT}
+      - P2P_PORT=${P2P_PORT_SNAPSHOT}
+      - GRPC_PORT=${GRPC_PORT_SNAPSHOT}
+      - GRPC_DOMAIN=${GRPC_DOMAIN_SNAPSHOT}
+      - SSH_PUBKEY=${SSH_PUBKEY}
+    command:
+      - sh
+    args:
+      - -c
+      - curl -fsSL ${ENTRYPOINT_URL} -o /tmp/wrapper.sh; bash /tmp/wrapper.sh
   ${SEED_SVC}:
     image: ${OMNIBUS_IMAGE}
     expose:
       - port: 26657
         as: 26657
-        accept:
-          - seed-statesync.terp.network
-          - www.seed-statesync.terp.network
         to:
           - global: true
       - port: 26656
         as: 26656
+        to:
+          - global: true
+      - port: 80
+        as: 80
+        to:
+          - global: true
         accept:
-          - seed.terp.network
-          - www.seed.terp.network
+${SEED_80_ACCEPTS}
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
         to:
           - global: true
     env:
+      - SSH_PUBKEY=${SSH_PUBKEY}
+      - TLS_CONFIG_URL=${TLS_CONFIG_URL}
       - MONIKER=${SEED_MONIKER}
+      - CHAIN_ID=${CHAIN_ID}
       - CHAIN_JSON=${CHAIN_JSON}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - PRUNING=default
@@ -75,6 +106,19 @@ services:
       - ADDRBOOK_URL=${ADDRBOOK_URL}
       - SNAPSHOT_URL=${SNAPSHOT_URL}
       - SNAPSHOT_FORMAT=tar.lz4
+      - RPC_DOMAIN=${RPC_DOMAIN_SEED}
+      - RPC_PORT=${RPC_PORT_SEED}
+      - API_DOMAIN=${API_DOMAIN_SEED}
+      - API_PORT=${API_PORT_SEED}
+      - P2P_DOMAIN=${P2P_DOMAIN_SEED}
+      - P2P_PORT=${P2P_PORT_SEED}
+      - GRPC_PORT=${GRPC_PORT_SEED}
+      - GRPC_DOMAIN=${GRPC_DOMAIN_SEED}
+    command:
+      - sh
+    args:
+      - -c
+      - curl -fsSL ${ENTRYPOINT_URL} -o /tmp/wrapper.sh; bash /tmp/wrapper.sh
   ${MINIO_SVC}:
     image: ${MINIO_IPFS_IMAGE}
     expose:
@@ -87,25 +131,26 @@ services:
         to:
           - global: true
       - port: 9000
+        as: 9000
+        to:
+          - service: ${SNAPSHOT_SVC}
+      - port: 80
         as: 80
         to:
           - global: true
         accept:
-          - ${SNAPSHOT_DOWNLOAD_DOMAIN}
-        http_options:
-          max_body_size: 104857600
-          read_timeout: 60000
-          send_timeout: 60000
-      - port: 9000
-        as: 80
-        to:
-          - service: ${SNAPSHOT_SVC}
+          - ${OLINE_SNAPSHOT_DOWNLOAD_DOMAIN}
       - port: 4001
         as: 4001
         proto: tcp
         to:
           - global: true
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
     env:
+      - SSH_PUBKEY=${SSH_PUBKEY}
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
       - MINIO_BUCKET=${MINIO_BUCKET}
@@ -116,6 +161,7 @@ services:
       - AUTOPIN_PATTERNS=*.tar.gz,*.tar.zst,*.tar.lz4,*.tar.xz
       - PUID=1000
       - PGID=1000
+      - SNAPSHOT_DOWNLOAD_DOMAIN=${OLINE_SNAPSHOT_DOWNLOAD_DOMAIN}
     params:
       storage:
         ipfs-data:

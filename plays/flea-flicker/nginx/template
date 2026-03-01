@@ -1,0 +1,18 @@
+worker_processes  auto;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
+
+    sendfile        on;
+    keepalive_timeout  65;
+
+    # Only files written to conf.d/ by tls-setup.sh are included here.
+    # Services are activated by writing their conf file, not by editing this file.
+    include /etc/nginx/conf.d/*.conf;
+}
+

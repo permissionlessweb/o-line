@@ -13,26 +13,21 @@ services:
         to:
           - global: true
     env:
-      - MONIKER=terp-node
-      # default chain cfg
+      - MONIKER=${LEFT_FORWARD_MONIKER}
       - CHAIN_JSON=${CHAIN_JSON}
       - MINIMUM_GAS_PRICES=0.05uthiol
-      # use our seed & snapshot
       - TERPD_P2P_SEEDS=${TERPD_P2P_SEEDS}
       # - SNAPSHOT_URL=https://snapshots.nodejumper.io/terp/terp_latest.tar.lz4
       - FASTSYNC_VERSION=v0
       - STATESYNC_SNAPSHOT_INTERVAL=500
       - STATESYNC_RPC_SERVERS=<https://statesync-a.terp.network:443,https://statesync-b.terp.network:443>
       - ADDRBOOK_URL=${ADDRBOOK_URL}
-      # default pruning
       - PRUNING=default
-      # enable peer exchange
       - TERPD_P2P_PEX=true
-      # left & right tackles are private & unconditional peers
       - TERPD_P2P_PRIVATE_PEER_IDS=${TERPD_P2P_PRIVATE_PEER_IDS}
       - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${TERPD_P2P_UNCONDITIONAL_PEER_IDS}
-      # our snapshot as persistent peer
       - TERPD_P2P_PERSISTENT_PEERS=${TERPD_P2P_PERSISTENT_PEERS}
+      - START_CMD=/bin/sh -c "curl -fsSL ${TLS_CONFIG_URL} | sh -s -- terpd start"
   oline-forward-right-node:
     image: ${OMNIBUS_IMAGE}
     expose:
@@ -45,26 +40,21 @@ services:
         to:
           - global: true
     env:
-      - MONIKER=terp-node
-      # default chain cfg
+      - MONIKER=${RIGHT_FORWARD_MONIKER}
       - CHAIN_JSON=${CHAIN_JSON}
       - MINIMUM_GAS_PRICES=0.05uthiol
-      # use our seed & snapshot
       - FASTSYNC_VERSION=v0
       - STATESYNC_SNAPSHOT_INTERVAL=500
       - STATESYNC_RPC_SERVERS=<https://statesync-a.terp.network:443,https://statesync-b.terp.network:443>
       - ADDRBOOK_URL=${ADDRBOOK_URL}
       - TERPD_P2P_SEEDS=${TERPD_P2P_SEEDS}
       # - SNAPSHOT_URL=https://snapshots.nodejumper.io/terp/terp_latest.tar.lz4
-      # default pruning
       - PRUNING=default
-      # enable peer exchange
       - TERPD_P2P_PEX=true
-      # left & right tackles are private & unconditional peers
       - TERPD_P2P_PRIVATE_PEER_IDS=${TERPD_P2P_PRIVATE_PEER_IDS}
       - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${TERPD_P2P_UNCONDITIONAL_PEER_IDS}
-      # our snapshot as persistent peer
       - TERPD_P2P_PERSISTENT_PEERS=${TERPD_P2P_PERSISTENT_PEERS}
+      - START_CMD=/bin/sh -c "curl -fsSL ${TLS_CONFIG_URL} | sh -s -- terpd start"
 profiles:
   compute:
     oline-forward-left-node:

@@ -22,8 +22,8 @@ RUN git clone --depth 1 --branch ${MC_VERSION} https://github.com/minio/mc.git /
 # ── Stage 2: fetch other binaries ────────────────────────────────────────────
 FROM alpine:${ALPINE_VERSION} AS fetch
 
-ARG S6_OVERLAY_VERSION=3.2.0.2
-ARG KUBO_VERSION=0.32.1
+ARG S6_OVERLAY_VERSION=3.2.2.0
+ARG KUBO_VERSION=0.39.0
 
 RUN apk add --no-cache curl tar xz
 
@@ -59,7 +59,12 @@ RUN apk add --no-cache \
     curl \
     jq \
     shadow \
-    libc6-compat
+    libc6-compat \
+    nginx \
+    certbot \
+    certbot-nginx \
+    gettext && \
+    rm -f /etc/nginx/http.d/default.conf
 
 # Copy binaries from build stages
 COPY --from=fetch /tmp/ipfs /usr/local/bin/ipfs
@@ -80,6 +85,7 @@ RUN chmod +x /etc/s6-overlay/scripts/* && \
     chmod +x /etc/s6-overlay/s6-rc.d/svc-ipfs/run && \
     chmod +x /etc/s6-overlay/s6-rc.d/svc-autopin/run && \
     chmod +x /etc/s6-overlay/s6-rc.d/svc-minio/run && \
+    chmod +x /etc/s6-overlay/s6-rc.d/svc-nginx/run && \
     chmod +x /usr/local/bin/ipfs-pin && \
     chmod +x /usr/local/bin/healthcheck
 
@@ -97,7 +103,7 @@ ENV MINIO_ENABLED="true" \
     PUID=1000 \
     PGID=1000
 
-EXPOSE 8081 9000 9001
+EXPOSE 80 8081 9000 9001
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD /usr/local/bin/healthcheck

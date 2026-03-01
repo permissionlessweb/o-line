@@ -1,0 +1,30 @@
+#   ${GRPC_DOMAIN}  - domain served for gRPC  (optional, omit block if empty)
+#   ${GRPC_PORT}    - internal gRPC port       (default: 9090)
+
+upstream grpc_backend {
+    server 127.0.0.1:${GRPC_PORT};
+}
+
+# ── gRPC — HTTP/2 cleartext (TLS terminated by Akash provider ingress) ─────
+# Akash's ingress terminates TLS; this nginx receives plain HTTP/2 (h2c).
+server {
+    listen 80 http2;
+    server_name ${GRPC_DOMAIN};
+
+    location / {
+        grpc_pass         grpc://grpc_backend;
+        grpc_set_header   Host       $host;
+        grpc_set_header   X-Real-IP  $remote_addr;
+
+        # Handle gRPC errors
+        error_page 502 = /error502grpc;
+    }
+
+    location = /error502grpc {
+        internal;
+        default_type application/grpc;
+        add_header grpc-status 14;
+        add_header content-length 0;
+        return 204;
+    }
+}

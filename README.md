@@ -11,20 +11,16 @@ Useful scripts & configurations for setting up public RPC nodes.
 
 ## TODO
 
-- cicd:
-  - e2e test minio+ipfs server
-  -
-- prepare encrypted env variables:
-  - generate / set minio-ipfs s3 keys,
-  - validator-peer id + ip
-
-- add bootstrapping of indexer & relayer services
+- cicd
+- retrieve env variables:
+  - validator-peer id + ip: (check local node)
+- add bootstrapping of indexer & relayer services (replaces second special teams nodes)
+- ~~configure tls/https for all nodes~~
 - load-balancing for frontward facing rpcs (need templatize lb-deploy.yaml)
 - PIR: private information retrieval indexer
 - tmkms step by step
 - special teams: vpn oline for oline
 - special taems: ephemeral deployments (rotate service provider & location)
-
 - agent skill for creating variabalized SDL's, and wiring into scripts
 
 ## Disclaimer

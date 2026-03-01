@@ -1,0 +1,101 @@
+#!/command/with-contenv bash
+set -e
+
+NGINX_ENABLED="${NGINX_ENABLED:-true}"
+
+if [ "$NGINX_ENABLED" != "true" ]; then
+    echo "[init-nginx] nginx disabled — skipping"
+    exit 0
+fi
+
+if [ -z "${SNAPSHOT_DOWNLOAD_DOMAIN}" ]; then
+    echo "[init-nginx] SNAPSHOT_DOWNLOAD_DOMAIN not set — skipping"
+    exit 0
+fi
+
+MINIO_PORT="${MINIO_PORT:-9000}"
+# Console: nginx listens on MINIO_CONSOLE_PORT (9001) over HTTPS and proxies to
+# MINIO_CONSOLE_INTERNAL_PORT (9002) where minio console actually runs.
+MINIO_CONSOLE_INTERNAL_PORT="${MINIO_CONSOLE_INTERNAL_PORT:-9002}"
+export MINIO_BACKEND="localhost:${MINIO_PORT}"
+export MINIO_CONSOLE_BACKEND="localhost:${MINIO_CONSOLE_INTERNAL_PORT}"
+export MINIO_CONSOLE_PORT="${MINIO_CONSOLE_PORT:-9001}"
+export TLS_CERT="${TLS_CERT:-/tmp/tls/cert.pem}"
+export TLS_KEY="${TLS_KEY:-/tmp/tls/privkey.pem}"
+
+echo "[init-nginx] Generating nginx config for ${SNAPSHOT_DOWNLOAD_DOMAIN} -> ${MINIO_BACKEND} (console HTTPS :${MINIO_CONSOLE_PORT} -> ${MINIO_CONSOLE_BACKEND})"
+
+# ── Bootstrap sshd so oline can deliver TLS certs via SFTP ────────────────────
+if [ -n "${SSH_PUBKEY}" ]; then
+    mkdir -p /root/.ssh
+    echo "${SSH_PUBKEY}" >> /root/.ssh/authorized_keys
+    chmod 600 /root/.ssh/authorized_keys
+
+    if ! command -v sshd >/dev/null 2>&1; then
+        echo "[init-nginx] Installing openssh-server..."
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssh-server >/dev/null 2>&1 \
+            || apk add --no-cache openssh >/dev/null 2>&1 || true
+    fi
+
+    SSHD_BIN=$(command -v sshd 2>/dev/null) || { echo "[init-nginx] ERROR: sshd not found"; exit 1; }
+    mkdir -p /run/sshd /var/run/sshd
+    ssh-keygen -A >/dev/null 2>&1 || true
+    printf '\nPermitRootLogin yes\nPubkeyAuthentication yes\n' >> /etc/ssh/sshd_config
+
+    # Pre-create the cert landing dir so SFTP create(true) finds the parent.
+    mkdir -p /tmp/tls
+
+    # Persist s6 container env for SSH sessions (SSH starts with minimal env).
+    export -p | grep -v 'SHLVL\|^export _=' > /tmp/minio-env.sh
+
+    "$SSHD_BIN" -D &
+    echo "[init-nginx] sshd started — waiting for TLS certs at ${TLS_CERT}"
+
+    elapsed=0
+    while [ ! -f "$TLS_CERT" ] || [ ! -f "$TLS_KEY" ]; do
+        sleep 5
+        elapsed=$((elapsed + 5))
+        echo "[init-nginx] [${elapsed}s/600s] waiting for certs..."
+        if [ "$elapsed" -ge 600 ]; then
+            echo "[init-nginx] WARNING: TLS certs not received after 600s — starting nginx without TLS"
+            break
+        fi
+    done
+fi
+
+# ── Render nginx config ────────────────────────────────────────────────────────
+if [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ]; then
+    echo "[init-nginx] Certs found — rendering TLS nginx config"
+    envsubst '${SNAPSHOT_DOWNLOAD_DOMAIN} ${MINIO_BACKEND} ${TLS_CERT} ${TLS_KEY} ${MINIO_CONSOLE_BACKEND} ${MINIO_CONSOLE_PORT}' \
+        < /etc/nginx/nginx.conf.template \
+        > /etc/nginx/nginx.conf
+else
+    echo "[init-nginx] No certs — rendering config without console TLS (port 443 still active)"
+    # Port 80 is not exposed in the Akash SDL; the port-443 download proxy does not
+    # need ssl (Akash ingress terminates TLS upstream). Console HTTPS is unavailable
+    # without certs, so it is omitted from this fallback.
+    cat > /etc/nginx/nginx.conf <<NGINX_EOF
+events { worker_connections 1024; }
+http {
+    client_max_body_size 0;
+    server {
+        listen 80;
+        server_name ${SNAPSHOT_DOWNLOAD_DOMAIN};
+        location / {
+            proxy_pass http://${MINIO_BACKEND};
+            proxy_set_header Host \$http_host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+            proxy_buffering off;
+            proxy_request_buffering off;
+            proxy_connect_timeout 300s;
+            proxy_send_timeout    300s;
+            proxy_read_timeout    300s;
+        }
+    }
+}
+NGINX_EOF
+fi
+
+echo "[init-nginx] Done"
