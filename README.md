@@ -17,6 +17,7 @@ Useful scripts & configurations for setting up public RPC nodes.
 - tmkms step by step
 - automated polling of health of deployment / topping up of escrow
 - HTTP/3 routing
+- gradual deployment rollback/updating existing deployment: we should be able to update/rollback existing node gradually in case of error in updated deployment, fallback to active nodes so endpoints have minimal/no downtime
 
 ## Snapshot Node
 

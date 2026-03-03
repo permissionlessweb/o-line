@@ -55,9 +55,9 @@ if [ "$at_least_one" = false ]; then
     exit 0
 fi
 log "Configuration validated."
-[ -n "$RPC_DOMAIN"  ] && [ -n "$RPC_PORT"  ] && log "  RPC:  $RPC_DOMAIN:$RPC_PORT"
-[ -n "$API_DOMAIN"  ] && [ -n "$API_PORT"  ] && log "  API:  $API_DOMAIN:$API_PORT"
-[ -n "$GRPC_DOMAIN" ] && [ -n "$GRPC_PORT" ] && log "  GRPC: $GRPC_DOMAIN:$GRPC_PORT"
+if [ -n "$RPC_DOMAIN"  ] && [ -n "$RPC_PORT"  ]; then log "  RPC:  $RPC_DOMAIN:$RPC_PORT";  fi
+if [ -n "$API_DOMAIN"  ] && [ -n "$API_PORT"  ]; then log "  API:  $API_DOMAIN:$API_PORT";   fi
+if [ -n "$GRPC_DOMAIN" ] && [ -n "$GRPC_PORT" ]; then log "  GRPC: $GRPC_DOMAIN:$GRPC_PORT"; fi
 
 # Verify TLS certs are present (SFTP'd by orchestrator before this script runs)
 [ -f "$TLS_CERT" ] || die "TLS cert not found at $TLS_CERT"
@@ -122,3 +122,4 @@ if [ -n "$GRPC_DOMAIN" ]; then log "  GRPC -> https://$GRPC_DOMAIN"; fi
 # When called with no args (from oline-entrypoint.sh), exit 0 — the entrypoint
 # starts nginx and the cosmos node separately.
 if [ "$#" -gt 0 ]; then exec "$@"; fi
+exit 0
