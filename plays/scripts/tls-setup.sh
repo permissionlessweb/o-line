@@ -51,7 +51,7 @@ if [ "$at_least_one" = false ]; then
     log "No service domains configured — nginx setup skipped."
     # When invoked as START_CMD (e.g. 'tls-setup.sh terpd start'), exec the
     # remaining args directly so the node process still starts.
-    [ "$#" -gt 0 ] && exec "$@"
+    if [ "$#" -gt 0 ]; then exec "$@"; fi
     exit 0
 fi
 log "Configuration validated."
@@ -121,4 +121,4 @@ if [ -n "$GRPC_DOMAIN" ]; then log "  GRPC -> https://$GRPC_DOMAIN"; fi
 # When invoked as START_CMD with a command (e.g. 'terpd start'), exec it now.
 # When called with no args (from oline-entrypoint.sh), exit 0 — the entrypoint
 # starts nginx and the cosmos node separately.
-[ "$#" -gt 0 ] && exec "$@"
+if [ "$#" -gt 0 ]; then exec "$@"; fi
