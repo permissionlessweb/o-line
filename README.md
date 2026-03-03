@@ -15,6 +15,7 @@ Useful scripts & configurations for setting up public RPC nodes.
 
 - use dedicated load-balancer to distribute rpc,api,grpc calls to all oline nodes
 - tmkms step by step
+- automated polling of health of deployment / topping up of escrow
 
 ## Snapshot Node
 
@@ -23,8 +24,11 @@ Useful scripts & configurations for setting up public RPC nodes.
 ## Snapshot server
 
 - serve addressbook
+- updaate metadata.json to include latest url for autoamated download (ensure we have both server & ipfs urls in latest.json )
+  - include server url (snpahost.terp.network && also ipfs gateway url)
 - wrap xml into html web app for displaying available snapshots
 - script for exporting entire state
+- reproducible script to build and store cosmovisor binary
 
 ## Relayer
 
