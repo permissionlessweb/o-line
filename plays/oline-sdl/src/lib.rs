@@ -35,6 +35,7 @@ pub const DEFAULT_ND: &[config::Fd] = define_fields![
     "network"/"rpc_endpoint"   => "OLINE_RPC_ENDPOINT",       "RPC endpoint",              "https://rpc.akashnet.net:443",                         false,
     "network"/"grpc_endpoint"  => "OLINE_GRPC_ENDPOINT",      "gRPC endpoint",             "https://grpc.akashnet.net:443",                        false,
     "validator"/"peer_id"      => "OLINE_VALIDATOR_PEER_ID",  "Private validator peer id", "",                                                     false,
+    "chain"/"persistent_peers" => "OLINE_PERSISTENT_PEERS",   "Default persistent peers (id@host:port,...)", "5bf887027701d3b8c4d95c0ba898cc8bf6d166ff@188.165.194.110:26676,a81dc3bf1bb1c3837b768eeb82659eecc971890b@terp-mainnet-peer.itrocket.net:13656", false,
 ];
 
 pub const NETWORKING_FD: &[config::Fd] = define_fields![

@@ -180,10 +180,10 @@ async fn test_tls_workflow_docker() {
         std::env::var("OMNIBUS_IMAGE").expect("OMNIBUS_IMAGE must be set to run this test");
     let chain_json = std::env::var("CHAIN_JSON").expect("CHAIN_JSON must be set to run this test");
     let entrypoint_url = std::env::var("ENTRYPOINT_URL").unwrap_or_else(|_| {
-        "https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/feat/tls/plays/scripts/oline-entrypoint.sh".into()
+        "https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/master/plays/scripts/oline-entrypoint.sh".into()
     });
     let tls_config_url = std::env::var("TLS_CONFIG_URL").unwrap_or_else(|_| {
-        "https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/feat/tls/plays/scripts/tls-setup.sh".into()
+        "https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/master/plays/scripts/tls-setup.sh".into()
     });
     // Optional: if set, the entrypoint auto-enables snapshot download and restores
     // state from this URL so the node starts from a real block height instead of 1.

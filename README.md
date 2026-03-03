@@ -16,6 +16,7 @@ Useful scripts & configurations for setting up public RPC nodes.
 - use dedicated load-balancer to distribute rpc,api,grpc calls to all oline nodes
 - tmkms step by step
 - automated polling of health of deployment / topping up of escrow
+- HTTP/3 routing
 
 ## Snapshot Node
 

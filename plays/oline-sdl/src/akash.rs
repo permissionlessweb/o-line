@@ -240,6 +240,10 @@ pub async fn build_phase_a_vars(config: &OLineConfig) -> HashMap<String, String>
         "TERPD_P2P_PRIVATE_PEER_IDS".into(),
         config.val("validator.peer_id").clone(),
     );
+    vars.insert(
+        "TERPD_P2P_PERSISTENT_PEERS".into(),
+        config.val("chain.persistent_peers").clone(),
+    );
 
     // generate ssh-key
     let ssh_key = gen_ssh_key();
