@@ -5,26 +5,22 @@ upstream grpc_backend {
     server 127.0.0.1:${GRPC_PORT};
 }
 
-# ── gRPC — HTTP/2 cleartext (TLS terminated by Akash provider ingress) ─────
-# Akash's ingress terminates TLS; this nginx receives plain HTTP/2 (h2c).
+# ── gRPC — HTTP proxy to cosmos gRPC server ─────────────────────────────────
+# Akash's ingress terminates TLS and forwards HTTP/1.1 to this container.
+# proxy_pass (not grpc_pass) is used because grpc_pass requires HTTP/2 from
+# the incoming connection, which Akash ingress does not provide.
 server {
-    listen 80 http2;
+    listen 80;
     server_name ${GRPC_DOMAIN};
 
     location / {
-        grpc_pass         grpc://grpc_backend;
-        grpc_set_header   Host       $host;
-        grpc_set_header   X-Real-IP  $remote_addr;
+        proxy_pass                      http://grpc_backend;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Host             $http_host;
+        proxy_set_header X-Forwarded-Proto $scheme;
 
-        # Handle gRPC errors
-        error_page 502 = /error502grpc;
-    }
-
-    location = /error502grpc {
-        internal;
-        default_type application/grpc;
-        add_header grpc-status 14;
-        add_header content-length 0;
-        return 204;
+        add_header Referrer-Policy       'origin';
+        add_header Access-Control-Max-Age 3600;
+        add_header Access-Control-Expose-Headers Content-Length;
     }
 }

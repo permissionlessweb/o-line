@@ -15,7 +15,7 @@ if [ -n "${GRPC_DOMAIN}" ]; then
    sed -i \
         -e "/^\[grpc\]$/,/^\[/ s/^enable *=.*/enable = \"true\"/" \
         -e "/^\[grpc-web\]$/,/^\[/ s/^enable *=.*/enable = \"true\"/" \
-        -e "/^\[grpc\]$/,/^\[/ s|^address *=.*|address = \"0.0.0.0:${GRPC_PORT}\"|" \
+        -e "/^\[grpc\]$/,/^\[/ s|^address *=.*|address = \"127.0.0.1:${GRPC_PORT}\"|" \
         "${PROJECT_ROOT}/config/app.toml"
 fi
 if [ -n "${RPC_DOMAIN}" ]; then

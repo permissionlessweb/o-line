@@ -18,6 +18,8 @@ pub static FIELD_DESCRIPTORS: LazyLock<Vec<config::Fd>> = LazyLock::new(|| {
         SPECIAL_TEAMS_FD,
         LR_TACKLES_FD,
         LR_FORWARD_FD,
+        RELAYER_FD,
+        ARGUS_FD,
     ]
     .iter()
     .flat_map(|group| group.iter().cloned())
@@ -79,3 +81,29 @@ pub const SPECIAL_TEAMS_FD: &[config::Fd] = define_fields![
 ];
 pub const LR_TACKLES_FD: &[config::Fd] = define_fields![];
 pub const LR_FORWARD_FD: &[config::Fd] = define_fields![];
+
+pub const RELAYER_FD: &[config::Fd] = define_fields![
+    "relayer"/"image"           => "RLY_IMAGE",           "Relayer Docker image",                          "ghcr.io/permissionlessweb/rly-docker:latest", false,
+    "relayer"/"key_name"        => "RLY_KEY_NAME",        "Relayer key name",                              "relayer_key",                                false,
+    "relayer"/"remote_chain_id" => "RLY_REMOTE_CHAIN_ID", "Remote chain ID (e.g. cosmoshub-4)",            "",                                           false,
+    "relayer"/"api_domain"      => "RLY_API_DOMAIN",      "Relayer REST API domain (Akash HTTPS ingress)", "",                                           false,
+    "relayer"/"key_terp"        => "RLY_KEY_TERP",        "Terp relayer key mnemonic",                     "",                                           true,
+    "relayer"/"key_remote"      => "RLY_KEY_REMOTE",      "Remote chain relayer key mnemonic",             "",                                           true,
+];
+
+pub const ARGUS_FD: &[config::Fd] = define_fields![
+    // ── Cosmos node ──────────────────────────────────────────────────────────
+    "argus"/"node_moniker"      => "ARGUS_NODE_MONIKER",     "Argus node moniker",                            "",                                            false,
+    "argus"/"node_seeds"        => "ARGUS_NODE_SEEDS",       "Argus node seed peers (id@host:port,...)",      "",                                            false,
+    "argus"/"node_peers"        => "ARGUS_NODE_PERSISTENT_PEERS", "Argus node persistent peers (id@host:port,...)", "",                                      false,
+    // ── Argus service ────────────────────────────────────────────────────────
+    "argus"/"image"             => "ARGUS_IMAGE",            "Argus Docker image",                            "ghcr.io/permissionlessweb/argus:latest",       false,
+    "argus"/"entrypoint_url"    => "ARGUS_ENTRYPOINT_URL",   "Argus entrypoint script URL",                   "",                                            false,
+    "argus"/"api_domain"        => "ARGUS_API_DOMAIN",       "Argus REST API domain (Akash HTTPS ingress)",   "",                                            false,
+    "argus"/"bech32_prefix"     => "ARGUS_BECH32_PREFIX",    "Chain bech32 prefix (e.g. terp)",               "terp",                                        false,
+    // ── PostgreSQL ───────────────────────────────────────────────────────────
+    "argus"/"db_user"           => "ARGUS_DB_USER",          "PostgreSQL username",                           "argus",                                       false,
+    "argus"/"db_password"       => "ARGUS_DB_PASSWORD",      "PostgreSQL password",                           "",                                            true,
+    "argus"/"db_data_name"      => "ARGUS_DB_DATA_NAME",     "PostgreSQL data database name",                 "argus_data",                                  false,
+    "argus"/"db_accounts_name"  => "ARGUS_DB_ACCOUNTS_NAME", "PostgreSQL accounts database name",             "argus_accounts",                              false,
+];

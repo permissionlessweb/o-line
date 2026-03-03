@@ -11,14 +11,34 @@ Useful scripts & configurations for setting up public RPC nodes.
 
 ## TODO
 
-- cicd
-- retrieve env variables:
-  - validator-peer id + ip: (check local node)
-- add bootstrapping of indexer & relayer services (replaces second special teams nodes)
-- ~~configure tls/https for all nodes~~
-- load-balancing for frontward facing rpcs (need templatize lb-deploy.yaml)
-- PIR: private information retrieval indexer
+## Oline
+
+- use dedicated load-balancer to distribute rpc,api,grpc calls to all oline nodes
 - tmkms step by step
+
+## Snapshot Node
+
+- script for exporting entire state
+
+## Snapshot server
+
+- serve addressbook
+- wrap xml into html web app for displaying available snapshots
+- script for exporting entire state
+
+## Relayer
+
+- setup ssh logic
+- use ssh to send mnemonic seeed and start service
+- script for using ssh to update config live
+
+## Indexer
+
+- ensure configuration is accurate
+
+## Extracurricular
+
+- PIR: private information retrieval indexer
 - special teams: vpn oline for oline
 - special taems: ephemeral deployments (rotate service provider & location)
 - agent skill for creating variabalized SDL's, and wiring into scripts

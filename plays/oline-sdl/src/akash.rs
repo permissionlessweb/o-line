@@ -48,10 +48,13 @@ pub fn build_accept_items(vars: &HashMap<String, String>, suffix: &str) -> Strin
 /// are used, not just env vars that happened to be set at launch.
 pub fn insert_sdl_defaults(vars: &mut HashMap<String, String>, config: &OLineConfig) {
     vars.insert("OMNIBUS_IMAGE".into(), config.val("default.omnibus_image"));
-    vars.insert("CHAIN_JSON".into(),    config.val("chain.chain_json"));
-    vars.insert("ADDRBOOK_URL".into(),  config.val("chain.addrbook_url"));
-    vars.insert("TLS_CONFIG_URL".into(), config.val("cloudflare.tls_config_url"));
-    vars.insert("CHAIN_ID".into(),      config.val("chain.chain_id"));
+    vars.insert("CHAIN_JSON".into(), config.val("chain.chain_json"));
+    vars.insert("ADDRBOOK_URL".into(), config.val("chain.addrbook_url"));
+    vars.insert(
+        "TLS_CONFIG_URL".into(),
+        config.val("cloudflare.tls_config_url"),
+    );
+    vars.insert("CHAIN_ID".into(), config.val("chain.chain_id"));
 }
 
 /// reusable helper for defining the domain url & ports for each oline step
@@ -84,11 +87,11 @@ pub fn insert_nodes_sdl_variables(
             .unwrap_or_else(|| config.val(&format!("special_teams.{}_{}", suffix_lower, field)));
         if v.is_empty() {
             match field {
-                "rpc_port"  => "26657",
-                "p2p_port"  => "26656",
-                "api_port"  => "1317",
+                "rpc_port" => "26657",
+                "p2p_port" => "26656",
+                "api_port" => "1317",
                 "grpc_port" => "9090",
-                _           => "",
+                _ => "",
             }
             .to_string()
         } else {
@@ -96,16 +99,22 @@ pub fn insert_nodes_sdl_variables(
         }
     };
 
-    vars.insert(p2p_port.clone(),    cfg(&p2p_port,    "p2p_port"));
-    vars.insert(p2p_domain.clone(),  cfg(&p2p_domain,  "p2p_domain"));
-    vars.insert(rpc_port.clone(),    cfg(&rpc_port,    "rpc_port"));
-    vars.insert(rpc_domain.clone(),  cfg(&rpc_domain,  "rpc_domain"));
-    vars.insert(api_port.clone(),    cfg(&api_port,    "api_port"));
-    vars.insert(api_domain.clone(),  cfg(&api_domain,  "api_domain"));
-    vars.insert(grpc_port.clone(),   cfg(&grpc_port,   "grpc_port"));
+    vars.insert(p2p_port.clone(), cfg(&p2p_port, "p2p_port"));
+    vars.insert(p2p_domain.clone(), cfg(&p2p_domain, "p2p_domain"));
+    vars.insert(rpc_port.clone(), cfg(&rpc_port, "rpc_port"));
+    vars.insert(rpc_domain.clone(), cfg(&rpc_domain, "rpc_domain"));
+    vars.insert(api_port.clone(), cfg(&api_port, "api_port"));
+    vars.insert(api_domain.clone(), cfg(&api_domain, "api_domain"));
+    vars.insert(grpc_port.clone(), cfg(&grpc_port, "grpc_port"));
     vars.insert(grpc_domain.clone(), cfg(&grpc_domain, "grpc_domain"));
-    vars.insert("ENTRYPOINT_URL".into(), config.val("cloudflare.entrypoint_url"));
-    vars.insert("SSH_PORT".into(), var("SSH_PORT").unwrap_or("22".to_string()));
+    vars.insert(
+        "ENTRYPOINT_URL".into(),
+        config.val("cloudflare.entrypoint_url"),
+    );
+    vars.insert(
+        "SSH_PORT".into(),
+        var("SSH_PORT").unwrap_or("22".to_string()),
+    );
 }
 
 /// Build a refresh vars map for a specific node by adding unsuffixed TLS service vars
@@ -115,7 +124,10 @@ pub fn insert_nodes_sdl_variables(
 /// `verify_certs_and_signal_start` patches `/tmp/oline-env.sh` using this map.
 /// Without this mapping the domain/port vars would never be refreshed — `a_vars` only
 /// stores the suffixed form, but `REFRESH_VARS` in crypto.rs looks for unsuffixed keys.
-pub fn node_refresh_vars(sdl_vars: &HashMap<String, String>, suffix: &str) -> HashMap<String, String> {
+pub fn node_refresh_vars(
+    sdl_vars: &HashMap<String, String>,
+    suffix: &str,
+) -> HashMap<String, String> {
     let mut out = sdl_vars.clone();
     for field in ["RPC", "API", "GRPC", "P2P"] {
         for role in ["DOMAIN", "PORT"] {
@@ -146,10 +158,13 @@ pub async fn insert_s3_vars(
     vars.insert("SNAPSHOT_SAVE_FORMAT".into(), c.val("snapshot.save_format"));
     vars.insert("SNAPSHOT_RETAIN".into(), c.val("snapshot.retain"));
     vars.insert("SNAPSHOT_KEEP_LAST".into(), c.val("snapshot.keep_last"));
-    // Metadata URL uses the public download domain so URLs in snapshot.json are externally accessible
+    // Metadata URL uses the public download domain so URLs in snapshot.json are externally accessible.
+    // cosmos-omnibus snapshot.sh appends "/snapshot.json" to this value when uploading the metadata
+    // file, and uses it as the base URL for individual snapshot download links. So we must NOT
+    // include "/snapshot.json" here — just the directory prefix.
     let dd = c.val("snapshot.download_domain");
     let meta_url = format!(
-        "https://{}/{}/snapshot.json",
+        "https://{}/{}",
         dd,
         c.val("snapshot.path").trim_matches('/')
     );
@@ -206,8 +221,11 @@ pub async fn build_phase_a_vars(config: &OLineConfig) -> HashMap<String, String>
     insert_sdl_defaults(&mut vars, config);
     // Build port-80 accept lists now that all domain vars are populated.
     // Akash HTTP ingress terminates TLS and forwards plain HTTP to container port 80.
-    vars.insert("SNAPSHOT_80_ACCEPTS".into(), build_accept_items(&vars, "SNAPSHOT"));
-    vars.insert("SEED_80_ACCEPTS".into(),     build_accept_items(&vars, "SEED"));
+    vars.insert(
+        "SNAPSHOT_80_ACCEPTS".into(),
+        build_accept_items(&vars, "SNAPSHOT"),
+    );
+    vars.insert("SEED_80_ACCEPTS".into(), build_accept_items(&vars, "SEED"));
     let s3_key = generate_credential(S3_KEY);
     let s3_secret = generate_credential(S3_SECRET);
     // S3 uploads go directly to minio via the internal Akash service network.
@@ -245,6 +263,9 @@ pub fn build_phase_b_vars(
 ) -> HashMap<String, String> {
     let mut vars = HashMap::new();
     insert_sdl_defaults(&mut vars, config);
+    vars.insert("LT_SVC".into(), "oline-b-left-tackle".into());
+    vars.insert("RT_SVC".into(), "oline-b-left-tackle".into());
+    vars.insert("SEED_SVC".into(), "oline-a-seed".into());
     vars.insert("LEFT_TACKLE_MONIKER".into(), generate_credential(12));
     vars.insert("RIGHT_TACKLE_MONIKER".into(), generate_credential(12));
     vars.insert(
@@ -276,12 +297,88 @@ pub fn build_phase_b_vars(
     vars
 }
 
+pub fn build_phase_rly_vars(config: &OLineConfig) -> HashMap<String, String> {
+    let mut vars = HashMap::new();
+    vars.insert("RLY_IMAGE".into(), config.val("relayer.image"));
+    vars.insert("KEY_NAME".into(), config.val("relayer.key_name"));
+    vars.insert(
+        "RLY_REMOTE_CHAIN_ID".into(),
+        config.val("relayer.remote_chain_id"),
+    );
+    vars.insert("RLY_KEY_TERP".into(), config.val("relayer.key_terp"));
+    vars.insert("RLY_KEY_REMOTE".into(), config.val("relayer.key_remote"));
+    // Build the port-80 accept list for the relayer REST API domain.
+    // The relayer exposes a single REST API — one domain entry is sufficient.
+    let api_domain = config.val("relayer.api_domain");
+    let rly_accepts = if api_domain.is_empty() {
+        String::new()
+    } else {
+        format!("          - {}", api_domain)
+    };
+    vars.insert("RLY_80_ACCEPTS".into(), rly_accepts);
+    vars
+}
+
+pub fn build_phase_f_vars(
+    config: &OLineConfig,
+    snapshot_url: &str,
+    statesync_rpc: &str,
+) -> HashMap<String, String> {
+    let mut vars = HashMap::new();
+    insert_sdl_defaults(&mut vars, config);
+    vars.insert("ARGUS_NODE_MONIKER".into(), generate_credential(12));
+    vars.insert("ARGUS_NODE_SEEDS".into(), config.val("argus.node_seeds"));
+    vars.insert(
+        "ARGUS_NODE_PERSISTENT_PEERS".into(),
+        config.val("argus.node_peers"),
+    );
+    if !statesync_rpc.is_empty() {
+        vars.insert("STATESYNC_RPC_SERVERS".into(), statesync_rpc.to_string());
+    }
+    vars.insert("SNAPSHOT_URL".into(), snapshot_url.to_string());
+    vars.insert(
+        "SNAPSHOT_SAVE_FORMAT".into(),
+        config.val("snapshot.save_format"),
+    );
+    // Argus service vars
+    vars.insert("ARGUS_IMAGE".into(), config.val("argus.image"));
+    vars.insert(
+        "ARGUS_ENTRYPOINT_URL".into(),
+        config.val("argus.entrypoint_url"),
+    );
+    vars.insert(
+        "ARGUS_BECH32_PREFIX".into(),
+        config.val("argus.bech32_prefix"),
+    );
+    vars.insert("ARGUS_DB_USER".into(), config.val("argus.db_user"));
+    vars.insert("ARGUS_DB_PASSWORD".into(), config.val("argus.db_password"));
+    vars.insert(
+        "ARGUS_DB_DATA_NAME".into(),
+        config.val("argus.db_data_name"),
+    );
+    vars.insert(
+        "ARGUS_DB_ACCOUNTS_NAME".into(),
+        config.val("argus.db_accounts_name"),
+    );
+    // Build the port-80 accept list for the Argus REST API domain.
+    let api_domain = config.val("argus.api_domain");
+    let argus_accepts = if api_domain.is_empty() {
+        String::new()
+    } else {
+        format!("          - {}", api_domain)
+    };
+    vars.insert("ARGUS_80_ACCEPTS".into(), argus_accepts);
+    vars
+}
+
 pub fn build_phase_c_vars(
     config: &OLineConfig,
     seed_peer: &str,
     snapshot_peer: &str,
     left_tackle_peer: &str,
     right_tackle_peer: &str,
+    snapshot_url: &str,
+    statesync_rpc: &str,
 ) -> HashMap<String, String> {
     let tackles_combined = format!("{},{}", left_tackle_peer, right_tackle_peer);
     let mut vars = HashMap::new();
@@ -298,5 +395,15 @@ pub fn build_phase_c_vars(
         "TERPD_P2P_PERSISTENT_PEERS".into(),
         format!("{} ", snapshot_peer),
     );
+    // Snapshot download — use our own snapshot server (same URL fetched for Phase B).
+    vars.insert("SNAPSHOT_URL".into(), snapshot_url.to_string());
+    vars.insert(
+        "SNAPSHOT_SAVE_FORMAT".into(),
+        config.val("snapshot.save_format"),
+    );
+    // Statesync — point at our Phase A snapshot + seed nodes.
+    if !statesync_rpc.is_empty() {
+        vars.insert("STATESYNC_RPC_SERVERS".into(), statesync_rpc.to_string());
+    }
     vars
 }

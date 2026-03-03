@@ -1,0 +1,50 @@
+---
+version: "2.0"
+services:
+  oline-rly:
+    image: ${RLY_IMAGE}
+    command:
+      - /bin/bash
+    args: 
+      - -c
+      - curl -fsSL ${RELAYER_ENTRYPOINT} -o /tmp/wrapper.sh; bash /tmp/wrapper.sh
+    expose:
+    # ssh port for sftp & live-reloads
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
+      - port: 5183
+        as: 80
+        to:
+          - global: true
+        accept:
+          - relay.terp.network
+    env:
+      - KEY_NAME=${KEY_NAME}
+profiles:
+  compute:
+    oline-rly:
+      resources:
+        cpu:
+          units: 2
+        memory:
+          size: 16Gi
+        storage:
+          - size: 25Gi
+  placement:
+    dcloud:
+      pricing:
+        oline-rly:
+          denom: uakt
+          amount: 500
+      signedBy:
+        anyOf:
+          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
+      attributes:
+        host: akash
+deployment:
+  oline-rly:
+    dcloud:
+      profile: oline-rly
+      count: 1

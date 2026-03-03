@@ -373,11 +373,24 @@ impl OLineDeployer {
         // moment, so their forwarded_ports are absent from the initial state.endpoints.
         // Kubernetes NodePort assignments are created at Service creation time (lease acceptance),
         // before pods start — querying the provider REST API directly gives the complete list.
+        //
+        // IMPORTANT: also refresh if a service has NodePort endpoints but no HTTP ingress
+        // endpoint (internal_port=0, port=443/80). The DNS CNAME logic requires the ingress
+        // endpoint to find the provider hostname; without it the CNAME falls back to an A-record
+        // lookup that may fail when the accept domains don't have DNS records yet.
         {
+            let needs_ingress = |svc: &str| -> bool {
+                !a_endpoints.iter().any(|e| {
+                    e.service == svc && e.internal_port == 0 && (e.port == 443 || e.port == 80)
+                })
+            };
             let missing: Vec<&str> = ["oline-a-snapshot", "oline-a-seed", "oline-a-minio-ipfs"]
                 .iter()
                 .copied()
-                .filter(|svc| !a_endpoints.iter().any(|e| e.service.as_str() == *svc))
+                .filter(|svc| {
+                    !a_endpoints.iter().any(|e| e.service.as_str() == *svc)
+                        || needs_ingress(svc)
+                })
                 .collect();
 
             if !missing.is_empty() {
@@ -820,6 +833,8 @@ impl OLineDeployer {
             &snapshot_peer,
             &left_tackle_peer,
             &right_tackle_peer,
+            &b_snapshot_url,
+            &a1_statesync_rpc,
         );
 
         tracing::info!("  Variables:");
@@ -837,10 +852,51 @@ impl OLineDeployer {
         let record = DeploymentRecord::from_state(&c_state, &self.password)?;
         self.deployment_store.save(&record).await.ok();
 
+        // ── Phase E: IBC Relayer (optional) ──
+        tracing::info!("\n── Phase 5: Deploy IBC Relayer ──");
+        let e_dseq = if prompt_continue(&mut lines, "Deploy e.relayer.yml?")? {
+            let e_vars = build_phase_rly_vars(&self.config);
+            tracing::info!("  Variables:");
+            for (k, v) in &e_vars {
+                tracing::info!("    {}={}", k, redact_if_secret(k, v));
+            }
+            let sdl_e = self.config.load_sdl("e.relayer.yml")?;
+            tracing::info!("  Deploying...");
+            let (e_state, e_endpoints) = self
+                .deploy_phase_with_selection(&sdl_e, &e_vars, "oline-phase-e", &mut lines)
+                .await?;
+            let e_dseq = e_state.dseq.unwrap_or(0);
+            tracing::info!("  Deployed! DSEQ: {}", e_dseq);
+
+            if !self.config.val("cloudflare.api_token").is_empty()
+                && !self.config.val("cloudflare.zone_id").is_empty()
+            {
+                if let Some(sdl) = &e_state.sdl_content {
+                    cloudflare_update_accept_domains(
+                        sdl,
+                        &e_endpoints,
+                        &self.config.val("cloudflare.api_token"),
+                        &self.config.val("cloudflare.zone_id"),
+                    )
+                    .await;
+                }
+            }
+
+            let record = DeploymentRecord::from_state(&e_state, &self.password)?;
+            self.deployment_store.save(&record).await.ok();
+            e_dseq
+        } else {
+            tracing::info!("  Skipped.");
+            0
+        };
+
         tracing::info!("\n=== All deployments complete! ===");
         tracing::info!("  Phase A1 DSEQ: {}", a_state.dseq.unwrap_or(0));
         tracing::info!("  Phase B  DSEQ: {}", b_state.dseq.unwrap_or(0));
         tracing::info!("  Phase C  DSEQ: {}", c_state.dseq.unwrap_or(0));
+        if e_dseq > 0 {
+            tracing::info!("  Phase E  DSEQ: {}", e_dseq);
+        }
 
         // ── Final public endpoint recap ──
         {
@@ -913,6 +969,8 @@ async fn cmd_generate_sdl() -> Result<(), Box<dyn Error>> {
     tracing::info!("    a2 - Phase A2: Backup Kickoff");
     tracing::info!("    b  - Phase B: Left & Right Tackles");
     tracing::info!("    c  - Phase C: Left & Right Forwards");
+    tracing::info!("    e  - Phase E: IBC Relayer");
+    tracing::info!("    f  - Phase F: Argus Indexer");
     tracing::info!("    all - All phases");
     let phase = read_input(&mut lines, "Phase", Some("all"))?;
     // Load config (optionally from saved)
@@ -1020,6 +1078,8 @@ async fn cmd_generate_sdl() -> Result<(), Box<dyn Error>> {
     let sdl_a = config.load_sdl("a.kickoff-special-teams.yml")?;
     let sdl_b = config.load_sdl("b.left-and-right-tackle.yml")?;
     let sdl_c = config.load_sdl("c.left-and-right-forwards.yml")?;
+    let sdl_e = config.load_sdl("e.relayer.yml")?;
+    let sdl_f = config.load_sdl("f.argus-indexer.yml")?;
 
     let render = |label: &str,
                   template: &str,
@@ -1047,11 +1107,21 @@ async fn cmd_generate_sdl() -> Result<(), Box<dyn Error>> {
                 &snapshot_peer,
                 &left_tackle_peer,
                 &right_tackle_peer,
+                &snapshot_url,
+                &statesync_rpc,
             );
             render("Phase C: Left & Right Forwards", &sdl_c, &vars)?;
         }
+        "e" => {
+            let vars = build_phase_rly_vars(&config);
+            render("Phase E: IBC Relayer", &sdl_e, &vars)?;
+        }
+        "f" => {
+            let vars = build_phase_f_vars(&config, &snapshot_url, &statesync_rpc);
+            render("Phase F: Argus Indexer", &sdl_f, &vars)?;
+        }
         "all" => {
-            let (a, b, c) = (
+            let (a, b, c, e, f) = (
                 build_phase_a_vars(&config).await,
                 build_phase_b_vars(&config, &snapshot_peer, &snapshot_url, &statesync_rpc),
                 build_phase_c_vars(
@@ -1060,14 +1130,20 @@ async fn cmd_generate_sdl() -> Result<(), Box<dyn Error>> {
                     &snapshot_peer,
                     &left_tackle_peer,
                     &right_tackle_peer,
+                    &snapshot_url,
+                    &statesync_rpc,
                 ),
+                build_phase_rly_vars(&config),
+                build_phase_f_vars(&config, &snapshot_url, &statesync_rpc),
             );
             render("Phase A: Kickoff Special Teams", &sdl_a, &a)?;
             render("Phase B: Left & Right Tackles", &sdl_b, &b)?;
             render("Phase C: Left & Right Forwards", &sdl_c, &c)?;
+            render("Phase E: IBC Relayer", &sdl_e, &e)?;
+            render("Phase F: Argus Indexer", &sdl_f, &f)?;
         }
         _ => {
-            tracing::info!("Unknown phase: {}. Choose a, a2, b, c, or all.", phase);
+            tracing::info!("Unknown phase: {}. Choose a, a2, b, c, e, f, or all.", phase);
         }
     }
 
@@ -1237,6 +1313,103 @@ pub fn cmd_encrypt() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+// ── Subcommand: dns-update ──
+// Manually upsert one or more Cloudflare DNS records — useful when the automatic
+// DNS update after deploy failed silently (e.g. the ingress endpoint wasn't ready
+// in time) or when a record needs to be manually corrected.
+async fn cmd_dns_update() -> Result<(), Box<dyn Error>> {
+    tracing::info!("=== DNS Update (Cloudflare) ===\n");
+
+    let stdin = io::stdin();
+    let mut lines = stdin.lock().lines();
+
+    // Load CF credentials from saved config if available, otherwise prompt.
+    let (cf_token, zone_id) = if has_saved_config() {
+        let pw = rpassword::prompt_password("Enter config password (or Enter to prompt manually): ")?;
+        if !pw.is_empty() {
+            if let Some(cfg) = load_config(&pw) {
+                let t = cfg.val("cloudflare.api_token");
+                let z = cfg.val("cloudflare.zone_id");
+                if !t.is_empty() && !z.is_empty() {
+                    (t, z)
+                } else {
+                    (
+                        read_input(&mut lines, "Cloudflare API token", None)?,
+                        read_input(&mut lines, "Cloudflare zone ID", None)?,
+                    )
+                }
+            } else {
+                (
+                    read_input(&mut lines, "Cloudflare API token", None)?,
+                    read_input(&mut lines, "Cloudflare zone ID", None)?,
+                )
+            }
+        } else {
+            (
+                read_input(&mut lines, "Cloudflare API token", None)?,
+                read_input(&mut lines, "Cloudflare zone ID", None)?,
+            )
+        }
+    } else {
+        (
+            read_input(&mut lines, "Cloudflare API token", None)?,
+            read_input(&mut lines, "Cloudflare zone ID", None)?,
+        )
+    };
+
+    if cf_token.is_empty() || zone_id.is_empty() {
+        return Err("Cloudflare token and zone ID are required.".into());
+    }
+
+    loop {
+        let domain = read_input(&mut lines, "Domain to update (or 'q' to quit)", None)?;
+        if domain == "q" || domain.is_empty() {
+            break;
+        }
+
+        tracing::info!("  Record type for {}:", domain);
+        tracing::info!("    1. CNAME (HTTP ingress — provider hostname)");
+        tracing::info!("    2. A (NodePort — provider IPv4)");
+        let rtype = read_input(&mut lines, "Type", Some("1"))?;
+
+        match rtype.as_str() {
+            "1" => {
+                let target = read_input(
+                    &mut lines,
+                    "CNAME target (provider ingress hostname, e.g. abc123.ingress.provider.com)",
+                    None,
+                )?;
+                if target.is_empty() {
+                    tracing::info!("  Skipped — no target provided.");
+                    continue;
+                }
+                tracing::info!("  Upserting CNAME {} → {}", domain, target);
+                match cloudflare_upsert_cname(&cf_token, &zone_id, &domain, &target).await {
+                    Ok(_) => tracing::info!("  Done."),
+                    Err(e) => tracing::info!("  Error: {}", e),
+                }
+            }
+            "2" => {
+                let ip_str = read_input(&mut lines, "IPv4 address", None)?;
+                let ip: std::net::Ipv4Addr = ip_str
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("Invalid IPv4: {}", ip_str))?;
+                tracing::info!("  Upserting A {} → {}", domain, ip);
+                match cloudflare_upsert_a(&cf_token, &zone_id, &domain, ip).await {
+                    Ok(_) => tracing::info!("  Done."),
+                    Err(e) => tracing::info!("  Error: {}", e),
+                }
+            }
+            _ => {
+                tracing::info!("  Unknown type — skipped.");
+            }
+        }
+    }
+
+    Ok(())
+}
+
 // ── Main menu ──
 async fn cmd_main_menu() -> Result<(), Box<dyn Error>> {
     let store = FileDeploymentStore::new_default().await?;
@@ -1251,6 +1424,7 @@ async fn cmd_main_menu() -> Result<(), Box<dyn Error>> {
     }
     tracing::info!("  4. Test S3 Connection");
     tracing::info!("  5. Encrypt Mnemonic");
+    tracing::info!("  6. DNS Update (manually upsert Cloudflare record)");
 
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines();
@@ -1264,6 +1438,7 @@ async fn cmd_main_menu() -> Result<(), Box<dyn Error>> {
         "3" if has_deployments => cmd_manage_deployments().await,
         "4" => cmd_test_s3().await,
         "5" => cmd_encrypt(),
+        "6" => cmd_dns_update().await,
         _ => {
             tracing::info!("Invalid option.");
             Ok(())
@@ -1300,6 +1475,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Some("sdl") | Some("generate-sdl") => cmd_generate_sdl().await,
         Some("manage") => cmd_manage_deployments().await,
         Some("test-s3") => cmd_test_s3().await,
+        Some("dns") | Some("dns-update") => cmd_dns_update().await,
         None => cmd_main_menu().await,
         Some(other) => {
             tracing::info!("Unknown command: {}", other);
@@ -1310,6 +1486,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             tracing::info!("  oline sdl             Generate SDL templates (render & preview)");
             tracing::info!("  oline manage          Manage active deployments");
             tracing::info!("  oline test-s3         Test S3 bucket connectivity");
+            tracing::info!("  oline dns             Manually upsert a Cloudflare DNS record");
             std::process::exit(1);
         }
     }
