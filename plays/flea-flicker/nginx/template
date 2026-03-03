@@ -11,6 +11,17 @@ http {
     sendfile        on;
     keepalive_timeout  65;
 
+    # Catch-all default server — must come FIRST so it wins when nginx picks the
+    # default_server for requests whose Host header doesn't match any service
+    # (e.g. direct access to the Akash provider ingress hostname).
+    # Returns 444 (connection closed, no response) to avoid silently serving
+    # one service's data when the Host header is wrong or missing.
+    server {
+        listen 80 default_server;
+        server_name _;
+        return 444;
+    }
+
     # Only files written to conf.d/ by tls-setup.sh are included here.
     # Services are activated by writing their conf file, not by editing this file.
     include /etc/nginx/conf.d/*.conf;

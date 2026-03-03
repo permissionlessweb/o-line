@@ -18,7 +18,7 @@ use crate::akash::endpoint_hostname;
 /// Update (or create) a CNAME record via the Cloudflare API crate.
 /// Lists ALL record types for `name` so stale records of a different type are
 /// replaced rather than leaving a conflicting record that blocks creation.
-async fn cloudflare_upsert_cname(
+pub async fn cloudflare_upsert_cname(
     cf_token: &str,
     zone_id: &str,
     name: &str,
@@ -312,11 +312,13 @@ pub async fn cloudflare_update_accept_domains(
                 // HTTP/HTTPS ingress — CNAME each accept domain to the provider hostname.
                 tracing::info!("  [dns] {} — ingress hostname: {}", svc_name, ingress);
                 for domain in &accept_domains {
-                    tracing::info!("  Cloudflare CNAME: {} → {}", domain, ingress);
-                    if let Err(e) =
-                        cloudflare_upsert_cname(cf_token, zone_id, domain, ingress).await
-                    {
-                        tracing::info!("  Warning: Cloudflare CNAME failed for {}: {}", domain, e);
+                    match cloudflare_upsert_cname(cf_token, zone_id, domain, ingress).await {
+                        Ok(_) => {
+                            tracing::info!("  Cf CNAME configured: {} → {}", domain, ingress)
+                        }
+                        Err(e) => {
+                            tracing::info!("  Warning: Cf CNAME failed for {}: {}", domain, e)
+                        }
                     }
                 }
             }
@@ -329,10 +331,13 @@ pub async fn cloudflare_update_accept_domains(
                     svc_name
                 );
 
-                // Any endpoint for this service gives us the provider hostname.
+                // Find the provider hostname from a NodePort endpoint — must NOT be one of the
+                // accept domains (those aren't resolved yet and would cause resolve_to_ipv4 to fail).
                 let provider_host = endpoints
                     .iter()
-                    .find(|e| e.service == svc_name)
+                    .find(|e| {
+                        e.service == svc_name && !accept_set.contains(endpoint_hostname(&e.uri))
+                    })
                     .map(|e| endpoint_hostname(&e.uri).to_string());
 
                 let host = match provider_host {
@@ -373,13 +378,15 @@ pub async fn cloudflare_update_accept_domains(
                 }
 
                 for domain in &accept_domains {
-                    tracing::info!("  Cloudflare A: {} → {}", domain, ip);
-                    if let Err(e) = cloudflare_upsert_a(cf_token, zone_id, domain, ip).await {
-                        tracing::info!(
+                    match cloudflare_upsert_a(cf_token, zone_id, domain, ip).await {
+                        Ok(_) => {
+                            tracing::info!("  Cloudflare A configured: {} → {}", domain, ip)
+                        }
+                        Err(e) => tracing::info!(
                             "  Warning: Cloudflare A record failed for {}: {}",
                             domain,
                             e
-                        );
+                        ),
                     }
                 }
             }

@@ -373,11 +373,24 @@ impl OLineDeployer {
         // moment, so their forwarded_ports are absent from the initial state.endpoints.
         // Kubernetes NodePort assignments are created at Service creation time (lease acceptance),
         // before pods start — querying the provider REST API directly gives the complete list.
+        //
+        // IMPORTANT: also refresh if a service has NodePort endpoints but no HTTP ingress
+        // endpoint (internal_port=0, port=443/80). The DNS CNAME logic requires the ingress
+        // endpoint to find the provider hostname; without it the CNAME falls back to an A-record
+        // lookup that may fail when the accept domains don't have DNS records yet.
         {
+            let needs_ingress = |svc: &str| -> bool {
+                !a_endpoints.iter().any(|e| {
+                    e.service == svc && e.internal_port == 0 && (e.port == 443 || e.port == 80)
+                })
+            };
             let missing: Vec<&str> = ["oline-a-snapshot", "oline-a-seed", "oline-a-minio-ipfs"]
                 .iter()
                 .copied()
-                .filter(|svc| !a_endpoints.iter().any(|e| e.service.as_str() == *svc))
+                .filter(|svc| {
+                    !a_endpoints.iter().any(|e| e.service.as_str() == *svc)
+                        || needs_ingress(svc)
+                })
                 .collect();
 
             if !missing.is_empty() {
@@ -1300,6 +1313,103 @@ pub fn cmd_encrypt() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+// ── Subcommand: dns-update ──
+// Manually upsert one or more Cloudflare DNS records — useful when the automatic
+// DNS update after deploy failed silently (e.g. the ingress endpoint wasn't ready
+// in time) or when a record needs to be manually corrected.
+async fn cmd_dns_update() -> Result<(), Box<dyn Error>> {
+    tracing::info!("=== DNS Update (Cloudflare) ===\n");
+
+    let stdin = io::stdin();
+    let mut lines = stdin.lock().lines();
+
+    // Load CF credentials from saved config if available, otherwise prompt.
+    let (cf_token, zone_id) = if has_saved_config() {
+        let pw = rpassword::prompt_password("Enter config password (or Enter to prompt manually): ")?;
+        if !pw.is_empty() {
+            if let Some(cfg) = load_config(&pw) {
+                let t = cfg.val("cloudflare.api_token");
+                let z = cfg.val("cloudflare.zone_id");
+                if !t.is_empty() && !z.is_empty() {
+                    (t, z)
+                } else {
+                    (
+                        read_input(&mut lines, "Cloudflare API token", None)?,
+                        read_input(&mut lines, "Cloudflare zone ID", None)?,
+                    )
+                }
+            } else {
+                (
+                    read_input(&mut lines, "Cloudflare API token", None)?,
+                    read_input(&mut lines, "Cloudflare zone ID", None)?,
+                )
+            }
+        } else {
+            (
+                read_input(&mut lines, "Cloudflare API token", None)?,
+                read_input(&mut lines, "Cloudflare zone ID", None)?,
+            )
+        }
+    } else {
+        (
+            read_input(&mut lines, "Cloudflare API token", None)?,
+            read_input(&mut lines, "Cloudflare zone ID", None)?,
+        )
+    };
+
+    if cf_token.is_empty() || zone_id.is_empty() {
+        return Err("Cloudflare token and zone ID are required.".into());
+    }
+
+    loop {
+        let domain = read_input(&mut lines, "Domain to update (or 'q' to quit)", None)?;
+        if domain == "q" || domain.is_empty() {
+            break;
+        }
+
+        tracing::info!("  Record type for {}:", domain);
+        tracing::info!("    1. CNAME (HTTP ingress — provider hostname)");
+        tracing::info!("    2. A (NodePort — provider IPv4)");
+        let rtype = read_input(&mut lines, "Type", Some("1"))?;
+
+        match rtype.as_str() {
+            "1" => {
+                let target = read_input(
+                    &mut lines,
+                    "CNAME target (provider ingress hostname, e.g. abc123.ingress.provider.com)",
+                    None,
+                )?;
+                if target.is_empty() {
+                    tracing::info!("  Skipped — no target provided.");
+                    continue;
+                }
+                tracing::info!("  Upserting CNAME {} → {}", domain, target);
+                match cloudflare_upsert_cname(&cf_token, &zone_id, &domain, &target).await {
+                    Ok(_) => tracing::info!("  Done."),
+                    Err(e) => tracing::info!("  Error: {}", e),
+                }
+            }
+            "2" => {
+                let ip_str = read_input(&mut lines, "IPv4 address", None)?;
+                let ip: std::net::Ipv4Addr = ip_str
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("Invalid IPv4: {}", ip_str))?;
+                tracing::info!("  Upserting A {} → {}", domain, ip);
+                match cloudflare_upsert_a(&cf_token, &zone_id, &domain, ip).await {
+                    Ok(_) => tracing::info!("  Done."),
+                    Err(e) => tracing::info!("  Error: {}", e),
+                }
+            }
+            _ => {
+                tracing::info!("  Unknown type — skipped.");
+            }
+        }
+    }
+
+    Ok(())
+}
+
 // ── Main menu ──
 async fn cmd_main_menu() -> Result<(), Box<dyn Error>> {
     let store = FileDeploymentStore::new_default().await?;
@@ -1314,6 +1424,7 @@ async fn cmd_main_menu() -> Result<(), Box<dyn Error>> {
     }
     tracing::info!("  4. Test S3 Connection");
     tracing::info!("  5. Encrypt Mnemonic");
+    tracing::info!("  6. DNS Update (manually upsert Cloudflare record)");
 
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines();
@@ -1327,6 +1438,7 @@ async fn cmd_main_menu() -> Result<(), Box<dyn Error>> {
         "3" if has_deployments => cmd_manage_deployments().await,
         "4" => cmd_test_s3().await,
         "5" => cmd_encrypt(),
+        "6" => cmd_dns_update().await,
         _ => {
             tracing::info!("Invalid option.");
             Ok(())
@@ -1363,6 +1475,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Some("sdl") | Some("generate-sdl") => cmd_generate_sdl().await,
         Some("manage") => cmd_manage_deployments().await,
         Some("test-s3") => cmd_test_s3().await,
+        Some("dns") | Some("dns-update") => cmd_dns_update().await,
         None => cmd_main_menu().await,
         Some(other) => {
             tracing::info!("Unknown command: {}", other);
@@ -1373,6 +1486,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             tracing::info!("  oline sdl             Generate SDL templates (render & preview)");
             tracing::info!("  oline manage          Manage active deployments");
             tracing::info!("  oline test-s3         Test S3 bucket connectivity");
+            tracing::info!("  oline dns             Manually upsert a Cloudflare DNS record");
             std::process::exit(1);
         }
     }
