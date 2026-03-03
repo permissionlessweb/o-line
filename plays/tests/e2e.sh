@@ -13,7 +13,7 @@
 #   OMNIBUS_IMAGE   — cosmos-omnibus Docker image to test against
 #   CHAIN_JSON      — URL to chain.json (cosmos chain-registry format)
 #
-# Optional env (default to feat/tls branch scripts):
+# Optional env (default to master branch scripts):
 #   ENTRYPOINT_URL  — URL to oline-entrypoint.sh (wrapper downloaded into container)
 #   TLS_CONFIG_URL  — URL to tls-setup.sh (runs nginx TLS setup after certs arrive)
 
@@ -23,8 +23,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OLINE_SDL_DIR="$(cd "${SCRIPT_DIR}/../oline-sdl" && pwd)"
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
-export ENTRYPOINT_URL="${ENTRYPOINT_URL:-https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/feat/tls/plays/scripts/oline-entrypoint.sh}"
-export TLS_CONFIG_URL="${TLS_CONFIG_URL:-https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/feat/tls/plays/scripts/tls-setup.sh}"
+export ENTRYPOINT_URL="${ENTRYPOINT_URL:-https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/master/plays/scripts/oline-entrypoint.sh}"
+export TLS_CONFIG_URL="${TLS_CONFIG_URL:-https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/master/plays/scripts/tls-setup.sh}"
 
 # ── Resolve env vars (support OLINE_* names from the .env file) ──────────────
 # CHAIN_JSON may come directly or via the deployer's OLINE_CHAIN_JSON key

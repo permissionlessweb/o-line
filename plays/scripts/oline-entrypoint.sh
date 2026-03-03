@@ -581,7 +581,7 @@ fi
 
 # ── 7. patch config.toml ──────────────────────────────────────────────────────
 NODE_SCRIPT=node-config.sh
-NODE_CONFIG_SCRIPT="${NODE_CONFIG_SCRIPT:-https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/feat/tls/plays/scripts/config-node-endpoints.sh}"
+NODE_CONFIG_SCRIPT="${NODE_CONFIG_SCRIPT:-https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/master/plays/scripts/config-node-endpoints.sh}"
 # download patch file, provide flags to setup ports + compatible with nginx reverse proxy setup
 curl -fsSL "${NODE_CONFIG_SCRIPT}" -o "$NODE_SCRIPT" || die "Download failed"
 sh "$NODE_SCRIPT"

@@ -16,7 +16,7 @@ set -e
 log() { echo "[tls-setup] $*"; }
 die() { echo "[tls-setup] ERROR: $*" >&2; exit 1; }
 
-NGINX_CONFIG_TEMPLATES="${NGINX_CONFIG_TEMPLATES:-https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/feat/tls/plays/flea-flicker/nginx}"
+NGINX_CONFIG_TEMPLATES="${NGINX_CONFIG_TEMPLATES:-https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/master/plays/flea-flicker/nginx}"
 
 # ── paths ──────────────────────────────────────────────────────────────────────
 # Certs are delivered via SFTP to /tmp/tls/ by oline before this script runs.
