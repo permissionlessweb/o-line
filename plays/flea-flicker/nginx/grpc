@@ -1,14 +1,18 @@
-#   ${GRPC_DOMAIN}  - domain served for gRPC  (optional, omit block if empty)
-#   ${GRPC_PORT}    - internal gRPC port       (default: 9090)
+#   ${GRPC_DOMAIN}  - domain served for gRPC-Web  (optional, omit block if empty)
+#   ${GRPC_PORT}    - internal gRPC-Web port       (default: 9091)
+#
+# Cosmos SDK exposes two gRPC ports:
+#   9090 - native gRPC (HTTP/2 only) — cannot traverse Akash HTTP ingress
+#   9091 - gRPC-Web   (HTTP/1.1 compatible) — works through Akash ingress + Cloudflare
 
 upstream grpc_backend {
     server 127.0.0.1:${GRPC_PORT};
 }
 
-# ── gRPC — HTTP proxy to cosmos gRPC server ─────────────────────────────────
+# ── gRPC-Web — HTTP proxy to cosmos gRPC-Web server ─────────────────────────
 # Akash's ingress terminates TLS and forwards HTTP/1.1 to this container.
-# proxy_pass (not grpc_pass) is used because grpc_pass requires HTTP/2 from
-# the incoming connection, which Akash ingress does not provide.
+# Native gRPC (port 9090) requires HTTP/2 end-to-end and cannot traverse
+# the Akash ingress. gRPC-Web (port 9091) speaks HTTP/1.1 and works correctly.
 server {
     listen 80;
     server_name ${GRPC_DOMAIN};

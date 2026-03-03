@@ -70,7 +70,7 @@ pub const SPECIAL_TEAMS_FD: &[config::Fd] = define_fields![
     "special_teams"/"snapshot_api_domain"  => "API_DOMAIN_SNAPSHOT",  "Snapshot API domain (optional, leave blank to skip)",    "",      false,
     "special_teams"/"snapshot_api_port"    => "API_PORT_SNAPSHOT",    "Snapshot API upstream port (e.g. 1317)",                 "1317",  false,
     "special_teams"/"snapshot_grpc_domain" => "GRPC_DOMAIN_SNAPSHOT", "Snapshot gRPC domain (optional, leave blank to skip)",   "",      false,
-    "special_teams"/"snapshot_grpc_port"   => "GRPC_PORT_SNAPSHOT",   "Snapshot gRPC upstream port (e.g. 9090)",                "9090",  false,
+    "special_teams"/"snapshot_grpc_port"   => "GRPC_PORT_SNAPSHOT",   "Snapshot gRPC-Web upstream port (e.g. 9091)",            "9091",  false,
     // Seed node — nginx TLS upstream ports + server_name domains
     "special_teams"/"seed_rpc_domain"      => "RPC_DOMAIN_SEED",      "Seed RPC domain (nginx server_name, e.g. seed.example.com)", "",   false,
     "special_teams"/"seed_rpc_port"        => "RPC_PORT_SEED",        "Seed RPC upstream port (cosmos RPC, e.g. 26657)",        "26657", false,
@@ -78,7 +78,7 @@ pub const SPECIAL_TEAMS_FD: &[config::Fd] = define_fields![
     "special_teams"/"seed_api_domain"      => "API_DOMAIN_SEED",      "Seed API domain (optional, leave blank to skip)",        "",      false,
     "special_teams"/"seed_api_port"        => "API_PORT_SEED",        "Seed API upstream port (e.g. 1317)",                     "1317",  false,
     "special_teams"/"seed_grpc_domain"     => "GRPC_DOMAIN_SEED",     "Seed gRPC domain (optional, leave blank to skip)",       "",      false,
-    "special_teams"/"seed_grpc_port"       => "GRPC_PORT_SEED",       "Seed gRPC upstream port (e.g. 9090)",                    "9090",  false,
+    "special_teams"/"seed_grpc_port"       => "GRPC_PORT_SEED",       "Seed gRPC-Web upstream port (e.g. 9091)",                "9091",  false,
 ];
 pub const LR_TACKLES_FD: &[config::Fd] = define_fields![];
 pub const LR_FORWARD_FD: &[config::Fd] = define_fields![];
