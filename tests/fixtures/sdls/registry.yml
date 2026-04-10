@@ -1,0 +1,35 @@
+---
+# Minimal single-service SDL for registry e2e testing.
+# Uses ${OMNIBUS_IMAGE} so the test can inject the registry-hosted image ref.
+version: "2.0"
+services:
+  web:
+    image: ${OMNIBUS_IMAGE}
+    expose:
+      - port: 80
+        as: 80
+        to:
+          - global: true
+    env:
+      - ROLE=registry-test
+profiles:
+  compute:
+    web:
+      resources:
+        cpu:
+          units: 0.1
+        memory:
+          size: 128Mi
+        storage:
+          - size: 256Mi
+  placement:
+    dcloud:
+      pricing:
+        web:
+          denom: uact
+          amount: 100
+deployment:
+  web:
+    dcloud:
+      profile: web
+      count: 1

@@ -1,0 +1,203 @@
+use std::sync::LazyLock;
+
+pub mod accounts;
+pub mod akash;
+pub mod cli;
+pub mod cmd;
+pub mod config;
+pub mod crypto;
+pub mod deployer;
+pub mod dns;
+pub mod error;
+pub mod firewall;
+#[cfg(feature = "interface")]
+pub mod interface;
+pub mod nodes;
+pub mod providers;
+pub mod registry;
+pub mod runtime;
+pub mod sessions;
+pub mod sites;
+pub mod snapshots;
+pub mod templates;
+pub mod testing;
+pub mod tui;
+pub mod vpn;
+pub mod workflow;
+
+pub use cmd::{
+    deploy::{
+        cmd_bootstrap_private, cmd_manage, cmd_manage_deployments, BootstrapArgs, DeployArgs,
+        EncryptArgs, ManageArgs, ManageSubcommand,
+    },
+    dns::{cmd_dns_update, DnsArgs},
+    endpoints::{cmd_endpoints, EndpointsArgs},
+    firewall::{cmd_firewall, FirewallArgs},
+    init::{cmd_init, InitArgs},
+    node::{cmd_node, NodeArgs},
+    providers::{cmd_providers, ProvidersArgs},
+    refresh::{cmd_refresh, RefreshArgs},
+    registry::{cmd_registry, RegistryArgs},
+    relayer::{cmd_relayer, RelayerArgs},
+    sdl::{cmd_generate_sdl, SdlArgs},
+    sites::{cmd_sites, SitesArgs},
+    test::{cmd_test_grpc, cmd_test_s3, TestGrpcArgs, TestS3Args},
+    testnet::{cmd_testnet_deploy, TestnetDeployArgs},
+    vpn::{cmd_vpn, VpnArgs},
+};
+
+pub const MAX_RETRIES: u16 = 30;
+pub static FIELD_DESCRIPTORS: LazyLock<Vec<config::Fd>> = LazyLock::new(|| {
+    [
+        DEFAULT_ND,
+        NETWORKING_FD,
+        SNAPSHOT_FD,
+        MINIO_FD,
+        SITES_FD,
+        SPECIAL_TEAMS_FD,
+        LR_TACKLES_FD,
+        LR_FORWARD_FD,
+        RELAYER_FD,
+        ARGUS_FD,
+        REGISTRY_FD,
+    ]
+    .iter()
+    .flat_map(|group| group.iter().cloned())
+    .collect()
+});
+
+pub const DEFAULT_ND: &[config::Fd] = define_fields![
+    "OMNIBUS_IMAGE",            "Omnibus Image",             "ghcr.io/akash-network/cosmos-omnibus:v1.2.38-generic", false,
+    "SDL_DIR",                  "SDL Templates folder",      "templates/sdls/oline",                                           false,
+    "OLINE_BINARY",             "Cosmos daemon binary name", "terpd",  false,
+    "OLINE_CHAIN_ID",           "Chain ID",                  "morocco-1", false,
+    "OLINE_CHAIN_JSON",         "Chain JSON URL",            "", false,
+    "OLINE_ADDRBOOK_URL",       "Address book URL",          "https://anode.team/Terp/main/addrbook.json", false,
+    "OLINE_RPC_ENDPOINT",       "RPC endpoint",              "https://rpc-akash.ecostake.com:443",false,
+    "OLINE_GRPC_ENDPOINT",      "gRPC endpoint",             "https://akash.lavenderfive.com:443",false,
+    "OLINE_REST_ENDPOINT",      "REST (gRPC-Gateway) endpoint", "https://api.akashnet.net:443", false,
+    "OLINE_VALIDATOR_PEER_ID",  "Private validator peer id", "",false,
+    "OLINE_PERSISTENT_PEERS",   "Default persistent peers (id@host:port,...)", "5bf887027701d3b8c4d95c0ba898cc8bf6d166ff@188.165.194.110:26676,58e01ab84eb931a82a024324520021d2e075ec67@185.16.39.125:29656,fafb76ea47967a229d092d7ffb0d9957a4254667@94.130.138.48:33656,6f3677c65945ddb6946cbdaa6ec74b4cfec737f8@65.108.232.168:37656,06a68cd28f6b57768c950af7f2ba37b4d8bd7f5e@142.132.248.253:65532,3e04cc80b4647c9ff652d75b0cb12cb6fc36f5d4@46.4.23.120:13656", false,
+];
+
+pub const NETWORKING_FD: &[config::Fd] = define_fields![
+    "OLINE_CF_API_TOKEN",             "Cloudflare API token (press Enter to skip)",     "",    true,
+    "OLINE_CF_ZONE_ID",               "Cloudflare zone ID (press Enter to skip)",       "",    false,
+    "SSH_PORT",                       "SSH/SFTP port for cert delivery",                "22",  false,
+];
+
+pub const SNAPSHOT_FD: &[config::Fd] = define_fields![
+    "OLINE_SNAPSHOT_PATH",            "S3 snapshot path",                               "snapshots/terpnetwork",          false,
+    "OLINE_SNAPSHOT_TIME",            "Snapshot schedule time",                         "00:00:00",                       false,
+    "OLINE_SNAPSHOT_FULL_URL",        "priority snapshot url. superceeds OLINE_SNAPSHOT_STATE_URL & OLINE_SNAPSHOT_BASE_URL if present", "https://anode.team/Terp/main/anode.team_terp.tar.lz4", false,
+    "OLINE_SNAPSHOT_SAVE_FORMAT",     "Snapshot save format",                           "tar.gz",                         false,
+    "OLINE_SNAPSHOT_RETAIN",          "Snapshot retention period",                      "2 days",                         false,
+    "OLINE_SNAPSHOT_KEEP_LAST",       "Minimum snapshots to keep",                      "2",                              false,
+    "OLINE_SNAPSHOT_DOWNLOAD_DOMAIN", "Private snapshot domain (internal minio, sets SNAPSHOT_JSON)", "",                  false,
+];
+
+pub const MINIO_FD: &[config::Fd] = define_fields![
+    "MINIO_IPFS_IMAGE",         "MinIO-IPFS image",                               "minio/minio:latest",  false,
+    "OLINE_AUTOPIN_INTERVAL",   "IPFS auto-pin interval (seconds)",               "300",                 false,
+];
+
+pub const SITES_FD: &[config::Fd] = define_fields![
+    "SITES_GATEWAY_DOMAIN",  "Sites IPFS gateway domain (e.g. sites.terp.network)",           "", false,
+    "SITES_S3_DOMAIN",       "Sites S3 upload domain (e.g. s3-sites.terp.network)",           "", false,
+    "SITES_CONSOLE_DOMAIN",  "Sites MinIO console domain (e.g. console-sites.terp.network)",  "", false,
+];
+
+pub const SPECIAL_TEAMS_FD: &[config::Fd] = define_fields![
+    // Snapshot node — nginx TLS upstream ports + server_name domains
+    "RPC_DOMAIN_SNAPSHOT",  "Snapshot RPC domain (nginx server_name, e.g. statesync.example.com)", "", false,
+    "RPC_PORT_SNAPSHOT",    "Snapshot RPC upstream port (cosmos RPC, e.g. 26657)",    "26657", false,
+    "P2P_DOMAIN_SNAPSHOT",  "Snapshot P2P domain (e.g. statesync-peer.example.com)",  "",      false,
+    "P2P_PORT_SNAPSHOT",    "Snapshot P2P port (cosmos P2P, e.g. 26656)",             "26656", false,
+    "API_DOMAIN_SNAPSHOT",  "Snapshot API domain (optional, leave blank to skip)",    "",      false,
+    "API_PORT_SNAPSHOT",    "Snapshot API upstream port (e.g. 1317)",                 "1317",  false,
+    "GRPC_DOMAIN_SNAPSHOT", "Snapshot gRPC domain (optional, leave blank to skip)",   "",      false,
+    "GRPC_PORT_SNAPSHOT",   "Snapshot gRPC port (cosmos native, e.g. 9090)",          "9090",  false,
+    // Seed node — nginx TLS upstream ports + server_name domains
+    "RPC_DOMAIN_SEED",      "Seed RPC domain (nginx server_name, e.g. seed.example.com)", "",   false,
+    "RPC_PORT_SEED",        "Seed RPC upstream port (cosmos RPC, e.g. 26657)",        "26657", false,
+    "P2P_DOMAIN_SEED",      "Seed P2P domain (e.g. seed.example.com)",                "",      false,
+    "P2P_PORT_SEED",        "Seed P2P port (cosmos P2P, e.g. 26656)",                 "26656", false,
+    "API_DOMAIN_SEED",      "Seed API domain (optional, leave blank to skip)",        "",      false,
+    "API_PORT_SEED",        "Seed API upstream port (e.g. 1317)",                     "1317",  false,
+    "GRPC_DOMAIN_SEED",     "Seed gRPC domain (optional, leave blank to skip)",       "",      false,
+    "GRPC_PORT_SEED",       "Seed gRPC port (cosmos native, e.g. 9090)",              "9090",  false,
+];
+pub const LR_TACKLES_FD: &[config::Fd] = define_fields![
+    // Left tackle — ports and nginx domains
+    "P2P_PORT_TACKLE_L",    "Left tackle P2P port (e.g. 26656)",           "26656", false,
+    "RPC_PORT_TACKLE_L",    "Left tackle RPC port (e.g. 26657)",           "26657", false,
+    "API_PORT_TACKLE_L",    "Left tackle API port (e.g. 1317)",            "1317",  false,
+    "GRPC_PORT_TACKLE_L",   "Left tackle gRPC port (e.g. 9090)",           "9090",  false,
+    "RPC_DOMAIN_TACKLE_L",  "Left tackle RPC domain (nginx server_name)",  "",      false,
+    "API_DOMAIN_TACKLE_L",  "Left tackle API domain (optional)",           "",      false,
+    "P2P_DOMAIN_TACKLE_L",  "Left tackle P2P domain (optional)",           "",      false,
+    "GRPC_DOMAIN_TACKLE_L", "Left tackle gRPC domain (optional)",          "",      false,
+    // Right tackle
+    "P2P_PORT_TACKLE_R",    "Right tackle P2P port",                       "26656", false,
+    "RPC_PORT_TACKLE_R",    "Right tackle RPC port",                       "26657", false,
+    "API_PORT_TACKLE_R",    "Right tackle API port",                       "1317",  false,
+    "GRPC_PORT_TACKLE_R",   "Right tackle gRPC port",                      "9090",  false,
+    "RPC_DOMAIN_TACKLE_R",  "Right tackle RPC domain (optional)",          "",      false,
+    "API_DOMAIN_TACKLE_R",  "Right tackle API domain (optional)",          "",      false,
+    "P2P_DOMAIN_TACKLE_R",  "Right tackle P2P domain (optional)",          "",      false,
+    "GRPC_DOMAIN_TACKLE_R", "Right tackle gRPC domain (optional)",         "",      false,
+];
+pub const LR_FORWARD_FD: &[config::Fd] = define_fields![
+    // Left forward — ports and nginx domains
+    "P2P_PORT_FORWARD_L",    "Left forward P2P port",                      "26656", false,
+    "RPC_PORT_FORWARD_L",    "Left forward RPC port",                      "26657", false,
+    "API_PORT_FORWARD_L",    "Left forward API port",                      "1317",  false,
+    "GRPC_PORT_FORWARD_L",   "Left forward gRPC port",                     "9090",  false,
+    "RPC_DOMAIN_FORWARD_L",  "Left forward RPC domain (nginx server_name)", "",     false,
+    "API_DOMAIN_FORWARD_L",  "Left forward API domain (optional)",         "",      false,
+    "P2P_DOMAIN_FORWARD_L",  "Left forward P2P domain (optional)",         "",      false,
+    "GRPC_DOMAIN_FORWARD_L", "Left forward gRPC domain (optional)",        "",      false,
+    // Right forward
+    "P2P_PORT_FORWARD_R",    "Right forward P2P port",                     "26656", false,
+    "RPC_PORT_FORWARD_R",    "Right forward RPC port",                     "26657", false,
+    "API_PORT_FORWARD_R",    "Right forward API port",                     "1317",  false,
+    "GRPC_PORT_FORWARD_R",   "Right forward gRPC port",                    "9090",  false,
+    "RPC_DOMAIN_FORWARD_R",  "Right forward RPC domain (optional)",        "",      false,
+    "API_DOMAIN_FORWARD_R",  "Right forward API domain (optional)",        "",      false,
+    "P2P_DOMAIN_FORWARD_R",  "Right forward P2P domain (optional)",        "",      false,
+    "GRPC_DOMAIN_FORWARD_R", "Right forward gRPC domain (optional)",       "",      false,
+];
+pub const RELAYER_FD: &[config::Fd] = define_fields![
+    "RLY_IMAGE",           "Relayer Docker image",                          "ghcr.io/permissionlessweb/rly-docker:latest", false,
+    "RLY_KEY_NAME",        "Relayer key name",                              "relayer_key",                                false,
+    "RLY_REMOTE_CHAIN_ID", "Remote chain ID (e.g. cosmoshub-4)",            "",                                           false,
+    "RLY_API_DOMAIN",      "Relayer REST API domain (Akash HTTPS ingress)", "",                                           false,
+    "RLY_KEY_TERP",        "Terp relayer key mnemonic",                     "", true,
+    "RLY_KEY_REMOTE",      "Remote chain relayer key mnemonic",             "", true,
+    "RELAYER_ENTRYPOINT",  "Relayer entrypoint script URL",                 "", false,
+];
+
+pub const ARGUS_FD: &[config::Fd] = define_fields![
+    // ── Cosmos node ──────────────────────────────────────────────────────────
+    "ARGUS_NODE_MONIKER",          "Argus node moniker",                            "",                                     false,
+    "ARGUS_NODE_SEEDS",            "Argus node seed peers (id@host:port,...)",      "",                                     false,
+    "ARGUS_NODE_PERSISTENT_PEERS", "Argus node persistent peers (id@host:port,...)", "",                                    false,
+    // ── Argus service ────────────────────────────────────────────────────────
+    "ARGUS_IMAGE",            "Argus Docker image",                            "ghcr.io/permissionlessweb/argus:latest", false,
+    "ARGUS_ENTRYPOINT_URL",   "Argus entrypoint script URL",                   "",                                      false,
+    "ARGUS_API_DOMAIN",       "Argus REST API domain (Akash HTTPS ingress)",   "",                                      false,
+    "ARGUS_BECH32_PREFIX",    "Chain bech32 prefix (e.g. terp)",               "terp",                                  false,
+    // ── PostgreSQL ───────────────────────────────────────────────────────────
+    "ARGUS_DB_USER",          "PostgreSQL username",                           "argus",                                 false,
+    "ARGUS_DB_PASSWORD",      "PostgreSQL password",                           "",                                      true,
+    "ARGUS_DB_DATA_NAME",     "PostgreSQL data database name",                 "argus_data",                            false,
+    "ARGUS_DB_ACCOUNTS_NAME", "PostgreSQL accounts database name",             "argus_accounts",                        false,
+];
+
+pub const REGISTRY_FD: &[config::Fd] = define_fields![
+    "OLINE_REGISTRY_URL",       "Public registry URL (providers pull from here)",  "", false,
+    "OLINE_REGISTRY_PORT",      "Local registry listen port",                      "5000", false,
+    "OLINE_REGISTRY_USERNAME",  "Registry basic auth username",                    "oline", false,
+    "OLINE_REGISTRY_PASSWORD",  "Registry basic auth password",                    "", true,
+    "OLINE_REGISTRY_DIR",       "Registry storage directory",                      "", false,
+];

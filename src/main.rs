@@ -1,0 +1,354 @@
+use clap::{Parser, Subcommand};
+use o_line_sdl::{
+    self,
+    cli::*,
+    cmd_bootstrap_private, cmd_dns_update, cmd_endpoints, cmd_firewall, cmd_generate_sdl,
+    cmd_init, cmd_manage, cmd_node, cmd_providers, cmd_refresh,
+    cmd_registry, cmd_relayer, cmd_sites, cmd_test_grpc, cmd_test_s3, cmd_testnet_deploy, cmd_vpn,
+    config::{build_config_from_env, collect_config, *},
+    crypto::encrypt_mnemonic,
+    deployer::OLineDeployer,
+    runtime::OLineRuntime,
+    workflow::{step::OLineStep, OLineWorkflow},
+    BootstrapArgs, DeployArgs, DnsArgs, EncryptArgs, EndpointsArgs, FirewallArgs, InitArgs,
+    ManageArgs, NodeArgs, ProvidersArgs, RefreshArgs, RegistryArgs, RelayerArgs, SdlArgs,
+    SitesArgs, TestGrpcArgs, TestS3Args, TestnetDeployArgs, VpnArgs,
+};
+use std::{
+    error::Error,
+    io::{self, BufRead},
+};
+
+/// O-Line: Akash deployment orchestrator for Terp Network validator infrastructure.
+#[derive(Parser, Debug)]
+#[command(name = "oline", about = "validator deployment orchestrator", version)]
+#[command(subcommand_required = true, arg_required_else_help = true)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Encrypt mnemonic and store in .env
+    Encrypt(EncryptArgs),
+    /// Probe Akash RPC/gRPC endpoints and save the fastest to .env
+    Endpoints(EndpointsArgs),
+    /// Full automated deployment (phases A → B → C → E)
+    Deploy(DeployArgs),
+    /// Render SDL templates without broadcasting
+    #[command(alias = "generate-sdl")]
+    Sdl(SdlArgs),
+    /// Collect deployment config and write deploy-config.json
+    Init(InitArgs),
+    /// View and manage active deployments
+    Manage(ManageArgs),
+    /// Test S3/MinIO bucket connectivity
+    #[command(name = "test-s3")]
+    TestS3(TestS3Args),
+    /// Test gRPC-Web endpoint health
+    #[command(name = "test-grpc")]
+    TestGrpc(TestGrpcArgs),
+    /// Upsert Cloudflare DNS records
+    #[command(alias = "dns-update")]
+    Dns(DnsArgs),
+    /// Bootstrap a private validator node with peers + snapshot
+    #[command(alias = "bootstrap-private")]
+    Bootstrap(BootstrapArgs),
+    /// Deploy and manage IPFS static websites via MinIO-IPFS on Akash
+    Sites(SitesArgs),
+    /// SSH-based node management: push env updates, run scripts, check health
+    Refresh(RefreshArgs),
+    /// Deploy and manage a dedicated Akash full node
+    Node(NodeArgs),
+    /// Manage pfSense firewall SSH keys and connectivity
+    Firewall(FirewallArgs),
+    /// Manage a Cosmos IBC relayer (binary hot-swap, config reload, key install)
+    Relayer(RelayerArgs),
+    /// Provision and manage WireGuard VPN on pfSense
+    Vpn(VpnArgs),
+    /// Manage trusted Akash providers (saved to ~/.config/oline/trusted-providers.json)
+    Providers(ProvidersArgs),
+    /// Embedded OCI container registry (serve, import, list)
+    Registry(RegistryArgs),
+    /// Bootstrap a fresh testnet on Akash with validator, faucet, and full sentry array
+    #[command(name = "testnet-deploy")]
+    TestnetDeploy(TestnetDeployArgs),
+}
+
+// ── Subcommand: deploy ──
+async fn cmd_deploy(raw: bool, parallel: bool) -> Result<(), Box<dyn Error>> {
+    tracing::info!("=== Welcome to O-Line Deployer ===\n");
+    if parallel {
+        tracing::info!("  Strategy: parallel (all phases deployed before snapshot sync wait)");
+    } else {
+        tracing::info!("  Strategy: sequential (one phase at a time)");
+    }
+
+    // Non-interactive mode: read mnemonic + password from env vars (no TTY needed).
+    // Set OLINE_NON_INTERACTIVE=1 + OLINE_MNEMONIC=<words> + OLINE_PASSWORD=<pw> to
+    // run oline deploy fully unattended (CI / local integration tests).
+    let non_interactive = std::env::var("OLINE_NON_INTERACTIVE").is_ok();
+
+    let (mnemonic, password) = if non_interactive {
+        let m = std::env::var("OLINE_MNEMONIC")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .ok_or("OLINE_NON_INTERACTIVE requires OLINE_MNEMONIC to be set")?;
+        let p = std::env::var("OLINE_PASSWORD").unwrap_or_else(|_| "oline-test".to_string());
+        (m.trim().to_string(), p)
+    } else if raw {
+        let m = rpassword::prompt_password("Enter mnemonic: ")?;
+        if m.trim().is_empty() {
+            return Err("Mnemonic cannot be empty.".into());
+        }
+        let password = rpassword::prompt_password("Enter a password (for config encryption): ")?;
+        (m.trim().to_string(), password)
+    } else {
+        unlock_mnemonic()?
+    };
+
+    // Non-interactive: build config from env vars + FD defaults (no prompting).
+    let config = if non_interactive {
+        build_config_from_env(mnemonic)
+    } else {
+        let stdin = io::stdin();
+        let mut lines = stdin.lock().lines();
+        let cfg = collect_config(&password, mnemonic, &mut lines).await?;
+        drop(lines);
+        cfg
+    };
+
+    let deployer = OLineDeployer::new(config, password)
+        .await
+        .map_err(|e| -> Box<dyn Error> { e.into() })?;
+
+    deployer
+        .preflight_check()
+        .await
+        .map_err(|e| -> Box<dyn Error> { e.into() })?;
+
+    if parallel {
+        // Parallel path: deploy all phases up-front, then distribute snapshot.
+        // HD-derived accounts are required for parallel deployment — concurrent
+        // MsgCreateDeployment broadcasts from a single account cause sequence
+        // conflicts.  Default to 4 children × 5 AKT if not explicitly set.
+        use o_line_sdl::sessions::{FundingMethod, OLineSession, OLineSessionStore};
+        let funding = match FundingMethod::from_env() {
+            FundingMethod::Master => {
+                tracing::info!("  Parallel mode: defaulting to direct (single-signer batch).");
+                tracing::info!("  Override with OLINE_FUNDING_METHOD=hd:<count>:<amount_uakt> or direct");
+                FundingMethod::Direct
+            }
+            other => other,
+        };
+        let session = OLineSession::new(
+            funding,
+            &deployer.client.address().to_string(),
+            &deployer.config.val("OLINE_CHAIN_ID"),
+        );
+        let session_store = OLineSessionStore::new();
+        let mut workflow =
+            OLineWorkflow::new_with_session(deployer, OLineStep::FundChildAccounts, session, session_store);
+        let stdin2 = io::stdin();
+        let mut lines2 = stdin2.lock().lines();
+        workflow
+            .run(&mut lines2)
+            .await
+            .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+        drop(lines2); // release stdin lock before entering TUI
+
+        if !non_interactive {
+            o_line_sdl::tui::run_post_deploy_tui(&workflow.ctx).await?;
+        }
+        Ok(())
+    } else {
+        // Sequential path (legacy): one phase at a time via OLineRuntime.
+        let mut runtime = OLineRuntime::new();
+        runtime.add_workflow("main", deployer);
+        let stdin2 = io::stdin();
+        let mut lines2 = stdin2.lock().lines();
+        runtime
+            .run_single(&mut lines2)
+            .await
+            .map_err(|e| -> Box<dyn Error> { e.to_string().into() })
+    }
+}
+
+// ── Subcommand: encrypt ──
+pub fn cmd_encrypt() -> Result<(), Box<dyn Error>> {
+    tracing::info!("=== Encrypt Mnemonic ===\n");
+    let mnemonic = rpassword::prompt_password("Enter mnemonic: ")?;
+    if mnemonic.trim().is_empty() {
+        return Err("Mnemonic cannot be empty.".into());
+    }
+    let password = rpassword::prompt_password("Enter password: ")?;
+    if password.is_empty() {
+        return Err("Password cannot be empty.".into());
+    }
+    let confirm = rpassword::prompt_password("Confirm password: ")?;
+    if password != confirm {
+        return Err("Passwords do not match.".into());
+    }
+    let blob = encrypt_mnemonic(mnemonic.trim(), &password)?;
+    write_encrypted_mnemonic_to_env(&blob)?;
+    tracing::info!("\nEncrypted mnemonic written to .env");
+    tracing::info!("You can now run `oline deploy` to deploy using your encrypted mnemonic.");
+    Ok(())
+}
+
+// ── Main ──
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_target(false)
+        .init();
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+    load_dotenv(
+        &std::env::var("OLINE_ENV_KEY_NAME").unwrap_or_else(|_| "OLINE_ENCRYPTED_MNEMONIC".into()),
+    );
+
+    let cli = Cli::parse();
+    match cli.command {
+        Commands::Endpoints(a) => {
+            if a.print_examples_if_requested() {
+                return Ok(());
+            }
+            cmd_endpoints(&a).await
+        }
+        Commands::Encrypt(a) => {
+            if a.print_examples_if_requested() {
+                return Ok(());
+            }
+            cmd_encrypt()
+        }
+        Commands::Deploy(a) => {
+            if a.print_examples_if_requested() {
+                return Ok(());
+            }
+            cmd_deploy(a.raw, !a.sequential).await
+        }
+        Commands::Sdl(a) => {
+            if a.print_examples_if_requested() {
+                return Ok(());
+            }
+            cmd_generate_sdl(a.output.as_deref(), a.load_config.as_deref()).await
+        }
+        Commands::Init(a) => {
+            if a.print_examples_if_requested() {
+                return Ok(());
+            }
+            cmd_init(&a).await
+        }
+        Commands::Manage(a) => {
+            if a.print_examples_if_requested() {
+                return Ok(());
+            }
+            cmd_manage(&a).await
+        }
+        Commands::TestS3(a) => {
+            if a.print_examples_if_requested() {
+                return Ok(());
+            }
+            cmd_test_s3().await
+        }
+        Commands::TestGrpc(a) => {
+            if a.print_examples_if_requested() {
+                return Ok(());
+            }
+            cmd_test_grpc(a.domain).await
+        }
+        Commands::Dns(a) => {
+            if a.print_examples_if_requested() {
+                return Ok(());
+            }
+            cmd_dns_update().await
+        }
+        Commands::Bootstrap(a) => {
+            if a.print_examples_if_requested() {
+                return Ok(());
+            }
+            cmd_bootstrap_private(a).await
+        }
+        Commands::Sites(a) => {
+            if a.print_examples_if_requested() {
+                return Ok(());
+            }
+            cmd_sites(&a).await
+        }
+        Commands::Refresh(a) => {
+            if a.print_examples_if_requested() {
+                return Ok(());
+            }
+            cmd_refresh(&a).await
+        }
+        Commands::Node(a) => {
+            if a.print_examples_if_requested() {
+                return Ok(());
+            }
+            cmd_node(&a).await
+        }
+        Commands::Firewall(a) => {
+            if a.print_examples_if_requested() {
+                return Ok(());
+            }
+            cmd_firewall(&a).await
+        }
+        Commands::Relayer(a) => {
+            if a.print_examples_if_requested() {
+                return Ok(());
+            }
+            cmd_relayer(&a).await
+        }
+        Commands::Vpn(a) => {
+            if a.print_examples_if_requested() {
+                return Ok(());
+            }
+            cmd_vpn(&a).await
+        }
+        Commands::Providers(a) => {
+            if a.print_examples_if_requested() {
+                return Ok(());
+            }
+            cmd_providers(&a).await.map_err(|e| {
+                Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                    as Box<dyn Error>
+            })
+        }
+        Commands::Registry(a) => cmd_registry(&a).await,
+        Commands::TestnetDeploy(a) => {
+            if a.print_examples_if_requested() {
+                return Ok(());
+            }
+            cmd_testnet_deploy(&a).await
+        }
+    }
+}
+
+#[test]
+fn test_field_descriptors() {
+    for fd in o_line_sdl::FIELD_DESCRIPTORS.iter() {
+        println!("{:#?}", fd);
+        let mut cfg = OLineConfig::default();
+        let resolved = std::env::var(fd.ev)
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| fd.d.to_string());
+
+        let value = if fd.d == "" && resolved.is_empty() {
+            "".to_string()
+        } else if fd.s && !resolved.is_empty() {
+            resolved
+        } else {
+            "".to_string()
+        };
+
+        cfg.set(fd.ev, value);
+    }
+}

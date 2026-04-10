@@ -1,0 +1,238 @@
+---
+version: "2.0"
+services:
+  ${SNAPSHOT_SVC}:
+    image: ${OMNIBUS_IMAGE}
+    expose:
+      - port: ${P2P_PORT_SNAPSHOT}
+        as: ${P2P_PORT_SNAPSHOT}
+        to:
+          - global: true
+      - port: ${RPC_PORT_SNAPSHOT}
+        as: ${RPC_PORT_SNAPSHOT}
+        to:
+          - global: true
+      - port: 9091
+        as: ${GRPC_PORT_SNAPSHOT}
+        to:
+          - global: true
+      - port: 80
+        as: 80
+        to:
+          - global: true
+        accept:
+${SNAPSHOT_80_ACCEPTS}
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
+    env:
+      - MONIKER=${SNAPSHOT_MONIKER}
+      - PROJECT_BIN=${OLINE_BINARY}
+      - CHAIN_ID=${OLINE_CHAIN_ID}
+      - CHAIN_JSON=${OLINE_CHAIN_JSON}
+      - MINIMUM_GAS_PRICES=0.05uthiol
+      - FASTSYNC_VERSION=v0
+      - PRUNING=nothing
+      - STATESYNC_SNAPSHOT_INTERVAL=500
+      # - COSMOVISOR_ENABLED=1
+      - TERPD_P2P_PEX=true
+      - ADDRBOOK_URL=${OLINE_ADDRBOOK_URL}
+      - TERPD_P2P_PRIVATE_PEER_IDS=${OLINE_VALIDATOR_PEER_ID}
+      - TERPD_P2P_PERSISTENT_PEERS=${OLINE_PERSISTENT_PEERS}
+      - WASMVM_PATH=/lib/libwasmvm.x86_64.so
+      - WASMVM_VERSION=v3.0.2
+      - WASMVM_URL=https://github.com/CosmWasm/wasmvm/releases/download/v3.0.2/libwasmvm.x86_64.so
+      - S3_KEY=${S3_KEY}
+      - S3_SECRET=${S3_SECRET}
+      - S3_HOST=${S3_HOST}
+      - SNAPSHOT_URL=${OLINE_SNAPSHOT_FULL_URL}
+      - SNAPSHOT_FORMAT=tar.lz4
+      - SNAPSHOT_PATH=${OLINE_SNAPSHOT_PATH}
+      - SNAPSHOT_TIME=${OLINE_SNAPSHOT_TIME}
+      - SNAPSHOT_DIR=/root/.terpd
+      - SNAPSHOT_METADATA=1
+      - SNAPSHOT_METADATA_URL=${SNAPSHOT_METADATA_URL}
+      - SNAPSHOT_SAVE_FORMAT=${OLINE_SNAPSHOT_SAVE_FORMAT}
+      - SNAPSHOT_RETAIN=${OLINE_SNAPSHOT_RETAIN}
+      - SNAPSHOT_KEEP_LAST=${OLINE_SNAPSHOT_KEEP_LAST}
+      - SNAPSHOT_ON_START=1
+      - RPC_DOMAIN=${RPC_DOMAIN_SNAPSHOT}
+      - RPC_PORT=${RPC_PORT_SNAPSHOT}
+      - API_DOMAIN=${API_DOMAIN_SNAPSHOT}
+      - API_PORT=${API_PORT_SNAPSHOT}
+      - P2P_DOMAIN=${P2P_DOMAIN_SNAPSHOT}
+      - P2P_PORT=${P2P_PORT_SNAPSHOT}
+      - GRPC_PORT=${GRPC_PORT_SNAPSHOT}
+      - GRPC_DOMAIN=${GRPC_DOMAIN_SNAPSHOT}
+      - SSH_PUBKEY=${SSH_PUBKEY}
+  ${SEED_SVC}:
+    image: ${OMNIBUS_IMAGE}
+    expose:
+      - port: 26657
+        as: 26657
+        to:
+          - global: true
+      - port: 26656
+        as: 26656
+        to:
+          - global: true
+      - port: 9091
+        as: ${GRPC_PORT_SEED}
+        to:
+          - global: true
+      - port: 80
+        as: 80
+        to:
+          - global: true
+        accept:
+${SEED_80_ACCEPTS}
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
+    env:
+      - SSH_PUBKEY=${SSH_PUBKEY}
+      - MONIKER=${SEED_MONIKER}
+      - PROJECT_BIN=${OLINE_BINARY}
+      - CHAIN_ID=${OLINE_CHAIN_ID}
+      - CHAIN_JSON=${OLINE_CHAIN_JSON}
+      - MINIMUM_GAS_PRICES=0.05uthiol
+      - PRUNING=default
+      - TERPD_P2P_PEX=true
+      - FASTSYNC_VERSION=v0
+      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - WASMVM_PATH=/lib/libwasmvm.x86_64.so
+      - WASMVM_VERSION=v3.0.2
+      - WASMVM_URL=https://github.com/CosmWasm/wasmvm/releases/download/v3.0.2/libwasmvm.x86_64.so
+      # - COSMOVISOR_ENABLED=1
+      # - STATESYNC_RPC_SERVERS=<mainnet-terp-rpc.konsortech.xyz:443,rpc.terp.aknodes.net:443>
+      - ADDRBOOK_URL=${OLINE_ADDRBOOK_URL}
+      - TERPD_P2P_PERSISTENT_PEERS=${OLINE_PERSISTENT_PEERS}
+      - SNAPSHOT_URL=${OLINE_SNAPSHOT_FULL_URL}
+      - SNAPSHOT_FORMAT=tar.lz4
+      - RPC_DOMAIN=${RPC_DOMAIN_SEED}
+      - RPC_PORT=${RPC_PORT_SEED}
+      - API_DOMAIN=${API_DOMAIN_SEED}
+      - API_PORT=${API_PORT_SEED}
+      - P2P_DOMAIN=${P2P_DOMAIN_SEED}
+      - P2P_PORT=${P2P_PORT_SEED}
+      - GRPC_PORT=${GRPC_PORT_SEED}
+      - GRPC_DOMAIN=${GRPC_DOMAIN_SEED}
+  ${MINIO_SVC}:
+    image: ${MINIO_IPFS_IMAGE}
+    expose:
+      - port: 9001
+        as: 9001
+        to:
+          - global: true
+      - port: 8081
+        as: 8081
+        to:
+          - global: true
+      - port: 9000
+        as: 9000
+        to:
+          - service: ${SNAPSHOT_SVC}
+      - port: 80
+        as: 80
+        to:
+          - global: true
+        accept:
+${MINIO_80_ACCEPTS}
+      - port: 4001
+        as: 4001
+        proto: tcp
+        to:
+          - global: true
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
+    env:
+      - SSH_PUBKEY=${SSH_PUBKEY}
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - MINIO_BUCKET=${MINIO_BUCKET}
+      - MINIO_CONSOLE_PORT=9001
+      - IPFS_GATEWAY_PORT=8081
+      - IPFS_PROFILE=server
+      - AUTOPIN_INTERVAL=${OLINE_AUTOPIN_INTERVAL}
+      - AUTOPIN_PATTERNS=*.tar.gz,*.tar.zst,*.tar.lz4,*.tar.xz
+      - PUID=1000
+      - PGID=1000
+      - SNAPSHOT_DOWNLOAD_DOMAIN=${OLINE_SNAPSHOT_DOWNLOAD_DOMAIN}
+    params:
+      storage:
+        ipfs-data:
+          mount: /data/ipfs
+          readOnly: false
+        minio-data:
+          mount: /data/minio
+          readOnly: false
+profiles:
+  compute:
+    ${SNAPSHOT_SVC}:
+      resources:
+        cpu:
+          units: 2
+        memory:
+          size: 8Gi
+        storage:
+          - size: 50Gi
+    ${SEED_SVC}:
+      resources:
+        cpu:
+          units: 2
+        memory:
+          size: 8Gi
+        storage:
+          - size: 50Gi
+    ${MINIO_SVC}:
+      resources:
+        cpu:
+          units: 2
+        memory:
+          size: 4Gi
+        storage:
+          - size: 10Gi
+          - name: ipfs-data
+            size: 100Gi
+            attributes:
+              persistent: true
+              class: beta3
+          - name: minio-data
+            size: 50Gi
+            attributes:
+              persistent: true
+              class: beta3
+  placement:
+    dcloud:
+      pricing:
+        ${SNAPSHOT_SVC}:
+          denom: uact
+          amount: 1000
+        ${SEED_SVC}:
+          denom: uact
+          amount: 1000
+        ${MINIO_SVC}:
+          denom: uact
+          amount: 1000
+      signedBy:
+        anyOf:
+          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
+      attributes:
+        host: akash
+deployment:
+  ${SNAPSHOT_SVC}:
+    dcloud:
+      profile: ${SNAPSHOT_SVC}
+      count: 1
+  ${SEED_SVC}:
+    dcloud:
+      profile: ${SEED_SVC}
+      count: 1
+  ${MINIO_SVC}:
+    dcloud:
+      profile: ${MINIO_SVC}
+      count: 1

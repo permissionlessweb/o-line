@@ -100,7 +100,7 @@ profiles:
     dcloud:
       pricing:
         minio-ipfs:
-          denom: uakt
+          denom: uact
           amount: 5000
 
 deployment:

@@ -1,40 +1,24 @@
 #!/bin/sh
 
 # ── Settings ──────────────────────────────────────────────────────────────────
-minio_ipfs_version := "v0.0.9"
-ghcr_image         := "ghcr.io/permissionlessweb/minio-ipfs"
-dh_image           := "docker.io/permissionlessweb/minio-ipfs"
+minio_ipfs_version     := "v0.0.9"
+ghcr_image             := "ghcr.io/permissionlessweb/minio-ipfs"
+dh_image               := "docker.io/permissionlessweb/minio-ipfs"
 
-# ── oline-sdl ─────────────────────────────────────────────────────────────────
-install:
-    @cd plays/oline-sdl && just install
+oline_omnibus_version  := "v0.2.0"
+ghcr_omnibus           := "ghcr.io/permissionlessweb/oline-omnibus"
+dh_omnibus             := "docker.io/permissionlessweb/oline-omnibus"
 
-# ── minio-ipfs ────────────────────────────────────────────────────────────────
+# ── Imports ──────────────────────────────────────────────────────────────────
+import 'scripts/just/build.just'
+import 'scripts/just/minio.just'
+import 'scripts/just/akash.just'
+import 'scripts/just/remote.just'
+import 'scripts/just/firewall.just'
+import 'scripts/just/relayer.just'
+import 'scripts/just/team.just'
+import 'scripts/just/vpn.just'
 
-# Build and test minio-ipfs locally (current platform only)
-test-minio-ipfs:
-    @cd plays/instant-replay &&\
-    docker build -t minio-ipfs:latest . &&\
-    E2E_IMAGE=minio-ipfs:latest ./e2e-test.sh
-
-# Build minio-ipfs for linux/amd64+arm64 and push to GHCR + Docker Hub
-# Usage: just build-push-minio-ipfs            → uses minio_ipfs_version
-#        just build-push-minio-ipfs v0.0.3     → custom tag
-build-push-minio-ipfs tag=minio_ipfs_version:
-    docker buildx build \
-        --platform linux/amd64,linux/arm64 \
-        --tag {{ghcr_image}}:{{tag}} \
-        --tag {{dh_image}}:{{tag}} \
-        --push \
-        plays/instant-replay
-
-# Same as above but also retags :latest
-build-push-minio-ipfs-latest tag=minio_ipfs_version:
-    docker buildx build \
-        --platform linux/amd64,linux/arm64 \
-        --tag {{ghcr_image}}:{{tag}} \
-        --tag {{ghcr_image}}:latest \
-        --tag {{dh_image}}:{{tag}} \
-        --tag {{dh_image}}:latest \
-        --push \
-        plays/instant-replay
+# ── Test subcommand ──────────────────────────────────────────────────────────
+# All tests live under `just test <name>`. Run `just test list` to see them.
+mod test 'scripts/just/testing.just'

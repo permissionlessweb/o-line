@@ -1,0 +1,36 @@
+---
+# Minimal single-service SDL for concurrent child deploy tests.
+# Each child deployer deploys one of these independently.
+# No signedBy / attributes constraints — local dev provider has none.
+version: "2.0"
+services:
+  ${SVC_NAME}:
+    image: nginx:alpine
+    expose:
+      - port: 80
+        as: 80
+        to:
+          - global: true
+    env:
+      - ROLE=${DEPLOY_LABEL}
+profiles:
+  compute:
+    ${SVC_NAME}:
+      resources:
+        cpu:
+          units: 0.1
+        memory:
+          size: 128Mi
+        storage:
+          - size: 256Mi
+  placement:
+    dcloud:
+      pricing:
+        ${SVC_NAME}:
+          denom: uact
+          amount: 100
+deployment:
+  ${SVC_NAME}:
+    dcloud:
+      profile: ${SVC_NAME}
+      count: 1

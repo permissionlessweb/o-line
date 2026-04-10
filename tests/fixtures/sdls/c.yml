@@ -1,0 +1,85 @@
+---
+# Minimal Phase C SDL for local Akash dev cluster testing.
+# Service names match production (oline-c-left-forward, oline-c-right-forward).
+version: "2.0"
+services:
+  ${LF_SVC}:
+    image: nginx:alpine
+    expose:
+      - port: 80
+        as: 80
+        to:
+          - global: true
+      - port: ${RPC_PORT_FORWARD_L}
+        as: ${RPC_PORT_FORWARD_L}
+        to:
+          - global: true
+      - port: ${P2P_PORT_FORWARD_L}
+        as: ${P2P_PORT_FORWARD_L}
+        to:
+          - global: true
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
+    env:
+      - ROLE=left-forward-test
+      - SNAPSHOT_MODE=${SNAPSHOT_MODE}
+  ${RF_SVC}:
+    image: nginx:alpine
+    expose:
+      - port: 80
+        as: 80
+        to:
+          - global: true
+      - port: ${RPC_PORT_FORWARD_R}
+        as: ${RPC_PORT_FORWARD_R}
+        to:
+          - global: true
+      - port: ${P2P_PORT_FORWARD_R}
+        as: ${P2P_PORT_FORWARD_R}
+        to:
+          - global: true
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
+    env:
+      - ROLE=right-forward-test
+      - SNAPSHOT_MODE=${SNAPSHOT_MODE}
+profiles:
+  compute:
+    ${LF_SVC}:
+      resources:
+        cpu:
+          units: 0.1
+        memory:
+          size: 128Mi
+        storage:
+          - size: 256Mi
+    ${RF_SVC}:
+      resources:
+        cpu:
+          units: 0.1
+        memory:
+          size: 128Mi
+        storage:
+          - size: 256Mi
+  placement:
+    dcloud:
+      pricing:
+        ${LF_SVC}:
+          denom: uact
+          amount: 100
+        ${RF_SVC}:
+          denom: uact
+          amount: 100
+deployment:
+  ${LF_SVC}:
+    dcloud:
+      profile: ${LF_SVC}
+      count: 1
+  ${RF_SVC}:
+    dcloud:
+      profile: ${RF_SVC}
+      count: 1

@@ -1,4 +1,69 @@
-[workspace]
-members = ["plays/oline-sdl"]
-resolver = "3"
+[package]
+name = "o-line-sdl"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "oline"
+path = "src/main.rs"
+
+[[bin]]
+name = "test-provider"
+path = "src/bin/test_provider.rs"
+
+[features]
+# Enable ict-rs based testing infrastructure (IctAkashNetwork).
+testing = ["dep:ict-rs"]
+# cw-orchestrator compatible interface for terp.network test suites.
+interface = ["dep:cw-orch"]
+
+[dependencies]
+aes-gcm = "0.10"
+#akash-deploy-rs = { git = "https://github.com/permissionlessweb/akash-deploy-rs", branch = "feat/client-improvement", features = ["default-client", "sdl-templates", "file-storage"] }
+akash-deploy-rs = { path = "../akash-deploy-rs", features = ["default-client", "sdl-templates", "file-storage"] }
+argon2 = "0.5"
+axum = "0.7"
+base64 = "0.22"
+bech32 = "0.9"
+bip32 = { version = "0.5", features = ["alloc"] }
+bollard = "0.18"
+clap = { version = "4", features = ["derive", "env"] }
+cloudflare = { version = "0.14.0", default-features = false, features = ["rustls-tls"] }
+container-registry = "0.3.1"
+crossterm = { version = "0.28", features = ["event-stream"] }
+cw-orch = { git = "https://github.com/permissionlessweb/cw-orchestrator", branch = "zk-mvp", optional = true, features = ["daemon"] }
+dirs = "5"
+dotenvy = "0.15"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+hex = "0.4"
+hmac = "0.12"
+ict-rs = { path = "../../terp-rs/crates/public/ict-rs/ict-rs", features = ["docker", "testing", "akash"], optional = true }
+openssh = { version = "0.11", features = ["native-mux"] }
+openssh-sftp-client  = { version = "0.15", features = ["openssh"] }
+rand = "0.8"
+ratatui = "0.29"
+rcgen = { version = "0.13", features = ["pem"] }
+reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
+ripemd = "0.1"
+rpassword = "7"
+rustls = { version = "0.23", features = ["ring"] }
+sec = "1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+sha2 = "0.10"
+ssh-key = { version = "0.6", features = ["rsa", "ed25519"] }
+tar = "0.4"
+tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
+tokio-rustls = "0.26"
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tonic = "0.14"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+
+[dev-dependencies]
+o-line-sdl = { path = ".", features = ["testing"] }
+tempfile = "3"
 

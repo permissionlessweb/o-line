@@ -70,10 +70,10 @@ profiles:
           - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
       pricing:
         node:
-          denom: uakt
+          denom: uact
           amount: 10000
         proxy:
-          denom: uakt
+          denom: uact
           amount: 10000
 
 deployment:

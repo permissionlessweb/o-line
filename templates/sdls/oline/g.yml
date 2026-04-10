@@ -1,0 +1,85 @@
+---
+# Phase G — Standalone MinIO-IPFS Gateway
+# Deploys the minio-ipfs container for static website / IPFS content hosting.
+# All HTTP services route through port 80 via Akash ingress (TLS terminated upstream).
+# Variables injected by build_ipfs_site_vars() in akash.rs.
+version: "2.0"
+services:
+  ${IPFS_SVC}:
+    image: ${MINIO_IPFS_IMAGE}
+    expose:
+      - port: 80
+        as: 80
+        to:
+          - global: true
+        accept:
+${SITES_80_ACCEPTS}
+      - port: 4001
+        as: 4001
+        proto: tcp
+        to:
+          - global: true
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
+    env:
+      - SSH_PUBKEY=${SSH_PUBKEY}
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - MINIO_BUCKET=${IPFS_BUCKET}
+      - MINIO_CONSOLE_PORT=9001
+      - MINIO_CONSOLE_INTERNAL_PORT=9002
+      - IPFS_GATEWAY_PORT=8081
+      - IPFS_PROFILE=server
+      - AUTOPIN_INTERVAL=${OLINE_AUTOPIN_INTERVAL}
+      - AUTOPIN_PATTERNS=*.html,*.css,*.js,*.json,*.ico,*.png,*.svg,*.wasm
+      - PUID=1000
+      - PGID=1000
+      - SITES_GATEWAY_DOMAIN=${SITES_GATEWAY_DOMAIN}
+      - SITES_S3_DOMAIN=${SITES_S3_DOMAIN}
+      - SITES_CONSOLE_DOMAIN=${SITES_CONSOLE_DOMAIN}
+    params:
+      storage:
+        ipfs-data:
+          mount: /data/ipfs
+          readOnly: false
+        minio-data:
+          mount: /data/minio
+          readOnly: false
+profiles:
+  compute:
+    ${IPFS_SVC}:
+      resources:
+        cpu:
+          units: 2
+        memory:
+          size: 4Gi
+        storage:
+          - size: 10Gi
+          - name: ipfs-data
+            size: 100Gi
+            attributes:
+              persistent: true
+              class: beta3
+          - name: minio-data
+            size: 50Gi
+            attributes:
+              persistent: true
+              class: beta3
+  placement:
+    dcloud:
+      pricing:
+        ${IPFS_SVC}:
+          denom: uact
+          amount: 1000
+      signedBy:
+        anyOf:
+          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
+      attributes:
+        host: akash
+deployment:
+  ${IPFS_SVC}:
+    dcloud:
+      profile: ${IPFS_SVC}
+      count: 1

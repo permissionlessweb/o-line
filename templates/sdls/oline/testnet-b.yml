@@ -1,0 +1,150 @@
+---
+version: "2.0"
+services:
+  ${LT_SVC}:
+    image: ${OMNIBUS_IMAGE}
+    expose:
+      - port: ${P2P_PORT_TACKLE_L}
+        as: ${P2P_PORT_TACKLE_L}
+        to:
+          - global: true
+      - port: ${RPC_PORT_TACKLE_L}
+        as: ${RPC_PORT_TACKLE_L}
+        to:
+          - global: true
+      - port: ${API_PORT_TACKLE_L}
+        as: ${API_PORT_TACKLE_L}
+        to:
+          - global: true
+      - port: ${GRPC_PORT_TACKLE_L}
+        as: ${GRPC_PORT_TACKLE_L}
+        to:
+          - global: true
+      - port: 80
+        as: 80
+        to:
+          - global: true
+        accept:
+${LT_80_ACCEPTS}
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
+    env:
+      - MONIKER=${LEFT_TACKLE_MONIKER}
+      - PROJECT_BIN=${OLINE_BINARY}
+      - CHAIN_JSON=${OLINE_CHAIN_JSON}
+      - CHAIN_ID=${TESTNET_CHAIN_ID}
+      - OLINE_OFFLINE=1
+      - MINIMUM_GAS_PRICES=0.05uthiol
+      - PRUNING=default
+      - TERPD_P2P_PEX=false
+      - FASTSYNC_VERSION=v0
+      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - STATESYNC_RPC_SERVERS=${STATESYNC_RPC_SERVERS}
+      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${TERPD_P2P_UNCONDITIONAL_PEER_IDS}
+      - TERPD_P2P_PERSISTENT_PEERS=${TERPD_P2P_PERSISTENT_PEERS}
+      - TERPD_P2P_PRIVATE_PEER_IDS=${TERPD_P2P_PRIVATE_PEER_IDS}
+      - RPC_DOMAIN=${RPC_DOMAIN_TACKLE_L}
+      - RPC_PORT=${RPC_PORT_TACKLE_L}
+      - API_DOMAIN=${API_DOMAIN_TACKLE_L}
+      - API_PORT=${API_PORT_TACKLE_L}
+      - P2P_DOMAIN=${P2P_DOMAIN_TACKLE_L}
+      - P2P_PORT=${P2P_PORT_TACKLE_L}
+      - GRPC_PORT=${GRPC_PORT_TACKLE_L}
+      - GRPC_DOMAIN=${GRPC_DOMAIN_TACKLE_L}
+      - SSH_PUBKEY=${SSH_PUBKEY}
+  ${RT_SVC}:
+    image: ${OMNIBUS_IMAGE}
+    expose:
+      - port: ${P2P_PORT_TACKLE_R}
+        as: ${P2P_PORT_TACKLE_R}
+        to:
+          - global: true
+      - port: ${RPC_PORT_TACKLE_R}
+        as: ${RPC_PORT_TACKLE_R}
+        to:
+          - global: true
+      - port: ${API_PORT_TACKLE_R}
+        as: ${API_PORT_TACKLE_R}
+        to:
+          - global: true
+      - port: ${GRPC_PORT_TACKLE_R}
+        as: ${GRPC_PORT_TACKLE_R}
+        to:
+          - global: true
+      - port: 80
+        as: 80
+        to:
+          - global: true
+        accept:
+${RT_80_ACCEPTS}
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
+    env:
+      - MONIKER=${RIGHT_TACKLE_MONIKER}
+      - PROJECT_BIN=${OLINE_BINARY}
+      - CHAIN_JSON=${OLINE_CHAIN_JSON}
+      - CHAIN_ID=${TESTNET_CHAIN_ID}
+      - OLINE_OFFLINE=1
+      - MINIMUM_GAS_PRICES=0.05uthiol
+      - PRUNING=default
+      - TERPD_P2P_PEX=false
+      - FASTSYNC_VERSION=v0
+      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - STATESYNC_RPC_SERVERS=${STATESYNC_RPC_SERVERS}
+      - TERPD_P2P_PRIVATE_PEER_IDS=${TERPD_P2P_PRIVATE_PEER_IDS}
+      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${TERPD_P2P_UNCONDITIONAL_PEER_IDS}
+      - TERPD_P2P_PERSISTENT_PEERS=${TERPD_P2P_PERSISTENT_PEERS}
+      - RPC_DOMAIN=${RPC_DOMAIN_TACKLE_R}
+      - RPC_PORT=${RPC_PORT_TACKLE_R}
+      - API_DOMAIN=${API_DOMAIN_TACKLE_R}
+      - API_PORT=${API_PORT_TACKLE_R}
+      - P2P_DOMAIN=${P2P_DOMAIN_TACKLE_R}
+      - P2P_PORT=${P2P_PORT_TACKLE_R}
+      - GRPC_PORT=${GRPC_PORT_TACKLE_R}
+      - GRPC_DOMAIN=${GRPC_DOMAIN_TACKLE_R}
+      - SSH_PUBKEY=${SSH_PUBKEY}
+profiles:
+  compute:
+    ${LT_SVC}:
+      resources:
+        cpu:
+          units: 4
+        memory:
+          size: 16Gi
+        storage:
+          - size: 60Gi
+    ${RT_SVC}:
+      resources:
+        cpu:
+          units: 4
+        memory:
+          size: 16Gi
+        storage:
+          - size: 60Gi
+  placement:
+    dcloud:
+      pricing:
+        ${LT_SVC}:
+          denom: uact
+          amount: 1000
+        ${RT_SVC}:
+          denom: uact
+          amount: 1000
+      signedBy:
+        anyOf:
+          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
+      attributes:
+        host: akash
+deployment:
+  ${LT_SVC}:
+    dcloud:
+      profile: ${LT_SVC}
+      count: 1
+  ${RT_SVC}:
+    dcloud:
+      profile: ${RT_SVC}
+      count: 1

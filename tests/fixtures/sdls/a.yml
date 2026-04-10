@@ -1,0 +1,109 @@
+---
+# Minimal Phase A SDL for local Akash dev cluster testing.
+# Uses nginx:alpine instead of cosmos-omnibus; same service names as production
+# so endpoint lookup (by service name + port) works correctly.
+# No signedBy / attributes constraints — local dev provider has none.
+version: "2.0"
+services:
+  ${SNAPSHOT_SVC}:
+    image: nginx:alpine
+    expose:
+      - port: 80
+        as: 80
+        to:
+          - global: true
+      - port: ${RPC_PORT_SNAPSHOT}
+        as: ${RPC_PORT_SNAPSHOT}
+        to:
+          - global: true
+      - port: ${P2P_PORT_SNAPSHOT}
+        as: ${P2P_PORT_SNAPSHOT}
+        to:
+          - global: true
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
+    env:
+      - ROLE=snapshot-test
+  ${SEED_SVC}:
+    image: nginx:alpine
+    expose:
+      - port: 80
+        as: 80
+        to:
+          - global: true
+      - port: ${RPC_PORT_SEED}
+        as: ${RPC_PORT_SEED}
+        to:
+          - global: true
+      - port: ${P2P_PORT_SEED}
+        as: ${P2P_PORT_SEED}
+        to:
+          - global: true
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
+    env:
+      - ROLE=seed-test
+  ${MINIO_SVC}:
+    image: nginx:alpine
+    expose:
+      - port: 80
+        as: 80
+        to:
+          - global: true
+    env:
+      - ROLE=minio-test
+profiles:
+  compute:
+    ${SNAPSHOT_SVC}:
+      resources:
+        cpu:
+          units: 0.1
+        memory:
+          size: 128Mi
+        storage:
+          - size: 256Mi
+    ${SEED_SVC}:
+      resources:
+        cpu:
+          units: 0.1
+        memory:
+          size: 128Mi
+        storage:
+          - size: 256Mi
+    ${MINIO_SVC}:
+      resources:
+        cpu:
+          units: 0.1
+        memory:
+          size: 128Mi
+        storage:
+          - size: 256Mi
+  placement:
+    dcloud:
+      pricing:
+        ${SNAPSHOT_SVC}:
+          denom: uact
+          amount: 100
+        ${SEED_SVC}:
+          denom: uact
+          amount: 100
+        ${MINIO_SVC}:
+          denom: uact
+          amount: 100
+deployment:
+  ${SNAPSHOT_SVC}:
+    dcloud:
+      profile: ${SNAPSHOT_SVC}
+      count: 1
+  ${SEED_SVC}:
+    dcloud:
+      profile: ${SEED_SVC}
+      count: 1
+  ${MINIO_SVC}:
+    dcloud:
+      profile: ${MINIO_SVC}
+      count: 1

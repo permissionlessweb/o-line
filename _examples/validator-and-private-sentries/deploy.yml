@@ -139,13 +139,13 @@ profiles:
           - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
       pricing:
         validator:
-          denom: uakt
+          denom: uact
           amount: 1000
         node1:
-          denom: uakt
+          denom: uact
           amount: 1000
         node2:
-          denom: uakt
+          denom: uact
           amount: 1000
 
 deployment:

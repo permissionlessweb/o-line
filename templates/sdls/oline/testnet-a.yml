@@ -1,0 +1,181 @@
+---
+version: "2.0"
+services:
+  ${VALIDATOR_SVC}:
+    image: ${LOCALTERP_IMAGE}
+    expose:
+      - port: 26656
+        as: 26656
+        to:
+          - global: true
+      - port: 26657
+        as: 26657
+        to:
+          - global: true
+      - port: 5000
+        as: 5000
+        to:
+          - global: true
+      - port: 1317
+        as: 1317
+        to:
+          - global: true
+      - port: 9090
+        as: 9090
+        to:
+          - global: true
+    env:
+      - CHAINID=${TESTNET_CHAIN_ID}
+      - FAST_BLOCKS=${TESTNET_FAST_BLOCKS}
+  ${SNAPSHOT_SVC}:
+    image: ${OMNIBUS_IMAGE}
+    expose:
+      - port: ${P2P_PORT_SNAPSHOT}
+        as: ${P2P_PORT_SNAPSHOT}
+        to:
+          - global: true
+      - port: ${RPC_PORT_SNAPSHOT}
+        as: ${RPC_PORT_SNAPSHOT}
+        to:
+          - global: true
+      - port: 9091
+        as: ${GRPC_PORT_SNAPSHOT}
+        to:
+          - global: true
+      - port: 80
+        as: 80
+        to:
+          - global: true
+        accept:
+${SNAPSHOT_80_ACCEPTS}
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
+    env:
+      - MONIKER=${SNAPSHOT_MONIKER}
+      - PROJECT_BIN=${OLINE_BINARY}
+      - CHAIN_ID=${TESTNET_CHAIN_ID}
+      - CHAIN_JSON=${OLINE_CHAIN_JSON}
+      - OLINE_OFFLINE=1
+      - MINIMUM_GAS_PRICES=0.05uthiol
+      - FASTSYNC_VERSION=v0
+      - PRUNING=nothing
+      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - TERPD_P2P_PEX=false
+      - TERPD_P2P_PERSISTENT_PEERS=${TERPD_P2P_PERSISTENT_PEERS}
+      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${TERPD_P2P_UNCONDITIONAL_PEER_IDS}
+      - TERPD_P2P_PRIVATE_PEER_IDS=${TERPD_P2P_PRIVATE_PEER_IDS}
+      - RPC_DOMAIN=${RPC_DOMAIN_SNAPSHOT}
+      - RPC_PORT=${RPC_PORT_SNAPSHOT}
+      - API_DOMAIN=${API_DOMAIN_SNAPSHOT}
+      - API_PORT=${API_PORT_SNAPSHOT}
+      - P2P_DOMAIN=${P2P_DOMAIN_SNAPSHOT}
+      - P2P_PORT=${P2P_PORT_SNAPSHOT}
+      - GRPC_PORT=${GRPC_PORT_SNAPSHOT}
+      - GRPC_DOMAIN=${GRPC_DOMAIN_SNAPSHOT}
+      - SSH_PUBKEY=${SSH_PUBKEY}
+  ${SEED_SVC}:
+    image: ${OMNIBUS_IMAGE}
+    expose:
+      - port: 26657
+        as: 26657
+        to:
+          - global: true
+      - port: 26656
+        as: 26656
+        to:
+          - global: true
+      - port: 9091
+        as: ${GRPC_PORT_SEED}
+        to:
+          - global: true
+      - port: 80
+        as: 80
+        to:
+          - global: true
+        accept:
+${SEED_80_ACCEPTS}
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
+    env:
+      - SSH_PUBKEY=${SSH_PUBKEY}
+      - MONIKER=${SEED_MONIKER}
+      - PROJECT_BIN=${OLINE_BINARY}
+      - CHAIN_ID=${TESTNET_CHAIN_ID}
+      - CHAIN_JSON=${OLINE_CHAIN_JSON}
+      - OLINE_OFFLINE=1
+      - MINIMUM_GAS_PRICES=0.05uthiol
+      - PRUNING=default
+      - TERPD_P2P_PEX=true
+      - FASTSYNC_VERSION=v0
+      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - TERPD_P2P_PERSISTENT_PEERS=${TERPD_P2P_PERSISTENT_PEERS}
+      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${TERPD_P2P_UNCONDITIONAL_PEER_IDS}
+      - TERPD_P2P_PRIVATE_PEER_IDS=${TERPD_P2P_PRIVATE_PEER_IDS}
+      - RPC_DOMAIN=${RPC_DOMAIN_SEED}
+      - RPC_PORT=${RPC_PORT_SEED}
+      - API_DOMAIN=${API_DOMAIN_SEED}
+      - API_PORT=${API_PORT_SEED}
+      - P2P_DOMAIN=${P2P_DOMAIN_SEED}
+      - P2P_PORT=${P2P_PORT_SEED}
+      - GRPC_PORT=${GRPC_PORT_SEED}
+      - GRPC_DOMAIN=${GRPC_DOMAIN_SEED}
+profiles:
+  compute:
+    ${VALIDATOR_SVC}:
+      resources:
+        cpu:
+          units: 2
+        memory:
+          size: 4Gi
+        storage:
+          - size: 10Gi
+    ${SNAPSHOT_SVC}:
+      resources:
+        cpu:
+          units: 2
+        memory:
+          size: 8Gi
+        storage:
+          - size: 20Gi
+    ${SEED_SVC}:
+      resources:
+        cpu:
+          units: 2
+        memory:
+          size: 8Gi
+        storage:
+          - size: 20Gi
+  placement:
+    dcloud:
+      pricing:
+        ${VALIDATOR_SVC}:
+          denom: uact
+          amount: 1000
+        ${SNAPSHOT_SVC}:
+          denom: uact
+          amount: 1000
+        ${SEED_SVC}:
+          denom: uact
+          amount: 1000
+      signedBy:
+        anyOf:
+          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
+      attributes:
+        host: akash
+deployment:
+  ${VALIDATOR_SVC}:
+    dcloud:
+      profile: ${VALIDATOR_SVC}
+      count: 1
+  ${SNAPSHOT_SVC}:
+    dcloud:
+      profile: ${SNAPSHOT_SVC}
+      count: 1
+  ${SEED_SVC}:
+    dcloud:
+      profile: ${SEED_SVC}
+      count: 1

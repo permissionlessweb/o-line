@@ -1,0 +1,152 @@
+---
+version: "2.0"
+services:
+  ${LF_SVC}:
+    image: ${OMNIBUS_IMAGE}
+    expose:
+      - port: ${P2P_PORT_FORWARD_L}
+        as: ${P2P_PORT_FORWARD_L}
+        to:
+          - global: true
+      - port: ${RPC_PORT_FORWARD_L}
+        as: ${RPC_PORT_FORWARD_L}
+        to:
+          - global: true
+      - port: ${API_PORT_FORWARD_L}
+        as: ${API_PORT_FORWARD_L}
+        to:
+          - global: true
+      - port: ${GRPC_PORT_FORWARD_L}
+        as: ${GRPC_PORT_FORWARD_L}
+        to:
+          - global: true
+      - port: 80
+        as: 80
+        to:
+          - global: true
+        accept:
+${LF_80_ACCEPTS}
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
+    env:
+      - MONIKER=${LEFT_FORWARD_MONIKER}
+      - PROJECT_BIN=${OLINE_BINARY}
+      - CHAIN_JSON=${OLINE_CHAIN_JSON}
+      - CHAIN_ID=${TESTNET_CHAIN_ID}
+      - OLINE_OFFLINE=1
+      - MINIMUM_GAS_PRICES=0.05uthiol
+      - PRUNING=default
+      - TERPD_P2P_SEEDS=${TERPD_P2P_SEEDS}
+      - TERPD_P2P_PEX=true
+      - TERPD_P2P_PRIVATE_PEER_IDS=${TERPD_P2P_PRIVATE_PEER_IDS}
+      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${TERPD_P2P_UNCONDITIONAL_PEER_IDS}
+      - TERPD_P2P_PERSISTENT_PEERS=${TERPD_P2P_PERSISTENT_PEERS}
+      - FASTSYNC_VERSION=v0
+      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - STATESYNC_RPC_SERVERS=${STATESYNC_RPC_SERVERS}
+      - RPC_DOMAIN=${RPC_DOMAIN_FORWARD_L}
+      - RPC_PORT=${RPC_PORT_FORWARD_L}
+      - API_DOMAIN=${API_DOMAIN_FORWARD_L}
+      - API_PORT=${API_PORT_FORWARD_L}
+      - P2P_DOMAIN=${P2P_DOMAIN_FORWARD_L}
+      - P2P_PORT=${P2P_PORT_FORWARD_L}
+      - GRPC_PORT=${GRPC_PORT_FORWARD_L}
+      - GRPC_DOMAIN=${GRPC_DOMAIN_FORWARD_L}
+      - SSH_PUBKEY=${SSH_PUBKEY}
+  ${RF_SVC}:
+    image: ${OMNIBUS_IMAGE}
+    expose:
+      - port: ${P2P_PORT_FORWARD_R}
+        as: ${P2P_PORT_FORWARD_R}
+        to:
+          - global: true
+      - port: ${RPC_PORT_FORWARD_R}
+        as: ${RPC_PORT_FORWARD_R}
+        to:
+          - global: true
+      - port: ${API_PORT_FORWARD_R}
+        as: ${API_PORT_FORWARD_R}
+        to:
+          - global: true
+      - port: ${GRPC_PORT_FORWARD_R}
+        as: ${GRPC_PORT_FORWARD_R}
+        to:
+          - global: true
+      - port: 80
+        as: 80
+        to:
+          - global: true
+        accept:
+${RF_80_ACCEPTS}
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
+    env:
+      - MONIKER=${RIGHT_FORWARD_MONIKER}
+      - PROJECT_BIN=${OLINE_BINARY}
+      - CHAIN_JSON=${OLINE_CHAIN_JSON}
+      - CHAIN_ID=${TESTNET_CHAIN_ID}
+      - OLINE_OFFLINE=1
+      - MINIMUM_GAS_PRICES=0.05uthiol
+      - PRUNING=default
+      - TERPD_P2P_SEEDS=${TERPD_P2P_SEEDS}
+      - TERPD_P2P_PEX=true
+      - TERPD_P2P_PRIVATE_PEER_IDS=${TERPD_P2P_PRIVATE_PEER_IDS}
+      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${TERPD_P2P_UNCONDITIONAL_PEER_IDS}
+      - TERPD_P2P_PERSISTENT_PEERS=${TERPD_P2P_PERSISTENT_PEERS}
+      - FASTSYNC_VERSION=v0
+      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - STATESYNC_RPC_SERVERS=${STATESYNC_RPC_SERVERS}
+      - RPC_DOMAIN=${RPC_DOMAIN_FORWARD_R}
+      - RPC_PORT=${RPC_PORT_FORWARD_R}
+      - API_DOMAIN=${API_DOMAIN_FORWARD_R}
+      - API_PORT=${API_PORT_FORWARD_R}
+      - P2P_DOMAIN=${P2P_DOMAIN_FORWARD_R}
+      - P2P_PORT=${P2P_PORT_FORWARD_R}
+      - GRPC_PORT=${GRPC_PORT_FORWARD_R}
+      - GRPC_DOMAIN=${GRPC_DOMAIN_FORWARD_R}
+      - SSH_PUBKEY=${SSH_PUBKEY}
+profiles:
+  compute:
+    ${LF_SVC}:
+      resources:
+        cpu:
+          units: 4
+        memory:
+          size: 16Gi
+        storage:
+          - size: 60Gi
+    ${RF_SVC}:
+      resources:
+        cpu:
+          units: 4
+        memory:
+          size: 16Gi
+        storage:
+          - size: 60Gi
+  placement:
+    dcloud:
+      pricing:
+        ${LF_SVC}:
+          denom: uact
+          amount: 1000
+        ${RF_SVC}:
+          denom: uact
+          amount: 1000
+      signedBy:
+        anyOf:
+          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
+      attributes:
+        host: akash
+deployment:
+  ${LF_SVC}:
+    dcloud:
+      profile: ${LF_SVC}
+      count: 1
+  ${RF_SVC}:
+    dcloud:
+      profile: ${RF_SVC}
+      count: 1

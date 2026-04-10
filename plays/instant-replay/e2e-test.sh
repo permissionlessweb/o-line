@@ -217,7 +217,7 @@ test_s3_upload_download() {
     echo "=== 4. S3 Upload/Download (oline test-s3) ==="
 
     if [ -z "$OLINE_BIN" ] || [ ! -x "$OLINE_BIN" ]; then
-        skip "oline binary not available — set OLINE_BIN or build plays/oline-sdl"
+        skip "oline binary not available — set OLINE_BIN or build"
         return
     fi
 

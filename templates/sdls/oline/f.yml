@@ -1,0 +1,202 @@
+---
+# ── Phase F: Argus Indexer ────────────────────────────────────────────────────
+# Lightweight cosmos node paired with the Argus state indexer + API.
+#
+# Services:
+#   oline-f-node  — cosmos-omnibus node; only P2P is public. RPC/gRPC are
+#                   internal-only, reachable by oline-f-argus via service name.
+#   oline-f-argus — Argus listener + API server (custom entrypoint via URL).
+#                   Port 3420 exposed as port 80 with accept domain — Akash
+#                   ingress terminates TLS, routes plain HTTP into the container.
+#   oline-f-db    — TimescaleDB (hosts both the data and accounts databases).
+#                   The ARGUS_ENTRYPOINT_URL script must CREATE DATABASE for the
+#                   accounts DB before running migrations (POSTGRES_DB creates
+#                   only the data DB automatically).
+#   oline-f-redis — Redis for caching and job queues.
+#
+# Config:
+#   Argus reads CONFIG_FILE at startup. The ARGUS_ENTRYPOINT_URL script is
+#   responsible for generating/downloading the config.json from the env vars
+#   below, then starting the listener and server.
+# ─────────────────────────────────────────────────────────────────────────────
+version: "2.0"
+services:
+  oline-f-node:
+    image: ${OMNIBUS_IMAGE}
+    expose:
+      # P2P gossip — must be globally reachable for the node to participate.
+      - port: 26656
+        as: 26656
+        to:
+          - global: true
+      # RPC — internal only; Argus listener connects via http://oline-f-node:26657
+      - port: 26657
+        as: 26657
+        to:
+          - service: oline-f-argus
+    env:
+      - MONIKER=${ARGUS_NODE_MONIKER}
+      - CHAIN_ID=${OLINE_CHAIN_ID}
+      - CHAIN_JSON=${OLINE_CHAIN_JSON}
+      - ADDRBOOK_URL=${OLINE_ADDRBOOK_URL}
+      - SNAPSHOT_URL=${OLINE_SNAPSHOT_FULL_URL}
+      - SNAPSHOT_FORMAT=${OLINE_SNAPSHOT_SAVE_FORMAT}
+      - PRUNING=default
+      - MINIMUM_GAS_PRICES=0.05uthiol
+      - FASTSYNC_VERSION=v0
+      - TERPD_P2P_PEX=true
+      - TERPD_P2P_SEEDS=${ARGUS_NODE_SEEDS}
+      - TERPD_P2P_PERSISTENT_PEERS=${ARGUS_NODE_PERSISTENT_PEERS}
+      - STATESYNC_RPC_SERVERS=${STATESYNC_RPC_SERVERS}
+      - WASMVM_PATH=/lib/libwasmvm.x86_64.so
+      - WASMVM_VERSION=v3.0.2
+      - WASMVM_URL=https://github.com/CosmWasm/wasmvm/releases/download/v3.0.2/libwasmvm.x86_64.so
+
+  oline-f-argus:
+    image: ${ARGUS_IMAGE}
+    command:
+      - sh
+    args:
+      - -c
+      # Download and execute the Argus entrypoint script.
+      # The script should: wait for DB/Redis readiness, create the accounts DB,
+      # run migrations (npm run db:init), then start listener + server together.
+      - curl -fsSL ${ARGUS_ENTRYPOINT_URL} -o /tmp/argus-setup.sh; sh /tmp/argus-setup.sh
+    expose:
+      # Argus REST API — Akash ingress terminates TLS, routes to port 3420.
+      # Cloudflare CNAME the accept domain here like the cosmos node domains.
+      - port: 3420
+        as: 80
+        to:
+          - global: true
+        accept:
+${ARGUS_80_ACCEPTS}
+    env:
+      # ── Cosmos node connection ────────────────────────────────────────────────
+      # Argus listener reaches the node via the Akash internal service network.
+      - ARGUS_RPC_URL=http://oline-f-node:26657
+      - ARGUS_BECH32_PREFIX=${ARGUS_BECH32_PREFIX}
+      - ARGUS_CHAIN_ID=${OLINE_CHAIN_ID}
+      # ── PostgreSQL ────────────────────────────────────────────────────────────
+      - ARGUS_DB_HOST=oline-f-db
+      - ARGUS_DB_PORT=5432
+      - ARGUS_DB_DATA_NAME=${ARGUS_DB_DATA_NAME}
+      - ARGUS_DB_ACCOUNTS_NAME=${ARGUS_DB_ACCOUNTS_NAME}
+      - ARGUS_DB_USER=${ARGUS_DB_USER}
+      - ARGUS_DB_PASSWORD=${ARGUS_DB_PASSWORD}
+      # ── Redis ────────────────────────────────────────────────────────────────
+      - ARGUS_REDIS_HOST=oline-f-redis
+      - ARGUS_REDIS_PORT=6379
+
+  oline-f-db:
+    image: timescale/timescaledb:2.18.1-pg17
+    expose:
+      - port: 5432
+        as: 5432
+        to:
+          - service: oline-f-argus
+    env:
+      - POSTGRES_USER=${ARGUS_DB_USER}
+      - POSTGRES_PASSWORD=${ARGUS_DB_PASSWORD}
+      # Creates the data database. Entrypoint script creates the accounts DB.
+      - POSTGRES_DB=${ARGUS_DB_DATA_NAME}
+    params:
+      storage:
+        db-data:
+          mount: /var/lib/postgresql/data
+          readOnly: false
+
+  oline-f-redis:
+    image: redis:7-alpine
+    expose:
+      - port: 6379
+        as: 6379
+        to:
+          - service: oline-f-argus
+    params:
+      storage:
+        redis-data:
+          mount: /data
+          readOnly: false
+
+profiles:
+  compute:
+    oline-f-node:
+      resources:
+        cpu:
+          units: 2
+        memory:
+          size: 8Gi
+        storage:
+          - size: 100Gi
+    oline-f-argus:
+      resources:
+        cpu:
+          units: 2
+        memory:
+          size: 4Gi
+        storage:
+          - size: 20Gi
+    oline-f-db:
+      resources:
+        cpu:
+          units: 2
+        memory:
+          size: 4Gi
+        storage:
+          - size: 10Gi
+          - name: db-data
+            size: 50Gi
+            attributes:
+              persistent: true
+              class: beta3
+    oline-f-redis:
+      resources:
+        cpu:
+          units: 1
+        memory:
+          size: 1Gi
+        storage:
+          - size: 1Gi
+          - name: redis-data
+            size: 5Gi
+            attributes:
+              persistent: true
+              class: beta3
+  placement:
+    dcloud:
+      pricing:
+        oline-f-node:
+          denom: uact
+          amount: 1000
+        oline-f-argus:
+          denom: uact
+          amount: 500
+        oline-f-db:
+          denom: uact
+          amount: 500
+        oline-f-redis:
+          denom: uact
+          amount: 200
+      signedBy:
+        anyOf:
+          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
+      attributes:
+        host: akash
+deployment:
+  oline-f-node:
+    dcloud:
+      profile: oline-f-node
+      count: 1
+  oline-f-argus:
+    dcloud:
+      profile: oline-f-argus
+      count: 1
+  oline-f-db:
+    dcloud:
+      profile: oline-f-db
+      count: 1
+  oline-f-redis:
+    dcloud:
+      profile: oline-f-redis
+      count: 1

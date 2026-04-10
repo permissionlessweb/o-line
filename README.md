@@ -1,52 +1,61 @@
-# O-Line Playbook
+# O-Line
 
-Useful scripts & configurations for setting up public RPC nodes.
+Automated deployment orchestrator for Terp Network sentry node arrays on [Akash Network](https://akash.network).
 
-## What's Included?
+Deploys a full validator protection stack — snapshot node, seed node, MinIO snapshot storage, left/right tackle sentries, and left/right forward (public RPC/API/gRPC) nodes — all coordinated by a single `oline deploy` command.
 
-- **[0-line](./playbook/oline-sdl/README.md):** Sentry node array deployment workflow to minimize surface area of home validators connected to public networks.
-- **[Flea Flicker](./playbook/flea-flicker/README.md):** RPC,API,GRPC,SEED reverse proxy configuration & guide.
-- **[Instant Replay](./playbook/instant-replay/README.md):** minio-ipfs storage layer for distribution of node snapshots
-- **[Scrimmage](./playbook/scrimmage/README.md):** deterministic test scenarios
+```
+[Snapshot]  ──persistent_peer──►  [Left Tackle]  ──private──►  [Validator]
+    │                              [Right Tackle] ──private──►
+    │         ──persistent_peer──►  [Left Forward]  (public RPC/API/gRPC)
+[Seed]       ──seeds────────────►  [Right Forward] (public RPC/API/gRPC)
+[MinIO/IPFS] ──snapshot archive
+```
 
-## TODO
+## Get Started
 
-## Oline
+→ **[QUICKSTART.md](./QUICKSTART.md)** — install, configure, and deploy in one pass.
 
-- use dedicated load-balancer to distribute rpc,api,grpc calls to all oline nodes
-- tmkms step by step
-- automated polling of health of deployment / topping up of escrow
+## Reference
 
-## Snapshot Node
+| Doc | What it covers |
+|-----|---------------|
+| [QUICKSTART.md](./QUICKSTART.md) | Install, `.env` setup, `oline deploy`, SSH access |
+| [docs/cli-reference.md](./docs/cli-reference.md) | All CLI commands with flags |
+| [docs/testing.md](./docs/testing.md) | Test suite — categories, recipes, prerequisites |
+| [docs/refresh.md](./docs/refresh.md) | Day-2 SSH-based node management |
+| [docs/specialists.md](./docs/specialists.md) | Component specialist guide index |
+| [docs/Oline.md](./docs/Oline.md) | Architecture and topology overview |
 
-- script for exporting entire state
+## Architecture
 
-## Snapshot server
+| Phase | Nodes | SDL | Purpose |
+|-------|-------|-----|---------|
+| A — Special Teams | snapshot, seed, minio | `templates/sdls/a/` | Bootstrap data, seed routing, snapshot storage |
+| B — Tackles | left-tackle, right-tackle | `templates/sdls/b/` | Private sentries facing the validator |
+| C — Forwards | left-forward, right-forward | `templates/sdls/c/` | Public RPC/API/gRPC endpoints |
+| E — Relayer | relayer | `templates/sdls/e/` | IBC relaying (optional) |
 
-- serve addressbook
-- updaate metadata.json to include latest url for autoamated download (ensure we have both server & ipfs urls in latest.json )
-  - include server url (snpahost.terp.network && also ipfs gateway url)
-- wrap xml into html web app for displaying available snapshots
-- script for exporting entire state
-- reproducible script to build and store cosmovisor binary
+The `oline` binary orchestrates deployment as a **step machine**: each step performs one unit of work, writes results to shared context, and advances to the next step. The step machine resumes from where it left off if interrupted.
 
-## Relayer
+## Deployment Strategies
 
-- setup ssh logic
-- use ssh to send mnemonic seeed and start service
-- script for using ssh to update config live
+**Parallel (default)** — all 7–8 providers rented simultaneously. HD-derived child accounts (BIP44 `m/44'/118'/0'/0/{index}`) avoid Cosmos sequence-number conflicts. Snapshot distribution fans out to all nodes concurrently via SSH stream relay.
 
-## Indexer
+**Sequential** — phases A → B → C → E, one at a time. Slower but uses a single Akash account.
 
-- ensure configuration is accurate
+```bash
+oline deploy              # parallel (default)
+oline deploy --sequential # sequential
+```
 
-## Extracurricular
+## Development
 
-- PIR: private information retrieval indexer
-- special teams: vpn oline for oline
-- special taems: ephemeral deployments (rotate service provider & location)
-- agent skill for creating variabalized SDL's, and wiring into scripts
+```bash
+cargo build                       # debug
+cargo build --release             # release binary
+just test all                     # unit + nginx + firewall + vpn (no Docker)
+just test full                    # everything (Docker + Akash chain required)
+```
 
-## Disclaimer
-
-This is educational purposes. Dont use this in production envrionment, or if you do be certain you know what you are doing and dont expect it to work as intended just because this awesome github exists.
+See [docs/testing.md](./docs/testing.md) for the full test catalog and prerequisites.

@@ -1,0 +1,65 @@
+---
+version: "2.0"
+services:
+  ${NODE_SVC}:
+    image: ${OMNIBUS_IMAGE}
+    expose:
+      - port: 26656
+        as: 26656
+        to:
+          - global: true
+      - port: 26657
+        as: 26657
+        to:
+          - global: true
+      - port: 1317
+        as: 1317
+        to:
+          - global: true
+      - port: 9090
+        as: 9090
+        to:
+          - global: true
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
+    env:
+      - MONIKER=${NODE_MONIKER}
+      - PROJECT_BIN=akash
+      - CHAIN_JSON=${AKASH_CHAIN_JSON}
+      - MINIMUM_GAS_PRICES=0.025uakt
+      - PRUNING=custom
+      - PRUNING_KEEP_RECENT=1000
+      - PRUNING_INTERVAL=100
+      - SNAPSHOT_URL=${AKASH_SNAPSHOT_URL}
+      - FASTSYNC_VERSION=v0
+      - STATESYNC_SNAPSHOT_INTERVAL=0
+      - ADDRBOOK_URL=${AKASH_ADDRBOOK_URL}
+      - SSH_PUBKEY=${SSH_PUBKEY}
+profiles:
+  compute:
+    ${NODE_SVC}:
+      resources:
+        cpu:
+          units: 2
+        memory:
+          size: 8Gi
+        storage:
+          - size: 100Gi
+  placement:
+    dcloud:
+      pricing:
+        ${NODE_SVC}:
+          denom: uact
+          amount: 1000
+      signedBy:
+        anyOf:
+          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
+      attributes:
+        host: akash
+deployment:
+  ${NODE_SVC}:
+    dcloud:
+      profile: ${NODE_SVC}
+      count: 1

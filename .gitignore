@@ -5,12 +5,24 @@
 .vim
 *.env
 *.tar.gz
+# local e2e snapshot cache (multi-GB, not committed)
+data/*.lz4
+data/*.tar.*
+data/*.zst
 
 */node-data
 node-data
 node_modules
 
-
+deploy-config.json
 target
 vendor
 secrets
+
+tools/*
+.claude
+.team
+.opencode
+data
+plays/coach
+docs

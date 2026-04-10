@@ -1,0 +1,85 @@
+---
+# Minimal Phase B SDL for local Akash dev cluster testing.
+# Service names match production (oline-b-left-tackle, oline-b-right-tackle).
+version: "2.0"
+services:
+  ${LT_SVC}:
+    image: nginx:alpine
+    expose:
+      - port: 80
+        as: 80
+        to:
+          - global: true
+      - port: ${RPC_PORT_TACKLE_L}
+        as: ${RPC_PORT_TACKLE_L}
+        to:
+          - global: true
+      - port: ${P2P_PORT_TACKLE_L}
+        as: ${P2P_PORT_TACKLE_L}
+        to:
+          - global: true
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
+    env:
+      - ROLE=left-tackle-test
+      - SNAPSHOT_MODE=${SNAPSHOT_MODE}
+  ${RT_SVC}:
+    image: nginx:alpine
+    expose:
+      - port: 80
+        as: 80
+        to:
+          - global: true
+      - port: ${RPC_PORT_TACKLE_R}
+        as: ${RPC_PORT_TACKLE_R}
+        to:
+          - global: true
+      - port: ${P2P_PORT_TACKLE_R}
+        as: ${P2P_PORT_TACKLE_R}
+        to:
+          - global: true
+      - port: ${SSH_PORT}
+        as: ${SSH_PORT}
+        to:
+          - global: true
+    env:
+      - ROLE=right-tackle-test
+      - SNAPSHOT_MODE=${SNAPSHOT_MODE}
+profiles:
+  compute:
+    ${LT_SVC}:
+      resources:
+        cpu:
+          units: 0.1
+        memory:
+          size: 128Mi
+        storage:
+          - size: 256Mi
+    ${RT_SVC}:
+      resources:
+        cpu:
+          units: 0.1
+        memory:
+          size: 128Mi
+        storage:
+          - size: 256Mi
+  placement:
+    dcloud:
+      pricing:
+        ${LT_SVC}:
+          denom: uact
+          amount: 100
+        ${RT_SVC}:
+          denom: uact
+          amount: 100
+deployment:
+  ${LT_SVC}:
+    dcloud:
+      profile: ${LT_SVC}
+      count: 1
+  ${RT_SVC}:
+    dcloud:
+      profile: ${RT_SVC}
+      count: 1
