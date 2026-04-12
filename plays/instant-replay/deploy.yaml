@@ -22,10 +22,10 @@ services:
       - "MINIO_ROOT_USER=minioadmin"
       - "MINIO_ROOT_PASSWORD=minioadmin"
       - "MINIO_BUCKET=snapshots"
-      - "MINIO_PORT=9000"
-      - "MINIO_CONSOLE_PORT=9001"
+      - "MINIO_P=9000"
+      - "MINIO_CONSOLE_P=9001"
       # Ports
-      - "IPFS_GATEWAY_PORT=8081"
+      - "IPFS_GATEWAY_P=8081"
       # IPFS
       - "IPFS_PROFILE=server"
       # Auto-pin: scan every 5 minutes for snapshot files

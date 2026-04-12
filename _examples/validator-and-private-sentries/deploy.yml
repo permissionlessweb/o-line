@@ -46,7 +46,7 @@ services:
       - TERPD_P2P_ADDR_BOOK_STRICT=false
       - ADDRBOOK_URL=https://raw.githubusercontent.com/111STAVR111/props/main/Terp/addrbook.json
       - SNAPSHOT_URL=https://snapshots.nodejumper.io/terp/terp_latest.tar.lz4
-      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - STATESYNC_SNAP_INTERVAL=500
       - 
 
     expose:
@@ -74,7 +74,7 @@ services:
       - TERPD_P2P_UNCONDITIONAL_PEER_IDS=<validatorid>
       - TERPD_P2P_ADDR_BOOK_STRICT=false
       - STATESYNC_RPC_SERVERS=<publicnode1:26657,publicnode2:26657>
-      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - STATESYNC_SNAP_INTERVAL=500
     expose:
       - port: 26657
         as: 80

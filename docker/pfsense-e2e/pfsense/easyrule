@@ -1,0 +1,5 @@
+#!/bin/bash
+# Mock easyrule — logs rule additions and applies iptables
+echo "easyrule: $*" >> /var/log/easyrule.log
+sudo /usr/local/sbin/apply_firewall_rules.sh 2>/dev/null
+echo "Rule added."

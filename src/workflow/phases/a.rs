@@ -15,12 +15,12 @@ use crate::{
 use akash_deploy_rs::{AkashBackend, DeployError, DeploymentRecord, DeploymentStore, ProviderAuth};
 use std::{
     env::var,
-    io::{Lines, StdinLock},
+    io::{BufRead, Lines},
 };
 
 pub async fn deploy_special_teams(
     w: &mut OLineWorkflow,
-    lines: &mut Lines<StdinLock<'_>>,
+    lines: &mut Lines<impl BufRead>,
 ) -> Result<StepResult, DeployError> {
     tracing::info!("\n── Phase 1: Deploy Snapshot + Seed nodes ──");
     if !prompt_continue(lines, "Deploy Kickoff (Special Teams)?")
@@ -146,7 +146,7 @@ pub async fn deploy_special_teams(
         .ok();
 
     {
-        let ssh_port_internal: u16 = var("SSH_PORT")
+        let ssh_port_internal: u16 = var("SSH_P")
             .unwrap_or_else(|_| "22".into())
             .parse()
             .unwrap_or(22);
@@ -188,8 +188,8 @@ pub async fn deploy_special_teams(
     // it to each node before signaling bootstrap start.  In production, nodes
     // self-download; the list is empty so push_pre_start_files is a no-op.
     let pre_start_files: Vec<PreStartFile> = {
-        let snapshot_path = std::env::var("E2E_SNAPSHOT_PATH")
-            .or_else(|_| std::env::var("OLINE_PRE_START_SNAPSHOT"))
+        let snapshot_path = std::env::var("E2E_SNAP_PATH")
+            .or_else(|_| std::env::var("OLINE_PRE_START_SNAP"))
             .ok()
             .map(std::path::PathBuf::from)
             .filter(|p| p.exists());
@@ -235,19 +235,19 @@ pub async fn deploy_special_teams(
         for (label, rpc, api, grpc, p2p, p2p_port) in [
             (
                 "Snapshot",
-                "RPC_DOMAIN_SNAPSHOT",
-                "API_DOMAIN_SNAPSHOT",
-                "GRPC_DOMAIN_SNAPSHOT",
-                "P2P_DOMAIN_SNAPSHOT",
-                "P2P_PORT_SNAPSHOT",
+                "RPC_D_SNAP",
+                "API_D_SNAP",
+                "GRPC_D_SNAP",
+                "P2P_D_SNAP",
+                "P2P_P_SNAP",
             ),
             (
                 "Seed    ",
-                "RPC_DOMAIN_SEED",
-                "API_DOMAIN_SEED",
-                "GRPC_DOMAIN_SEED",
-                "P2P_DOMAIN_SEED",
-                "P2P_PORT_SEED",
+                "RPC_D_SEED",
+                "API_D_SEED",
+                "GRPC_D_SEED",
+                "P2P_D_SEED",
+                "P2P_P_SEED",
             ),
         ] {
             let (rpc_d, api_d, grpc_d, p2p_d, p2p_p) =
@@ -385,7 +385,7 @@ pub async fn signal_snapshot_start(w: &mut OLineWorkflow) -> Result<StepResult, 
 
     // Print SSH access for all phase-A nodes before the boot wait
     {
-        let ssh_port: u16 = var("SSH_PORT")
+        let ssh_port: u16 = var("SSH_P")
             .unwrap_or_else(|_| "22".into())
             .parse()
             .unwrap_or(22);
@@ -542,13 +542,13 @@ pub async fn push_files_minio(w: &mut OLineWorkflow) -> Result<StepResult, Deplo
     let snapshot_dl_domain = w
         .ctx
         .a_vars
-        .get("OLINE_SNAPSHOT_DOWNLOAD_DOMAIN")
+        .get("OLINE_SNAP_DOWNLOAD_DOMAIN")
         .map(|s| s.as_str())
         .unwrap_or_default();
 
     if snapshot_dl_domain.is_empty() {
         tracing::info!(
-            "  Note: OLINE_SNAPSHOT_DOWNLOAD_DOMAIN not set — skipping minio pre-start file delivery."
+            "  Note: OLINE_SNAP_DOWNLOAD_DOMAIN not set — skipping minio pre-start file delivery."
         );
     } else {
         let minio_endpoints = w

@@ -40,7 +40,7 @@ http {
     # MinIO console admin UI — accessed directly via Akash NodePort (not via HTTP ingress),
     # so there is no upstream TLS termination. nginx must terminate TLS itself here.
     server {
-        listen ${MINIO_CONSOLE_PORT} ssl;
+        listen ${MINIO_CONSOLE_P} ssl;
         server_name _;
 
         ssl_certificate     ${TLS_CERT};

@@ -14,7 +14,7 @@
 //!   PROVIDER_REST             Akash node REST (default: http://127.0.0.1:1317)
 //!   PROVIDER_MNEMONIC         Provider key mnemonic (required)
 //!   PROVIDER_DEPLOYER_ADDR    Deployer address to watch for orders (optional; bids all if empty)
-//!   PROVIDER_PORT             HTTPS port (default: 8443)
+//!   PROVIDER_P             HTTPS port (default: 8443)
 //!   PROVIDER_HOST_URI         Provider host URI advertised on-chain (default: https://127.0.0.1:8443)
 //!   PROVIDER_BID_PRICE        Bid price in uakt per block (default: 1)
 //!   PROVIDER_BID_DEPOSIT      Bid deposit in uakt (default: 5000000)
@@ -92,7 +92,7 @@ static ACTIVE_DEPLOYMENTS: std::sync::LazyLock<std::sync::Mutex<HashMap<u64, Dep
     std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
 /// Monotonically increasing host port counter for container port allocation.
-static NEXT_HOST_PORT: AtomicU32 = AtomicU32::new(30000);
+static NEXT_HOST_P: AtomicU32 = AtomicU32::new(30000);
 
 /// Returns true if `PROVIDER_SPAWN_CONTAINERS` is set to a truthy value.
 fn spawn_containers_enabled() -> bool {
@@ -189,7 +189,7 @@ impl Config {
             return Err("PROVIDER_MNEMONIC is empty".into());
         }
 
-        let port: u16 = std::env::var("PROVIDER_PORT")
+        let port: u16 = std::env::var("PROVIDER_P")
             .unwrap_or_else(|_| "8443".into())
             .parse()
             .unwrap_or(8443);
@@ -727,7 +727,7 @@ fn build_response(request_line: &str, body: &[u8]) -> (&'static str, String) {
                                 // Allocate host ports for container spawning.
                                 let host_ports: Vec<u32> = ports
                                     .iter()
-                                    .map(|_| NEXT_HOST_PORT.fetch_add(1, Ordering::Relaxed))
+                                    .map(|_| NEXT_HOST_P.fetch_add(1, Ordering::Relaxed))
                                     .collect();
                                 services.push((name.to_string(), ports.clone()));
                                 rich_services.push(ManifestService {

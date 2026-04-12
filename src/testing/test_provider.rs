@@ -91,7 +91,7 @@ impl TestProviderHandle {
             .env("PROVIDER_GRPC", grpc)
             .env("PROVIDER_REST", rest)
             .env("PROVIDER_MNEMONIC", mnemonic)
-            .env("PROVIDER_PORT", port.to_string())
+            .env("PROVIDER_P", port.to_string())
             .env("PROVIDER_HOST_URI", &host_uri)
             .env("PROVIDER_BID_PRICE", "1")
             .env("PROVIDER_BID_DEPOSIT", "5000000")

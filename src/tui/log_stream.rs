@@ -6,13 +6,15 @@ use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 
 use crate::providers::TrustedProviderStore;
+use crate::sessions::OLineSession;
 use crate::workflow::{
     context::OLineContext,
     step::DeployPhase,
 };
+use akash_deploy_rs::AkashBackend;
 
 /// Maximum number of lines retained per service buffer.
-const MAX_LINES: usize = 10_000;
+pub const MAX_LINES: usize = 10_000;
 
 /// Maximum reconnect attempts per collector before giving up.
 const MAX_RECONNECTS: u32 = 10;
@@ -114,18 +116,21 @@ pub fn build_log_targets(ctx: &OLineContext) -> Vec<LogTarget> {
             None => continue,
         };
 
-        let provider = match tp_store.find(&provider_addr) {
-            Some(p) => p,
-            None => {
+        let host_uri = tp_store
+            .find(&provider_addr)
+            .map(|p| p.host_uri.clone())
+            .or_else(|| ctx.provider_hosts.get(&provider_addr).cloned());
+
+        let host = match &host_uri {
+            Some(h) if !h.is_empty() => h.trim_end_matches('/'),
+            _ => {
                 tracing::warn!(
-                    "TUI: provider {} not in trusted store, skipping phase {}",
+                    "TUI: no host_uri for provider {}, skipping phase {}",
                     provider_addr, letter
                 );
                 continue;
             }
         };
-
-        let host = provider.host_uri.trim_end_matches('/');
         let ws_host = host.replace("https://", "wss://");
 
         // Collect unique service names from endpoints
@@ -154,6 +159,152 @@ pub fn build_log_targets(ctx: &OLineContext) -> Vec<LogTarget> {
                 let ws_url = format!(
                     "{}/lease/{}/{}/{}/logs?follow=true&tail=100&service={}",
                     ws_host, dseq, gseq, oseq, svc,
+                );
+                targets.push(LogTarget {
+                    label: format!("{}:{}", letter, svc),
+                    ws_url,
+                    jwt: jwt.clone(),
+                });
+            }
+        }
+    }
+
+    targets
+}
+
+// ── Standalone LogTarget builder ─────────────────────────────────────────────
+
+/// Build a single LogTarget for a service within a deployed phase.
+///
+/// `host_uri` is the provider's HTTPS URI (e.g. "https://provider.akash.network").
+/// The scheme is replaced with `wss://` for the WebSocket connection.
+pub fn make_log_target(
+    label: &str,
+    host_uri: &str,
+    dseq: u64,
+    gseq: u32,
+    oseq: u32,
+    service_name: &str,
+    jwt: &str,
+) -> LogTarget {
+    let host = host_uri.trim_end_matches('/');
+    let ws_host = host.replace("https://", "wss://");
+
+    let ws_url = if service_name.is_empty() {
+        format!(
+            "{}/lease/{}/{}/{}/logs?follow=true&tail=100",
+            ws_host, dseq, gseq, oseq,
+        )
+    } else {
+        format!(
+            "{}/lease/{}/{}/{}/logs?follow=true&tail=100&service={}",
+            ws_host, dseq, gseq, oseq, service_name,
+        )
+    };
+
+    LogTarget {
+        label: label.to_string(),
+        ws_url,
+        jwt: jwt.to_string(),
+    }
+}
+
+// ── Session-based LogTarget builder ──────────────────────────────────────────
+
+/// Build log targets from a persisted session without requiring an OLineContext.
+///
+/// For each deployment entry in the session, resolves the provider host_uri
+/// (from TrustedProviderStore or on-chain query), generates a JWT, and builds
+/// one LogTarget per service (or a single unfiltered target if no services recorded).
+pub async fn build_log_targets_from_session<B: AkashBackend>(
+    session: &OLineSession,
+    client: &B,
+) -> Vec<LogTarget> {
+    let tp_store = TrustedProviderStore::open(TrustedProviderStore::default_path());
+    let mut targets = Vec::new();
+
+    let phase_letter = |phase: &str| -> &str {
+        match phase {
+            "special-teams" => "A",
+            "tackles" => "B",
+            "forwards" => "C",
+            "relayer" => "E",
+            _ => "?",
+        }
+    };
+
+    // Generate JWT once for the session's master address.
+    let jwt = match client.generate_jwt(&session.master_address).await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("Failed to generate JWT for session {}: {}", session.id, e);
+            return targets;
+        }
+    };
+
+    for dep in &session.deployments {
+        if dep.dseq == 0 {
+            continue;
+        }
+        let provider_addr = match &dep.provider {
+            Some(p) if !p.is_empty() => p,
+            _ => continue,
+        };
+
+        let letter = phase_letter(&dep.phase);
+
+        // Resolve host_uri: trusted store first, then on-chain query fallback.
+        let host_uri = tp_store
+            .find(provider_addr)
+            .map(|p| p.host_uri.clone())
+            .or_else(|| {
+                // Attempt on-chain lookup — this is a synchronous context check,
+                // so we do a blocking-compatible approach via the already-known data.
+                None
+            });
+
+        // If not in trusted store, try on-chain query.
+        let host_uri = match host_uri {
+            Some(h) => h,
+            None => {
+                match client.query_provider_info(provider_addr).await {
+                    Ok(Some(info)) => info.host_uri,
+                    Ok(None) => {
+                        tracing::warn!(
+                            "TUI reconnect: provider {} not found on-chain, skipping phase {}",
+                            provider_addr, letter
+                        );
+                        continue;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "TUI reconnect: failed to query provider {}: {}, skipping phase {}",
+                            provider_addr, e, letter
+                        );
+                        continue;
+                    }
+                }
+            }
+        };
+
+        let host = host_uri.trim_end_matches('/');
+        let ws_host = host.replace("https://", "wss://");
+
+        if dep.services.is_empty() {
+            let ws_url = format!(
+                "{}/lease/{}/{}/{}/logs?follow=true&tail=100",
+                ws_host, dep.dseq, dep.gseq, dep.oseq,
+            );
+            targets.push(LogTarget {
+                label: format!("{}:{}", letter, dep.phase),
+                ws_url,
+                jwt: jwt.clone(),
+            });
+        } else {
+            for svc in &dep.services {
+                let ws_url = format!(
+                    "{}/lease/{}/{}/{}/logs?follow=true&tail=100&service={}",
+                    ws_host, dep.dseq, dep.gseq, dep.oseq, svc,
                 );
                 targets.push(LogTarget {
                     label: format!("{}:{}", letter, svc),
@@ -216,7 +367,7 @@ pub fn spawn_log_collectors(
 
 /// Connect to a single WS endpoint, forward text messages to `tx`.
 /// Returns `Ok(())` on clean close, `Err` on error.
-async fn connect_and_stream(
+pub async fn connect_and_stream(
     ws_url: &str,
     jwt: &str,
     service_index: usize,

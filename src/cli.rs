@@ -32,7 +32,7 @@ pub fn redact_if_secret(env_var: &str, value: &str) -> String {
 
 // ── Interactive helpers ──
 pub fn prompt_continue(
-    lines: &mut io::Lines<io::StdinLock<'_>>,
+    lines: &mut io::Lines<impl io::BufRead>,
     question: &str,
 ) -> Result<bool, io::Error> {
     if std::env::var("OLINE_NON_INTERACTIVE").is_ok() {
@@ -47,7 +47,7 @@ pub fn prompt_continue(
 }
 
 pub fn read_input(
-    lines: &mut io::Lines<io::StdinLock<'_>>,
+    lines: &mut io::Lines<impl io::BufRead>,
     prompt: &str,
     default: Option<&str>,
 ) -> Result<String, io::Error> {
@@ -89,7 +89,7 @@ pub fn read_secret_input(prompt: &str, default: Option<&str>) -> Result<String, 
 }
 
 pub fn prompt_s3_creds(
-    lines: &mut io::Lines<io::StdinLock<'_>>,
+    lines: &mut io::Lines<impl io::BufRead>,
 ) -> Result<(String, String, String, String), Box<dyn Error>> {
     let s3_key = read_secret_input("S3 access key", None)?;
     let s3_secret = read_secret_input("S3 secret key", None)?;
@@ -162,7 +162,7 @@ pub fn parse_override_numbers(input: &str, max: usize) -> std::collections::Hash
 /// Prompt the user for which fields to override (by number).
 /// Returns an empty set if OLINE_NON_INTERACTIVE is set (accept all defaults).
 pub fn read_override_selection(
-    lines: &mut io::Lines<io::StdinLock<'_>>,
+    lines: &mut io::Lines<impl io::BufRead>,
 ) -> Result<std::collections::HashSet<usize>, io::Error> {
     if std::env::var("OLINE_NON_INTERACTIVE").is_ok() {
         return Ok(std::collections::HashSet::new());

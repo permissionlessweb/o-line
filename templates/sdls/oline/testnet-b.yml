@@ -4,20 +4,20 @@ services:
   ${LT_SVC}:
     image: ${OMNIBUS_IMAGE}
     expose:
-      - port: ${P2P_PORT_TACKLE_L}
-        as: ${P2P_PORT_TACKLE_L}
+      - port: ${P2P_P_TL}
+        as: ${P2P_P_TL}
         to:
           - global: true
-      - port: ${RPC_PORT_TACKLE_L}
-        as: ${RPC_PORT_TACKLE_L}
+      - port: ${RPC_P_TL}
+        as: ${RPC_P_TL}
         to:
           - global: true
-      - port: ${API_PORT_TACKLE_L}
-        as: ${API_PORT_TACKLE_L}
+      - port: ${API_P_TL}
+        as: ${API_P_TL}
         to:
           - global: true
-      - port: ${GRPC_PORT_TACKLE_L}
-        as: ${GRPC_PORT_TACKLE_L}
+      - port: ${GRPC_P_TL}
+        as: ${GRPC_P_TL}
         to:
           - global: true
       - port: 80
@@ -26,8 +26,8 @@ services:
           - global: true
         accept:
 ${LT_80_ACCEPTS}
-      - port: ${SSH_PORT}
-        as: ${SSH_PORT}
+      - port: ${SSH_P}
+        as: ${SSH_P}
         to:
           - global: true
     env:
@@ -40,37 +40,37 @@ ${LT_80_ACCEPTS}
       - PRUNING=default
       - TERPD_P2P_PEX=false
       - FASTSYNC_VERSION=v0
-      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - STATESYNC_SNAP_INTERVAL=500
       - STATESYNC_RPC_SERVERS=${STATESYNC_RPC_SERVERS}
       - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${TERPD_P2P_UNCONDITIONAL_PEER_IDS}
       - TERPD_P2P_PERSISTENT_PEERS=${TERPD_P2P_PERSISTENT_PEERS}
       - TERPD_P2P_PRIVATE_PEER_IDS=${TERPD_P2P_PRIVATE_PEER_IDS}
-      - RPC_DOMAIN=${RPC_DOMAIN_TACKLE_L}
-      - RPC_PORT=${RPC_PORT_TACKLE_L}
-      - API_DOMAIN=${API_DOMAIN_TACKLE_L}
-      - API_PORT=${API_PORT_TACKLE_L}
-      - P2P_DOMAIN=${P2P_DOMAIN_TACKLE_L}
-      - P2P_PORT=${P2P_PORT_TACKLE_L}
-      - GRPC_PORT=${GRPC_PORT_TACKLE_L}
-      - GRPC_DOMAIN=${GRPC_DOMAIN_TACKLE_L}
+      - RPC_DOMAIN=${RPC_D_TL}
+      - RPC_P=${RPC_P_TL}
+      - API_D=${API_D_TL}
+      - API_P=${API_P_TL}
+      - P2P_D=${P2P_D_TL}
+      - P2P_P=${P2P_P_TL}
+      - GRPC_P=${GRPC_P_TL}
+      - GRPC_D=${GRPC_D_TL}
       - SSH_PUBKEY=${SSH_PUBKEY}
   ${RT_SVC}:
     image: ${OMNIBUS_IMAGE}
     expose:
-      - port: ${P2P_PORT_TACKLE_R}
-        as: ${P2P_PORT_TACKLE_R}
+      - port: ${P2P_P_TACKLE_R}
+        as: ${P2P_P_TACKLE_R}
         to:
           - global: true
-      - port: ${RPC_PORT_TACKLE_R}
-        as: ${RPC_PORT_TACKLE_R}
+      - port: ${RPC_P_TACKLE_R}
+        as: ${RPC_P_TACKLE_R}
         to:
           - global: true
-      - port: ${API_PORT_TACKLE_R}
-        as: ${API_PORT_TACKLE_R}
+      - port: ${API_P_TACKLE_R}
+        as: ${API_P_TACKLE_R}
         to:
           - global: true
-      - port: ${GRPC_PORT_TACKLE_R}
-        as: ${GRPC_PORT_TACKLE_R}
+      - port: ${GRPC_P_TACKLE_R}
+        as: ${GRPC_P_TACKLE_R}
         to:
           - global: true
       - port: 80
@@ -79,8 +79,8 @@ ${LT_80_ACCEPTS}
           - global: true
         accept:
 ${RT_80_ACCEPTS}
-      - port: ${SSH_PORT}
-        as: ${SSH_PORT}
+      - port: ${SSH_P}
+        as: ${SSH_P}
         to:
           - global: true
     env:
@@ -93,19 +93,19 @@ ${RT_80_ACCEPTS}
       - PRUNING=default
       - TERPD_P2P_PEX=false
       - FASTSYNC_VERSION=v0
-      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - STATESYNC_SNAP_INTERVAL=500
       - STATESYNC_RPC_SERVERS=${STATESYNC_RPC_SERVERS}
       - TERPD_P2P_PRIVATE_PEER_IDS=${TERPD_P2P_PRIVATE_PEER_IDS}
       - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${TERPD_P2P_UNCONDITIONAL_PEER_IDS}
       - TERPD_P2P_PERSISTENT_PEERS=${TERPD_P2P_PERSISTENT_PEERS}
-      - RPC_DOMAIN=${RPC_DOMAIN_TACKLE_R}
-      - RPC_PORT=${RPC_PORT_TACKLE_R}
-      - API_DOMAIN=${API_DOMAIN_TACKLE_R}
-      - API_PORT=${API_PORT_TACKLE_R}
-      - P2P_DOMAIN=${P2P_DOMAIN_TACKLE_R}
-      - P2P_PORT=${P2P_PORT_TACKLE_R}
-      - GRPC_PORT=${GRPC_PORT_TACKLE_R}
-      - GRPC_DOMAIN=${GRPC_DOMAIN_TACKLE_R}
+      - RPC_DOMAIN=${RPC_D_TR}
+      - RPC_P=${RPC_P_TACKLE_R}
+      - API_D=${API_D_TR}
+      - API_P=${API_P_TACKLE_R}
+      - P2P_D=${P2P_D_TACKLE_R}
+      - P2P_P=${P2P_P_TACKLE_R}
+      - GRPC_P=${GRPC_P_TACKLE_R}
+      - GRPC_D=${GRPC_D_TR}
       - SSH_PUBKEY=${SSH_PUBKEY}
 profiles:
   compute:

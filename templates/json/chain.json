@@ -1,0 +1,147 @@
+{
+  "$schema": "../chain.schema.json",
+  "chain_name": "terpnetwork",
+  "status": "live",
+  "network_type": "mainnet",
+  "pretty_name": "Terp-Network",
+  "chain_type": "cosmos",
+  "chain_id": "morocco-1",
+  "bech32_prefix": "terp",
+  "slip44": 118,
+  "daemon_name": "terp",
+  "node_home": "$HOME/.terpd",
+  "codebase": {
+    "git_repo": "https://github.com/terpnetwork/terp-core.git",
+    "genesis": {
+      "genesis_url": "https://raw.githubusercontent.com/terpnetwork/networks/main/mainnet/morocco-1/genesis.json"
+    },
+    "recommended_version": "v5.1.0",
+    "compatible_versions": [
+      "v5.1.0"
+    ],
+    "consensus": {
+      "type": "cometbft",
+      "version": "0.38.21"
+    },
+    "binaries": {
+      "linux/amd64": "https://github.com/terpnetwork/terp-core/releases/download/v5.1.0/terpd-linux-amd64",
+      "linux/arm64": "https://github.com/terpnetwork/terp-core/releases/download/v5.1.0/terpd-linux-arm64"
+    }
+  },
+  "fees": {
+    "fee_tokens": [
+      {
+        "denom": "uthiol",
+        "fixed_min_gas_price": 0.05
+      }
+    ]
+  },
+  "staking": {
+    "staking_tokens": [
+      {
+        "denom": "uterp"
+      }
+    ]
+  },
+  "logo_URIs": {
+    "png": "https://raw.githubusercontent.com/cosmos/chain-registry/master/terpnetwork/images/terp.png"
+  },
+  "peers": {
+    "seeds": [
+      {
+        "id": "tbd",
+        "address": "seed.terp.network:26656",
+        "provider": "TerpNET Foundation"
+      },
+      {
+        "id": "5f5cfac5c38506fbb4275c19e87c4107ec48808d",
+        "address": "seeds.nodex.one:10410",
+        "provider": "nodex.one"
+      },
+      {
+        "id": "8542cd7e6bf9d260fef543bc49e59be5a3fa9074",
+        "address": "seed.publicnode.com:26656",
+        "provider": "Allnodes ⚡️ Nodes & Staking"
+      }
+    ],
+    "persistent_peers": [
+      {
+        "id": "58e01ab84eb931a82a024324520021d2e075ec67",
+        "address": "185.248.24.16:29656",
+        "provider": "zelivsky | apollo"
+      },
+      {
+        "id": "b04c5acab1c821b95f26662d8ebb7ccd4a39e97f",
+        "address": "144.76.97.251:34656",
+        "provider": "AlxVoy | Anode"
+      }
+    ]
+  },
+  "apis": {
+    "rpc": [
+      {
+        "address": "https://rpc-mainnet.terp.network:443",
+        "provider": "TerpNet Foundation"
+      },
+      {
+        "address": "https://terp.rpc.nodex.one:443",
+        "provider": "nodex.one"
+      },
+      {
+        "address": "https://terp.rpc.m.anode.team:443",
+        "provider": "anode.team"
+      }
+    ],
+    "rest": [
+      {
+        "address": "https://terp.api.m.anode.team:443",
+        "provider": "Anode Team"
+      },
+      {
+        "address": "https://terp.api.nodex.one:443",
+        "provider": "nodex.one"
+      },
+      {
+        "address": "https://terp.api.m.stavr.tech",
+        "provider": "🔥STAVR🔥"
+      },
+      {
+        "address": "http://185.248.24.16:29657",
+        "provider": "Zelivsky | Apollo"
+      }
+    ],
+    "grpc": [
+      {
+        "address": "grpc-mainnet.terp.network.io:443",
+        "provider": "TerpNet Foundation"
+      },
+      {
+        "address": "https://terp.grpc.nodex.one:443",
+        "provider": "nodex.one"
+      },
+      {
+        "address": "http://terp.grpc.m.anode.team",
+        "provider": "Anode Team"
+      }
+    ]
+  },
+  "explorers": [
+    {
+      "kind": "ping.pub",
+      "url": "https://ping.pub/terp",
+      "tx_page": "https://ping.pub/terp/tx/${txHash}",
+      "account_page": "https://ping.pub/terp/account/{$accountAddress}"
+    },
+    {
+      "kind": "🔥STAVR🔥",
+      "url": "https://explorer.stavr.tech/Terp-Mainnet",
+      "tx_page": "https://explorer.stavr.tech/Terp-Mainnet/tx/${txHash}",
+      "account_page": "https://explorer.stavr.tech/Terp-Mainnet/account/{$accountAddress}"
+    }
+  ],
+  "images": [
+    {
+      "png": "https://raw.githubusercontent.com/cosmos/chain-registry/master/terpnetwork/images/terp.png"
+    }
+  ]
+}

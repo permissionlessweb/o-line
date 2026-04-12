@@ -4,20 +4,20 @@ services:
   ${LF_SVC}:
     image: ${OMNIBUS_IMAGE}
     expose:
-      - port: ${P2P_PORT_FORWARD_L}
-        as: ${P2P_PORT_FORWARD_L}
+      - port: ${P2P_P_FL}
+        as: ${P2P_P_FL}
         to:
           - global: true
-      - port: ${RPC_PORT_FORWARD_L}
-        as: ${RPC_PORT_FORWARD_L}
+      - port: ${RPC_P_FL}
+        as: ${RPC_P_FL}
         to:
           - global: true
-      - port: ${API_PORT_FORWARD_L}
-        as: ${API_PORT_FORWARD_L}
+      - port: ${API_P_FL}
+        as: ${API_P_FL}
         to:
           - global: true
-      - port: ${GRPC_PORT_FORWARD_L}
-        as: ${GRPC_PORT_FORWARD_L}
+      - port: ${GRPC_P_FL}
+        as: ${GRPC_P_FL}
         to:
           - global: true
       - port: 80
@@ -26,12 +26,12 @@ services:
           - global: true
         accept:
 ${LF_80_ACCEPTS}
-      - port: ${SSH_PORT}
-        as: ${SSH_PORT}
+      - port: ${SSH_P}
+        as: ${SSH_P}
         to:
           - global: true
     env:
-      - MONIKER=${LEFT_FORWARD_MONIKER}
+      - MONIKER=${LEFT_FMONIKER}
       - PROJECT_BIN=${OLINE_BINARY}
       - CHAIN_JSON=${OLINE_CHAIN_JSON}
       - CHAIN_ID=${TESTNET_CHAIN_ID}
@@ -44,34 +44,34 @@ ${LF_80_ACCEPTS}
       - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${TERPD_P2P_UNCONDITIONAL_PEER_IDS}
       - TERPD_P2P_PERSISTENT_PEERS=${TERPD_P2P_PERSISTENT_PEERS}
       - FASTSYNC_VERSION=v0
-      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - STATESYNC_SNAP_INTERVAL=500
       - STATESYNC_RPC_SERVERS=${STATESYNC_RPC_SERVERS}
-      - RPC_DOMAIN=${RPC_DOMAIN_FORWARD_L}
-      - RPC_PORT=${RPC_PORT_FORWARD_L}
-      - API_DOMAIN=${API_DOMAIN_FORWARD_L}
-      - API_PORT=${API_PORT_FORWARD_L}
-      - P2P_DOMAIN=${P2P_DOMAIN_FORWARD_L}
-      - P2P_PORT=${P2P_PORT_FORWARD_L}
-      - GRPC_PORT=${GRPC_PORT_FORWARD_L}
-      - GRPC_DOMAIN=${GRPC_DOMAIN_FORWARD_L}
+      - RPC_DOMAIN=${RPC_D_FL}
+      - RPC_P=${RPC_P_FL}
+      - API_D=${API_D_FL}
+      - API_P=${API_P_FL}
+      - P2P_D=${P2P_D_FL}
+      - P2P_P=${P2P_P_FL}
+      - GRPC_P=${GRPC_P_FL}
+      - GRPC_D=${GRPC_D_FL}
       - SSH_PUBKEY=${SSH_PUBKEY}
   ${RF_SVC}:
     image: ${OMNIBUS_IMAGE}
     expose:
-      - port: ${P2P_PORT_FORWARD_R}
-        as: ${P2P_PORT_FORWARD_R}
+      - port: ${P2P_P_FR}
+        as: ${P2P_P_FR}
         to:
           - global: true
-      - port: ${RPC_PORT_FORWARD_R}
-        as: ${RPC_PORT_FORWARD_R}
+      - port: ${RPC_P_FR}
+        as: ${RPC_P_FR}
         to:
           - global: true
-      - port: ${API_PORT_FORWARD_R}
-        as: ${API_PORT_FORWARD_R}
+      - port: ${API_P_FR}
+        as: ${API_P_FR}
         to:
           - global: true
-      - port: ${GRPC_PORT_FORWARD_R}
-        as: ${GRPC_PORT_FORWARD_R}
+      - port: ${GRPC_P_FR}
+        as: ${GRPC_P_FR}
         to:
           - global: true
       - port: 80
@@ -80,12 +80,12 @@ ${LF_80_ACCEPTS}
           - global: true
         accept:
 ${RF_80_ACCEPTS}
-      - port: ${SSH_PORT}
-        as: ${SSH_PORT}
+      - port: ${SSH_P}
+        as: ${SSH_P}
         to:
           - global: true
     env:
-      - MONIKER=${RIGHT_FORWARD_MONIKER}
+      - MONIKER=${RIGHT_FMONIKER}
       - PROJECT_BIN=${OLINE_BINARY}
       - CHAIN_JSON=${OLINE_CHAIN_JSON}
       - CHAIN_ID=${TESTNET_CHAIN_ID}
@@ -98,16 +98,16 @@ ${RF_80_ACCEPTS}
       - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${TERPD_P2P_UNCONDITIONAL_PEER_IDS}
       - TERPD_P2P_PERSISTENT_PEERS=${TERPD_P2P_PERSISTENT_PEERS}
       - FASTSYNC_VERSION=v0
-      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - STATESYNC_SNAP_INTERVAL=500
       - STATESYNC_RPC_SERVERS=${STATESYNC_RPC_SERVERS}
-      - RPC_DOMAIN=${RPC_DOMAIN_FORWARD_R}
-      - RPC_PORT=${RPC_PORT_FORWARD_R}
-      - API_DOMAIN=${API_DOMAIN_FORWARD_R}
-      - API_PORT=${API_PORT_FORWARD_R}
-      - P2P_DOMAIN=${P2P_DOMAIN_FORWARD_R}
-      - P2P_PORT=${P2P_PORT_FORWARD_R}
-      - GRPC_PORT=${GRPC_PORT_FORWARD_R}
-      - GRPC_DOMAIN=${GRPC_DOMAIN_FORWARD_R}
+      - RPC_DOMAIN=${RPC_D_FR}
+      - RPC_P=${RPC_P_FR}
+      - API_D=${API_D_FR}
+      - API_P=${API_P_FR}
+      - P2P_D=${P2P_D_FR}
+      - P2P_P=${P2P_P_FR}
+      - GRPC_P=${GRPC_P_FR}
+      - GRPC_D=${GRPC_D_FR}
       - SSH_PUBKEY=${SSH_PUBKEY}
 profiles:
   compute:

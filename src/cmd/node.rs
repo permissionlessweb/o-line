@@ -159,7 +159,7 @@ async fn cmd_node_deploy() -> Result<(), Box<dyn Error>> {
     let grpc_ep = OLineDeployer::find_endpoint_by_internal_port(&endpoints, label, 9090);
     let rest_ep = OLineDeployer::find_endpoint_by_internal_port(&endpoints, label, 1317);
     let ssh_ep = {
-        let ssh_port: u16 = std::env::var("SSH_PORT")
+        let ssh_port: u16 = std::env::var("SSH_P")
             .unwrap_or_else(|_| "22".into())
             .parse()
             .unwrap_or(22);
@@ -340,8 +340,8 @@ fn build_node_vars(config: &OLineConfig) -> HashMap<String, String> {
     );
 
     vars.insert(
-        "AKASH_SNAPSHOT_URL".into(),
-        std::env::var("AKASH_SNAPSHOT_URL").unwrap_or_default(),
+        "AKASH_SNAP_URL".into(),
+        std::env::var("AKASH_SNAP_URL").unwrap_or_default(),
     );
 
     vars.insert(

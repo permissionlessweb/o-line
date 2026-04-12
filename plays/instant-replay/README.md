@@ -48,9 +48,9 @@ curl -O http://localhost:9000/snapshots/snapshot.tar.gz
 | `MINIO_ROOT_PASSWORD` | `minioadmin` | MinIO admin password (S3 secret key) |
 | `MINIO_BUCKET` | `snapshots` | Bucket created on first startup |
 | `MINIO_ENABLED` | `true` | Set `false` to disable MinIO entirely |
-| `MINIO_PORT` | `9000` | S3 API listen port |
-| `MINIO_CONSOLE_PORT` | `9001` | Web console listen port |
-| `IPFS_GATEWAY_PORT` | `8081` | IPFS HTTP gateway port |
+| `MINIO_P` | `9000` | S3 API listen port |
+| `MINIO_CONSOLE_P` | `9001` | Web console listen port |
+| `IPFS_GATEWAY_P` | `8081` | IPFS HTTP gateway port |
 | `IPFS_PROFILE` | `server` | Kubo init profile (`server`, `lowpower`) |
 | `AUTOPIN_INTERVAL` | `300` | Seconds between auto-pin scans of the bucket |
 | `AUTOPIN_PATTERNS` | `*.tar.gz,*.tar.zst,*.tar.lz4,*.tar.xz` | Glob patterns to auto-pin from MinIO |

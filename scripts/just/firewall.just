@@ -21,7 +21,7 @@ pfsense *args:
 #   PF_LAN          — pfSense LAN/host IP         [192.168.1.1]
 #   PF_USER         — pfSense SSH user             [admin]
 #   PF_KEY          — SSH key for pfSense access   [~/.ssh/oline-server OR ~/.ssh/oline-client]
-#   PF_PORT         — pfSense SSH port             [22]
+#   PF_P         — pfSense SSH port             [22]
 #   CLIENT_KEY      — client SSH key (embedded in generated config)  [~/.ssh/oline-client]
 #   PROXY_TARGET    — USER@IP to reach via ProxyJump  [rhonine@123.456.1.123]
 #   TUNNELS         — space-separated LOCAL:HOST:PORT
@@ -47,7 +47,7 @@ pfsense-connect:
         --client-ip "$CLIENT_IP"
         --client-key "${CLIENT_KEY:-~/.ssh/oline-client}"
     )
-    [[ -n "${PF_PORT:-}" ]] && args+=(-p "$PF_PORT")
+    [[ -n "${PF_P:-}" ]] && args+=(-p "$PF_P")
     [[ -n "${PROXY_TARGET:-}" ]] && args+=(--proxy "$PROXY_TARGET")
     [[ -n "${STATIC_IP:-}" ]] && args+=(--static-ip "$STATIC_IP")
     [[ -n "${CLIENT_USER:-}" ]] && args+=(--client-user "$CLIENT_USER")
@@ -68,7 +68,7 @@ pfsense-reset:
     bash plays/audible/pfsense-bootstrap.sh \
         "${PF_USER:-admin}@${PF_LAN:-192.168.1.1}" \
         -i "${PF_KEY:-$HOME/.ssh/oline-server}" \
-        ${PF_PORT:+-p $PF_PORT} \
+        ${PF_P:+-p $PF_P} \
         --reset
 
 # Change pfSense LAN subnet (fixes WAN/LAN collision).
@@ -82,7 +82,7 @@ pfsense-resubnet:
     bash plays/audible/pfsense-bootstrap.sh \
         "${PF_USER:-admin}@${PF_LAN:-192.168.1.1}" \
         -i "${PF_KEY:-$HOME/.ssh/oline-server}" \
-        ${PF_PORT:+-p $PF_PORT} \
+        ${PF_P:+-p $PF_P} \
         --resubnet "$NEW_LAN"
 
 # ── Service Exposure ─────────────────────────────────────────────────────────

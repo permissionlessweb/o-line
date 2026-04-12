@@ -10,16 +10,16 @@ services:
         as: 80
         to:
           - global: true
-      - port: ${RPC_PORT_FORWARD_L}
-        as: ${RPC_PORT_FORWARD_L}
+      - port: ${RPC_P_FL}
+        as: ${RPC_P_FL}
         to:
           - global: true
-      - port: ${P2P_PORT_FORWARD_L}
-        as: ${P2P_PORT_FORWARD_L}
+      - port: ${P2P_P_FL}
+        as: ${P2P_P_FL}
         to:
           - global: true
-      - port: ${SSH_PORT}
-        as: ${SSH_PORT}
+      - port: ${SSH_P}
+        as: ${SSH_P}
         to:
           - global: true
     env:
@@ -32,16 +32,16 @@ services:
         as: 80
         to:
           - global: true
-      - port: ${RPC_PORT_FORWARD_R}
-        as: ${RPC_PORT_FORWARD_R}
+      - port: ${RPC_P_FR}
+        as: ${RPC_P_FR}
         to:
           - global: true
-      - port: ${P2P_PORT_FORWARD_R}
-        as: ${P2P_PORT_FORWARD_R}
+      - port: ${P2P_P_FR}
+        as: ${P2P_P_FR}
         to:
           - global: true
-      - port: ${SSH_PORT}
-        as: ${SSH_PORT}
+      - port: ${SSH_P}
+        as: ${SSH_P}
         to:
           - global: true
     env:

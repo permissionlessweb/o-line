@@ -6,12 +6,13 @@ ghcr_image             := "ghcr.io/permissionlessweb/minio-ipfs"
 dh_image               := "docker.io/permissionlessweb/minio-ipfs"
 
 oline_omnibus_version  := "v0.2.0"
-ghcr_omnibus           := "ghcr.io/permissionlessweb/oline-omnibus"
-dh_omnibus             := "docker.io/permissionlessweb/oline-omnibus"
+ghcr_omnibus           := "ghcr.io/akash-network/cosmos-omnibus"
+dh_omnibus             := "docker.io/akash-network/cosmos-omnibus"
 
 # ── Imports ──────────────────────────────────────────────────────────────────
 import 'scripts/just/build.just'
 import 'scripts/just/minio.just'
+import 'scripts/just/localterp.just'
 import 'scripts/just/akash.just'
 import 'scripts/just/remote.just'
 import 'scripts/just/firewall.just'

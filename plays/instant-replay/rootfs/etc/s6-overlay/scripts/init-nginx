@@ -8,22 +8,55 @@ if [ "$NGINX_ENABLED" != "true" ]; then
     exit 0
 fi
 
+# ── Sites mode: multi-domain port-80 routing (no TLS certs needed) ──────────
+if [ -n "${SITES_GATEWAY_DOMAIN:-}" ]; then
+    echo "[init-nginx] Sites mode: gateway=${SITES_GATEWAY_DOMAIN}"
+    export MINIO_CONSOLE_INTERNAL_P="${MINIO_CONSOLE_INTERNAL_P:-9002}"
+    export SITES_S3_DOMAIN="${SITES_S3_DOMAIN:-s3-${SITES_GATEWAY_DOMAIN}}"
+    export SITES_CONSOLE_DOMAIN="${SITES_CONSOLE_DOMAIN:-console-${SITES_GATEWAY_DOMAIN}}"
+    export SNAPSHOT_DOWNLOAD_DOMAIN="${SNAPSHOT_DOWNLOAD_DOMAIN:-_disabled}"
+
+    # SSH setup for SFTP file delivery
+    if [ -n "${SSH_PUBKEY:-}" ]; then
+        mkdir -p /root/.ssh
+        echo "${SSH_PUBKEY}" >> /root/.ssh/authorized_keys
+        chmod 600 /root/.ssh/authorized_keys
+        if ! command -v sshd >/dev/null 2>&1; then
+            apk add --no-cache openssh >/dev/null 2>&1 || true
+        fi
+        SSHD_BIN=$(command -v sshd 2>/dev/null) || true
+        if [ -n "$SSHD_BIN" ]; then
+            mkdir -p /run/sshd /var/run/sshd
+            ssh-keygen -A >/dev/null 2>&1 || true
+            printf '\nPermitRootLogin yes\nPubkeyAuthentication yes\n' >> /etc/ssh/sshd_config
+            "$SSHD_BIN" -D &
+            echo "[init-nginx] sshd started"
+        fi
+    fi
+
+    envsubst '${SITES_GATEWAY_DOMAIN} ${SITES_S3_DOMAIN} ${SITES_CONSOLE_DOMAIN} ${SNAPSHOT_DOWNLOAD_DOMAIN} ${MINIO_CONSOLE_INTERNAL_P}' \
+        < /etc/nginx/nginx-sites.conf.template \
+        > /etc/nginx/nginx.conf
+    echo "[init-nginx] Done (sites mode)"
+    exit 0
+fi
+
 if [ -z "${SNAPSHOT_DOWNLOAD_DOMAIN}" ]; then
     echo "[init-nginx] SNAPSHOT_DOWNLOAD_DOMAIN not set — skipping"
     exit 0
 fi
 
-MINIO_PORT="${MINIO_PORT:-9000}"
-# Console: nginx listens on MINIO_CONSOLE_PORT (9001) over HTTPS and proxies to
-# MINIO_CONSOLE_INTERNAL_PORT (9002) where minio console actually runs.
-MINIO_CONSOLE_INTERNAL_PORT="${MINIO_CONSOLE_INTERNAL_PORT:-9002}"
-export MINIO_BACKEND="localhost:${MINIO_PORT}"
-export MINIO_CONSOLE_BACKEND="localhost:${MINIO_CONSOLE_INTERNAL_PORT}"
-export MINIO_CONSOLE_PORT="${MINIO_CONSOLE_PORT:-9001}"
+MINIO_P="${MINIO_P:-9000}"
+# Console: nginx listens on MINIO_CONSOLE_P (9001) over HTTPS and proxies to
+# MINIO_CONSOLE_INTERNAL_P (9002) where minio console actually runs.
+MINIO_CONSOLE_INTERNAL_P="${MINIO_CONSOLE_INTERNAL_P:-9002}"
+export MINIO_BACKEND="localhost:${MINIO_P}"
+export MINIO_CONSOLE_BACKEND="localhost:${MINIO_CONSOLE_INTERNAL_P}"
+export MINIO_CONSOLE_P="${MINIO_CONSOLE_P:-9001}"
 export TLS_CERT="${TLS_CERT:-/tmp/tls/cert.pem}"
 export TLS_KEY="${TLS_KEY:-/tmp/tls/privkey.pem}"
 
-echo "[init-nginx] Generating nginx config for ${SNAPSHOT_DOWNLOAD_DOMAIN} -> ${MINIO_BACKEND} (console HTTPS :${MINIO_CONSOLE_PORT} -> ${MINIO_CONSOLE_BACKEND})"
+echo "[init-nginx] Generating nginx config for ${SNAPSHOT_DOWNLOAD_DOMAIN} -> ${MINIO_BACKEND} (console HTTPS :${MINIO_CONSOLE_P} -> ${MINIO_CONSOLE_BACKEND})"
 
 # ── Bootstrap sshd so oline can deliver TLS certs via SFTP ────────────────────
 if [ -n "${SSH_PUBKEY}" ]; then
@@ -31,13 +64,27 @@ if [ -n "${SSH_PUBKEY}" ]; then
     echo "${SSH_PUBKEY}" >> /root/.ssh/authorized_keys
     chmod 600 /root/.ssh/authorized_keys
 
-    if ! command -v sshd >/dev/null 2>&1; then
+    if ! command -v sshd >/dev/null 2>&1 && ! [ -x /usr/sbin/sshd ] && ! [ -x /sbin/sshd ]; then
         echo "[init-nginx] Installing openssh-server..."
-        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssh-server >/dev/null 2>&1 \
-            || apk add --no-cache openssh >/dev/null 2>&1 || true
+        _ok=0
+        for _try in 1 2 3; do
+            if command -v apt-get >/dev/null 2>&1; then
+                DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssh-server 2>&1 \
+                    && _ok=1 && break
+            elif command -v apk >/dev/null 2>&1; then
+                apk add --no-cache openssh 2>&1 && _ok=1 && break
+            fi
+            echo "[init-nginx] Install attempt $_try failed, retrying in 5s..."
+            sleep 5
+        done
+        [ "$_ok" = "0" ] && echo "[init-nginx] Warning: openssh install failed after 3 tries"
     fi
 
-    SSHD_BIN=$(command -v sshd 2>/dev/null) || { echo "[init-nginx] ERROR: sshd not found"; exit 1; }
+    SSHD_BIN=$(command -v sshd 2>/dev/null \
+        || { [ -x /usr/sbin/sshd ] && echo /usr/sbin/sshd; } \
+        || { [ -x /sbin/sshd ]     && echo /sbin/sshd; } \
+        || true)
+    [ -z "$SSHD_BIN" ] && { echo "[init-nginx] ERROR: sshd not found — openssh unavailable"; exit 1; }
     mkdir -p /run/sshd /var/run/sshd
     ssh-keygen -A >/dev/null 2>&1 || true
     printf '\nPermitRootLogin yes\nPubkeyAuthentication yes\n' >> /etc/ssh/sshd_config
@@ -66,7 +113,7 @@ fi
 # ── Render nginx config ────────────────────────────────────────────────────────
 if [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ]; then
     echo "[init-nginx] Certs found — rendering TLS nginx config"
-    envsubst '${SNAPSHOT_DOWNLOAD_DOMAIN} ${MINIO_BACKEND} ${TLS_CERT} ${TLS_KEY} ${MINIO_CONSOLE_BACKEND} ${MINIO_CONSOLE_PORT}' \
+    envsubst '${SNAPSHOT_DOWNLOAD_DOMAIN} ${MINIO_BACKEND} ${TLS_CERT} ${TLS_KEY} ${MINIO_CONSOLE_BACKEND} ${MINIO_CONSOLE_P}' \
         < /etc/nginx/nginx.conf.template \
         > /etc/nginx/nginx.conf
 else

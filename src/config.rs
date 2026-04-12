@@ -343,7 +343,7 @@ pub fn has_saved_config() -> bool {
 pub async fn collect_config(
     password: &str,
     mnemonic: String,
-    lines: &mut io::Lines<io::StdinLock<'_>>,
+    lines: &mut io::Lines<impl io::BufRead>,
 ) -> Result<OLineConfig, Box<dyn Error>> {
     // Load saved config silently — use it as baseline if available.
     let saved = if has_saved_config() {

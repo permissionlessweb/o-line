@@ -152,7 +152,7 @@ impl OLineDeployer {
         sdl_template: &str,
         variables: &HashMap<String, String>,
         label: &str,
-        lines: &mut io::Lines<io::StdinLock<'_>>,
+        lines: &mut io::Lines<impl io::BufRead>,
     ) -> Result<(DeploymentState, Vec<ServiceEndpoint>), DeployError> {
         let rendered_sdl = substitute_template_raw(sdl_template, variables)
             .map_err(|e| DeployError::Template(format!("Template substitution failed: {}", e)))?;
@@ -539,8 +539,8 @@ impl OLineDeployer {
     pub async fn interactive_select_provider(
         &self,
         bids: &[Bid],
-        lines: &mut io::Lines<io::StdinLock<'_>>,
-    ) -> Result<String, Box<dyn Error>> {
+        lines: &mut io::Lines<impl io::BufRead>,
+    ) -> Result<String, Box<dyn Error + Send + Sync>> {
         let trusted_store = TrustedProviderStore::open(TrustedProviderStore::default_path());
 
         // Non-interactive / CI: prefer trusted provider, fall back to cheapest.

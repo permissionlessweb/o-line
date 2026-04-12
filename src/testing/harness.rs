@@ -52,13 +52,13 @@ use std::{
 
 // ── Well-known test ports ─────────────────────────────────────────────────────
 
-pub const SNAPSHOT_SSH_HOST_PORT: u16 = 2232;
-pub const SNAPSHOT_RPC_HOST_PORT: u16 = 26757;
-pub const SNAPSHOT_P2P_HOST_PORT: u16 = 26756;
+pub const SNAPSHOT_SSH_HOST_P: u16 = 2232;
+pub const SNAPSHOT_RPC_HOST_P: u16 = 26757;
+pub const SNAPSHOT_P2P_HOST_P: u16 = 26756;
 
-pub const SEED_SSH_HOST_PORT: u16 = 2233;
-pub const SEED_RPC_HOST_PORT: u16 = 26767;
-pub const SEED_P2P_HOST_PORT: u16 = 26766;
+pub const SEED_SSH_HOST_P: u16 = 2233;
+pub const SEED_RPC_HOST_P: u16 = 26767;
+pub const SEED_P2P_HOST_P: u16 = 26766;
 
 pub const SNAPSHOT_CONTAINER: &str = "oline-test-snapshot";
 pub const SEED_CONTAINER: &str = "oline-test-seed";
@@ -76,7 +76,7 @@ pub struct LocalPhaseHarness {
     /// Path to the private key file on disk (used by `push_pre_start_files`).
     pub ssh_key_path: PathBuf,
     /// Local snapshot archive to deliver via SSH pipe instead of each node downloading
-    /// from a public server. Set via `E2E_SNAPSHOT_PATH` env var.
+    /// from a public server. Set via `E2E_SNAP_PATH` env var.
     /// When `Some`, containers are started with `SNAPSHOT_MODE=sftp` and the test
     /// builds a `PreStartFile { source: FileSource::Path(...) }` for delivery.
     pub snapshot_local_path: Option<PathBuf>,
@@ -101,10 +101,10 @@ impl LocalPhaseHarness {
         let (ssh_pubkey, ssh_privkey_pem, ssh_key_path) = generate_ssh_keypair(workdir)?;
 
         // ── Local snapshot (optional) ─────────────────────────────────────────
-        // If E2E_SNAPSHOT_PATH points to an existing archive, the orchestrator
+        // If E2E_SNAP_PATH points to an existing archive, the orchestrator
         // pushes it via SFTP so nodes never download from a public server.
         // SNAPSHOT_MODE=sftp tells oline-entrypoint.sh to wait for the file.
-        let snapshot_local_path: Option<PathBuf> = std::env::var("E2E_SNAPSHOT_PATH")
+        let snapshot_local_path: Option<PathBuf> = std::env::var("E2E_SNAP_PATH")
             .ok()
             .map(PathBuf::from)
             .filter(|p| {
@@ -112,7 +112,7 @@ impl LocalPhaseHarness {
                     true
                 } else {
                     println!(
-                        "  [harness] E2E_SNAPSHOT_PATH set but not found at {:?} — ignoring",
+                        "  [harness] E2E_SNAP_PATH set but not found at {:?} — ignoring",
                         p
                     );
                     false
@@ -127,7 +127,7 @@ impl LocalPhaseHarness {
             ("MINIMUM_GAS_PRICES", "0.05uthiol"),
             ("PRUNING", "nothing"),
             ("FASTSYNC_VERSION", "v0"),
-            ("STATESYNC_SNAPSHOT_INTERVAL", "500"),
+            ("STATESYNC_SNAP_INTERVAL", "500"),
         ]
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -139,7 +139,7 @@ impl LocalPhaseHarness {
             println!("  [harness] Snapshot mode: SFTP delivery from orchestrator");
         } else {
             // No snapshot — fastest path, cert delivery test only
-            shared_env.insert("DOWNLOAD_SNAPSHOT".into(), "0".into());
+            shared_env.insert("DOWNLOAD_SNAP".into(), "0".into());
             shared_env.insert("SNAPSHOT_RETAIN".into(), "0".into());
             println!("  [harness] Snapshot mode: disabled");
         }
@@ -150,16 +150,16 @@ impl LocalPhaseHarness {
         let mut snap_env = shared_env.clone();
         snap_env.insert("MONIKER".into(), "test-snapshot".into());
         snap_env.insert("RPC_DOMAIN".into(), "localhost".into());
-        snap_env.insert("RPC_PORT".into(), SNAPSHOT_RPC_HOST_PORT.to_string());
+        snap_env.insert("RPC_P".into(), SNAPSHOT_RPC_HOST_P.to_string());
 
         let snapshot_handle = run_container(&ContainerSpec {
             name: SNAPSHOT_CONTAINER.into(),
             image: omnibus_image.into(),
             env: snap_env,
             ports: vec![
-                ContainerPort { internal: 22,    host: SNAPSHOT_SSH_HOST_PORT },
-                ContainerPort { internal: 26657, host: SNAPSHOT_RPC_HOST_PORT },
-                ContainerPort { internal: 26656, host: SNAPSHOT_P2P_HOST_PORT },
+                ContainerPort { internal: 22,    host: SNAPSHOT_SSH_HOST_P },
+                ContainerPort { internal: 26657, host: SNAPSHOT_RPC_HOST_P },
+                ContainerPort { internal: 26656, host: SNAPSHOT_P2P_HOST_P },
             ],
             entrypoint: None,
             command: None,
@@ -171,16 +171,16 @@ impl LocalPhaseHarness {
         let mut seed_env = shared_env.clone();
         seed_env.insert("MONIKER".into(), "test-seed".into());
         seed_env.insert("RPC_DOMAIN".into(), "localhost".into());
-        seed_env.insert("RPC_PORT".into(), SEED_RPC_HOST_PORT.to_string());
+        seed_env.insert("RPC_P".into(), SEED_RPC_HOST_P.to_string());
 
         let seed_handle = run_container(&ContainerSpec {
             name: SEED_CONTAINER.into(),
             image: omnibus_image.into(),
             env: seed_env,
             ports: vec![
-                ContainerPort { internal: 22,    host: SEED_SSH_HOST_PORT },
-                ContainerPort { internal: 26657, host: SEED_RPC_HOST_PORT },
-                ContainerPort { internal: 26656, host: SEED_P2P_HOST_PORT },
+                ContainerPort { internal: 22,    host: SEED_SSH_HOST_P },
+                ContainerPort { internal: 26657, host: SEED_RPC_HOST_P },
+                ContainerPort { internal: 26656, host: SEED_P2P_HOST_P },
             ],
             entrypoint: None,
             command: None,
@@ -191,9 +191,9 @@ impl LocalPhaseHarness {
         // ── Wait for SSH on both ──────────────────────────────────────────────
         println!(
             "  [harness] Waiting for SSH on snapshot (127.0.0.1:{}) ...",
-            SNAPSHOT_SSH_HOST_PORT
+            SNAPSHOT_SSH_HOST_P
         );
-        if !wait_for_tcp("127.0.0.1", SNAPSHOT_SSH_HOST_PORT, SSH_BOOTSTRAP_TIMEOUT) {
+        if !wait_for_tcp("127.0.0.1", SNAPSHOT_SSH_HOST_P, SSH_BOOTSTRAP_TIMEOUT) {
             let logs = container_logs(SNAPSHOT_CONTAINER, 40);
             return Err(format!(
                 "Snapshot SSH never came up within {:?}.\nContainer logs:\n{}",
@@ -203,9 +203,9 @@ impl LocalPhaseHarness {
 
         println!(
             "  [harness] Waiting for SSH on seed (127.0.0.1:{}) ...",
-            SEED_SSH_HOST_PORT
+            SEED_SSH_HOST_P
         );
-        if !wait_for_tcp("127.0.0.1", SEED_SSH_HOST_PORT, SSH_BOOTSTRAP_TIMEOUT) {
+        if !wait_for_tcp("127.0.0.1", SEED_SSH_HOST_P, SSH_BOOTSTRAP_TIMEOUT) {
             let logs = container_logs(SEED_CONTAINER, 40);
             return Err(format!(
                 "Seed SSH never came up within {:?}.\nContainer logs:\n{}",
@@ -258,24 +258,24 @@ impl LocalPhaseHarness {
         eps
     }
 
-    /// `"http://127.0.0.1:<RPC_PORT>"` for the snapshot node.
+    /// `"http://127.0.0.1:<RPC_P>"` for the snapshot node.
     pub fn snapshot_rpc_url(&self) -> String {
-        format!("http://127.0.0.1:{}", SNAPSHOT_RPC_HOST_PORT)
+        format!("http://127.0.0.1:{}", SNAPSHOT_RPC_HOST_P)
     }
 
-    /// `"127.0.0.1:<P2P_PORT>"` for the snapshot node.
+    /// `"127.0.0.1:<P2P_P>"` for the snapshot node.
     pub fn snapshot_p2p_addr(&self) -> String {
-        format!("127.0.0.1:{}", SNAPSHOT_P2P_HOST_PORT)
+        format!("127.0.0.1:{}", SNAPSHOT_P2P_HOST_P)
     }
 
-    /// `"http://127.0.0.1:<RPC_PORT>"` for the seed node.
+    /// `"http://127.0.0.1:<RPC_P>"` for the seed node.
     pub fn seed_rpc_url(&self) -> String {
-        format!("http://127.0.0.1:{}", SEED_RPC_HOST_PORT)
+        format!("http://127.0.0.1:{}", SEED_RPC_HOST_P)
     }
 
-    /// `"127.0.0.1:<P2P_PORT>"` for the seed node.
+    /// `"127.0.0.1:<P2P_P>"` for the seed node.
     pub fn seed_p2p_addr(&self) -> String {
-        format!("127.0.0.1:{}", SEED_P2P_HOST_PORT)
+        format!("127.0.0.1:{}", SEED_P2P_HOST_P)
     }
 }
 

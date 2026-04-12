@@ -13,7 +13,7 @@
 # Environment variables (override prompts):
 #   SSH_PUBKEY_FILE   — path to public key (default: ~/.ssh/oline-fw.pub)
 #   SSH_PASSWORD      — password for target hosts (skips prompt)
-#   SSH_PORT          — port (default: 22)
+#   SSH_P          — port (default: 22)
 
 set -euo pipefail
 
@@ -94,7 +94,7 @@ for target in "${TARGETS[@]}"; do
     # Parse [user@]host[:port]
     user="admin"
     host="$target"
-    port="${SSH_PORT:-22}"
+    port="${SSH_P:-22}"
 
     if [[ "$target" == *"@"* ]]; then
         user="${target%%@*}"

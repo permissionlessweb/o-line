@@ -20,8 +20,8 @@ services:
         as: 9090
         to:
           - global: true
-      - port: ${SSH_PORT}
-        as: ${SSH_PORT}
+      - port: ${SSH_P}
+        as: ${SSH_P}
         to:
           - global: true
     env:
@@ -32,9 +32,9 @@ services:
       - PRUNING=custom
       - PRUNING_KEEP_RECENT=1000
       - PRUNING_INTERVAL=100
-      - SNAPSHOT_URL=${AKASH_SNAPSHOT_URL}
+      - SNAPSHOT_URL=${AKASH_SNAP_URL}
       - FASTSYNC_VERSION=v0
-      - STATESYNC_SNAPSHOT_INTERVAL=0
+      - STATESYNC_SNAP_INTERVAL=0
       - ADDRBOOK_URL=${AKASH_ADDRBOOK_URL}
       - SSH_PUBKEY=${SSH_PUBKEY}
 profiles:

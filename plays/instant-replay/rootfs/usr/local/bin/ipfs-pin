@@ -23,13 +23,13 @@ else
     CID=$(ipfs add --pin=true -Q "$TARGET")
 fi
 
-GATEWAY_PORT="${IPFS_GATEWAY_PORT:-8081}"
+GATEWAY_P="${IPFS_GATEWAY_P:-8081}"
 
 echo ""
 echo "CID: ${CID}"
 echo ""
 echo "Gateway URLs:"
-echo "  Local:  http://localhost:${GATEWAY_PORT}/ipfs/${CID}"
+echo "  Local:  http://localhost:${GATEWAY_P}/ipfs/${CID}"
 echo "  IPFS:   https://ipfs.io/ipfs/${CID}"
 echo "  Dweb:   https://dweb.link/ipfs/${CID}"
 echo "  DaoDao: https://ipfs.daodao.zone/ipfs/${CID}"

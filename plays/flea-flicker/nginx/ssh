@@ -1,10 +1,10 @@
 stream {
     upstream ssh {
-        server localhost:$SSH_PORT;  # Target SSH server
+        server localhost:$SSH_P;  # Target SSH server
     }
 
     server {
-        listen $SSH_PORT;
+        listen $SSH_P;
         proxy_pass ssh;
     }
 }

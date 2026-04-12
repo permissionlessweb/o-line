@@ -101,6 +101,11 @@ pub struct OLineContext {
     // Format: "id@host:port". Empty string = not yet resolved.
     peer_ids: [String; PeerTarget::COUNT],
 
+    // ── Provider host URIs (address → host_uri) ──────────────────────────────
+    // Populated during provider selection so TUI can build WebSocket URLs
+    // without requiring the trusted provider store.
+    pub provider_hosts: HashMap<String, String>,
+
     // ── Parallel deployment path ──────────────────────────────────────────────
     // Populated by FundChildAccounts; each entry owns a child deployer + vars.
     pub units: Vec<UnitState>,
@@ -137,6 +142,7 @@ impl OLineContext {
             phase_states: [None, None, None, None],
             phase_endpoints: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             peer_ids: [String::new(), String::new(), String::new(), String::new()],
+            provider_hosts: HashMap::new(),
             units: Vec::new(),
             phase_a_bootstrapped: false,
         }
@@ -166,6 +172,7 @@ impl OLineContext {
             phase_states: [None, None, None, None],
             phase_endpoints: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             peer_ids: [String::new(), String::new(), String::new(), String::new()],
+            provider_hosts: HashMap::new(),
             units: Vec::new(),
             phase_a_bootstrapped: false,
         }

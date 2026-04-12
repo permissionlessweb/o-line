@@ -94,6 +94,22 @@ pub struct DeploymentEntry {
     pub label: String,
     pub provider: Option<String>,
     pub endpoints: Vec<String>,
+    /// Akash group sequence (default 1 for backward compat).
+    #[serde(default = "default_gseq")]
+    pub gseq: u32,
+    /// Akash order sequence (default 1 for backward compat).
+    #[serde(default = "default_oseq")]
+    pub oseq: u32,
+    /// Unique service names from this deployment's endpoints.
+    #[serde(default)]
+    pub services: Vec<String>,
+}
+
+fn default_gseq() -> u32 {
+    1
+}
+fn default_oseq() -> u32 {
+    1
 }
 
 /// Session state for a deployment run.
@@ -291,6 +307,9 @@ mod tests {
             label: "oline-phase-a".into(),
             provider: Some("provider1".into()),
             endpoints: vec!["snapshot:26657".into()],
+            gseq: 1,
+            oseq: 1,
+            services: vec!["snapshot".into()],
         });
 
         let json = serde_json::to_string_pretty(&session).unwrap();

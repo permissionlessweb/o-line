@@ -16,6 +16,68 @@ use crate::crypto::{ensure_ssh_key, gen_ssh_key, generate_credential, S3_KEY, S3
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+// ── Statesync trust param auto-fetch ─────────────────────────────────────────
+
+/// Fetch statesync trust height and hash from a CometBFT RPC endpoint.
+///
+/// Takes a statesync RPC string (format: `"host:port,host:port"`), queries
+/// the first server's `/block` for latest height, subtracts 1000, then
+/// fetches the block hash at that height via `/block?height=N`.
+pub async fn fetch_statesync_trust_params(rpc: &str) -> Result<(String, String), String> {
+    let server = rpc.split(',').next().unwrap_or(rpc).trim();
+    if server.is_empty() {
+        return Err("empty RPC address".into());
+    }
+    let base = if server.starts_with("http") {
+        server.to_string()
+    } else {
+        format!("http://{}", server)
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("http client: {e}"))?;
+
+    // Latest block height
+    let body: serde_json::Value = client
+        .get(format!("{}/block", base))
+        .send()
+        .await
+        .map_err(|e| format!("block request: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("parse block: {e}"))?;
+
+    let latest_height: u64 = body["result"]["block"]["header"]["height"]
+        .as_str()
+        .ok_or("missing latest_block_height")?
+        .parse()
+        .map_err(|e| format!("parse height: {e}"))?;
+
+    let trust_height = latest_height.saturating_sub(1000);
+    if trust_height == 0 {
+        return Err(format!("chain too young: latest_height={latest_height}"));
+    }
+
+    // Block hash at trust height
+    let body: serde_json::Value = client
+        .get(format!("{}/block?height={}", base, trust_height))
+        .send()
+        .await
+        .map_err(|e| format!("block?height request: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("parse block hash: {e}"))?;
+
+    let hash = body["result"]["block_id"]["hash"]
+        .as_str()
+        .ok_or("missing block hash")?
+        .to_string();
+
+    Ok((trust_height.to_string(), hash))
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Extract the hostname (without scheme or port) from a ServiceEndpoint URI.
@@ -36,7 +98,7 @@ pub fn build_accept_items(vars: &HashMap<String, String>, suffix: &str) -> Strin
     ["RPC", "API"]
         .iter()
         .filter_map(|svc| {
-            let key = format!("{}_DOMAIN_{}", svc, suffix);
+            let key = format!("{}_D_{}", svc, suffix);
             vars.get(&key)
                 .filter(|v| !v.is_empty())
                 .map(|v| format!("          - {}", v))
@@ -110,8 +172,8 @@ pub async fn build_phase_a_vars(
     vars.insert("MINIO_ROOT_PASSWORD".into(), s3_secret);
 
     // ── Derived vars ─────────────────────────────────────────────────────────
-    let snapshot_path = config.val("OLINE_SNAPSHOT_PATH");
-    let download_domain = config.val("OLINE_SNAPSHOT_DOWNLOAD_DOMAIN");
+    let snapshot_path = config.val("OLINE_SNAP_PATH");
+    let download_domain = config.val("OLINE_SNAP_DOWNLOAD_DOMAIN");
     // SNAPSHOT_METADATA_URL: base URL that snapshot.sh appends "/snapshot.json" to.
     vars.insert(
         "SNAPSHOT_METADATA_URL".into(),
@@ -130,6 +192,21 @@ pub async fn build_phase_a_vars(
             .unwrap_or("snapshots")
             .to_string(),
     );
+
+    // ── Sync method: if statesync, clear snapshot download vars for seed ─────
+    let sync_method = config.val("OLINE_SYNC_METHOD");
+    if sync_method == "statesync" {
+        vars.insert("OLINE_SNAP_FULL_URL".into(), String::new());
+        vars.insert("OLINE_SNAP_STATE_URL".into(), String::new());
+        vars.insert("OLINE_SNAP_BASE_URL".into(), String::new());
+        vars.insert("SNAPSHOT_JSON".into(), String::new());
+        vars.insert("SNAPSHOT_URL".into(), String::new());
+        vars.insert("STATESYNC_ENABLE".into(), "true".into());
+        vars.insert("STATESYNC_RPC_SERVERS".into(), config.val("STATESYNC_RPC_SERVERS"));
+        vars.insert("STATESYNC_TRUST_HEIGHT".into(), config.val("STATESYNC_TRUST_HEIGHT"));
+        vars.insert("STATESYNC_TRUST_HASH".into(), config.val("STATESYNC_TRUST_HASH"));
+        vars.insert("STATESYNC_TRUST_PERIOD".into(), config.val("STATESYNC_TRUST_PERIOD"));
+    }
 
     // ── Accept lists (must be after domain vars from to_sdl_vars()) ───────────
     vars.insert(
@@ -179,33 +256,49 @@ pub fn build_phase_b_vars(
     vars.insert("TERPD_P2P_PRIVATE_PEER_IDS".into(), validator_peer.clone());
     vars.insert("TERPD_P2P_UNCONDITIONAL_PEER_IDS".into(), validator_peer);
 
-    // ── Statesync ─────────────────────────────────────────────────────────────
-    // Always insert so ${STATESYNC_RPC_SERVERS} never errors; empty = disabled.
-    vars.insert(
-        "STATESYNC_RPC_SERVERS".into(),
-        statesync_rpc_servers.to_string(),
-    );
-    if !statesync_rpc_servers.is_empty() {
+    // ── Sync method (snapshot vs statesync) ─────────────────────────────────
+    let sync_method = config.val("OLINE_SYNC_METHOD");
+    if sync_method == "statesync" {
+        // Statesync: node fetches state from RPC servers
+        let rpc = if statesync_rpc_servers.is_empty() {
+            config.val("STATESYNC_RPC_SERVERS")
+        } else {
+            statesync_rpc_servers.to_string()
+        };
+        vars.insert("STATESYNC_RPC_SERVERS".into(), rpc);
         vars.insert("STATESYNC_ENABLE".into(), "true".into());
+        vars.insert("STATESYNC_TRUST_HEIGHT".into(), config.val("STATESYNC_TRUST_HEIGHT"));
+        vars.insert("STATESYNC_TRUST_HASH".into(), config.val("STATESYNC_TRUST_HASH"));
+        vars.insert("STATESYNC_TRUST_PERIOD".into(), config.val("STATESYNC_TRUST_PERIOD"));
+        vars.insert("OLINE_OFFLINE".into(), "0".into());
+        vars.insert("SNAPSHOT_MODE".into(), "".into());
+        // Clear snapshot download vars — statesync nodes don't need them.
+        vars.insert("OLINE_SNAP_FULL_URL".into(), String::new());
+        vars.insert("SNAPSHOT_URL".into(), String::new());
+    } else {
+        // Snapshot (default): SFTP delivery, no internet
+        vars.insert("STATESYNC_RPC_SERVERS".into(), String::new());
+        vars.insert("STATESYNC_ENABLE".into(), "false".into());
+        vars.insert("STATESYNC_TRUST_HEIGHT".into(), String::new());
+        vars.insert("STATESYNC_TRUST_HASH".into(), String::new());
+        vars.insert("STATESYNC_TRUST_PERIOD".into(), String::new());
+        vars.entry("SNAPSHOT_MODE".into()).or_insert_with(|| "sftp".into());
+        vars.insert("OLINE_OFFLINE".into(), "1".into());
     }
 
-    // ── Snapshot JSON URL (resolved from minio metadata) ─────────────────────
-    vars.insert(
-        "SNAPSHOT_JSON".into(),
-        format!(
-            "https://{}/{}/snapshot.json",
-            config.val("OLINE_SNAPSHOT_DOWNLOAD_DOMAIN"),
-            config.val("OLINE_SNAPSHOT_PATH").trim_matches('/')
-        ),
-    );
-
-    // ── Snapshot mode ──────────────────────────────────────────────────────
-    // Parallel deploy: B/C nodes wait for SFTP snapshot delivery.
-    vars.entry("SNAPSHOT_MODE".into()).or_insert_with(|| "sftp".into());
-
-    // ── Offline mode ─────────────────────────────────────────────────────
-    // Phase B nodes receive ALL data via SFTP — no internet downloads.
-    vars.insert("OLINE_OFFLINE".into(), "1".into());
+    // ── Snapshot JSON URL (only needed in snapshot mode) ─────────────────────
+    if sync_method != "statesync" {
+        vars.insert(
+            "SNAPSHOT_JSON".into(),
+            format!(
+                "https://{}/{}/snapshot.json",
+                config.val("OLINE_SNAP_DOWNLOAD_DOMAIN"),
+                config.val("OLINE_SNAP_PATH").trim_matches('/')
+            ),
+        );
+    } else {
+        vars.insert("SNAPSHOT_JSON".into(), String::new());
+    }
 
     // ── Accept lists ─────────────────────────────────────────────────────────
     vars.insert("LT_80_ACCEPTS".into(), build_accept_items(&vars, "TACKLE_L"));
@@ -230,8 +323,8 @@ pub fn build_phase_c_vars(
     vars.insert("RF_SVC".into(), "oline-c-right-forward".into());
 
     // ── Random monikers ───────────────────────────────────────────────────────
-    vars.insert("LEFT_FORWARD_MONIKER".into(), generate_credential(12));
-    vars.insert("RIGHT_FORWARD_MONIKER".into(), generate_credential(12));
+    vars.insert("LEFT_FMONIKER".into(), generate_credential(12));
+    vars.insert("RIGHT_FMONIKER".into(), generate_credential(12));
 
     // ── SSH key for cert delivery (bootstrap) ─────────────────────────────────
     let ssh_key = gen_ssh_key();
@@ -247,28 +340,49 @@ pub fn build_phase_c_vars(
         format!("{} ", snapshot_peer),
     );
 
-    // ── Statesync ─────────────────────────────────────────────────────────────
-    vars.insert("STATESYNC_RPC_SERVERS".into(), statesync_rpc.to_string());
-    if !statesync_rpc.is_empty() {
+    // ── Sync method (snapshot vs statesync) ─────────────────────────────────
+    let sync_method = config.val("OLINE_SYNC_METHOD");
+    if sync_method == "statesync" {
+        // Statesync: node fetches state from RPC servers
+        let rpc = if statesync_rpc.is_empty() {
+            config.val("STATESYNC_RPC_SERVERS")
+        } else {
+            statesync_rpc.to_string()
+        };
+        vars.insert("STATESYNC_RPC_SERVERS".into(), rpc);
         vars.insert("STATESYNC_ENABLE".into(), "true".into());
+        vars.insert("STATESYNC_TRUST_HEIGHT".into(), config.val("STATESYNC_TRUST_HEIGHT"));
+        vars.insert("STATESYNC_TRUST_HASH".into(), config.val("STATESYNC_TRUST_HASH"));
+        vars.insert("STATESYNC_TRUST_PERIOD".into(), config.val("STATESYNC_TRUST_PERIOD"));
+        vars.insert("OLINE_OFFLINE".into(), "0".into());
+        vars.insert("SNAPSHOT_MODE".into(), "".into());
+        // Clear snapshot download vars — statesync nodes don't need them.
+        vars.insert("OLINE_SNAP_FULL_URL".into(), String::new());
+        vars.insert("SNAPSHOT_URL".into(), String::new());
+    } else {
+        // Snapshot (default): SFTP delivery, no internet
+        vars.insert("STATESYNC_RPC_SERVERS".into(), String::new());
+        vars.insert("STATESYNC_ENABLE".into(), "false".into());
+        vars.insert("STATESYNC_TRUST_HEIGHT".into(), String::new());
+        vars.insert("STATESYNC_TRUST_HASH".into(), String::new());
+        vars.insert("STATESYNC_TRUST_PERIOD".into(), String::new());
+        vars.entry("SNAPSHOT_MODE".into()).or_insert_with(|| "sftp".into());
+        vars.insert("OLINE_OFFLINE".into(), "1".into());
     }
 
-    // ── Snapshot JSON URL ─────────────────────────────────────────────────────
-    vars.insert(
-        "SNAPSHOT_JSON".into(),
-        format!(
-            "https://{}/{}/snapshot.json",
-            config.val("OLINE_SNAPSHOT_DOWNLOAD_DOMAIN"),
-            config.val("OLINE_SNAPSHOT_PATH").trim_matches('/')
-        ),
-    );
-
-    // ── Snapshot mode ──────────────────────────────────────────────────────
-    vars.entry("SNAPSHOT_MODE".into()).or_insert_with(|| "sftp".into());
-
-    // ── Offline mode ─────────────────────────────────────────────────────
-    // Phase C nodes receive ALL data via SFTP — no internet downloads.
-    vars.insert("OLINE_OFFLINE".into(), "1".into());
+    // ── Snapshot JSON URL (only needed in snapshot mode) ─────────────────────
+    if sync_method != "statesync" {
+        vars.insert(
+            "SNAPSHOT_JSON".into(),
+            format!(
+                "https://{}/{}/snapshot.json",
+                config.val("OLINE_SNAP_DOWNLOAD_DOMAIN"),
+                config.val("OLINE_SNAP_PATH").trim_matches('/')
+            ),
+        );
+    } else {
+        vars.insert("SNAPSHOT_JSON".into(), String::new());
+    }
 
     // ── Accept lists ─────────────────────────────────────────────────────────
     vars.insert(
@@ -299,7 +413,7 @@ pub fn build_phase_rly_vars(config: &OLineConfig) -> HashMap<String, String> {
     );
 
     // ── Accept list for the relayer REST API ─────────────────────────────────
-    let api_domain = config.val("RLY_API_DOMAIN");
+    let api_domain = config.val("RLY_API_D");
     let rly_accepts = if api_domain.is_empty() {
         String::new()
     } else {
@@ -390,20 +504,42 @@ pub fn build_phase_f_vars(config: &OLineConfig, statesync_rpc: &str) -> HashMap<
     vars.insert("ARGUS_NODE_MONIKER".into(), generate_credential(12));
 
     // ── Statesync ─────────────────────────────────────────────────────────────
-    vars.insert("STATESYNC_RPC_SERVERS".into(), statesync_rpc.to_string());
+    let rpc = if statesync_rpc.is_empty() {
+        config.val("STATESYNC_RPC_SERVERS")
+    } else {
+        statesync_rpc.to_string()
+    };
+    let use_statesync = !rpc.is_empty();
+    if use_statesync {
+        vars.insert("STATESYNC_RPC_SERVERS".into(), rpc);
+        vars.insert("STATESYNC_ENABLE".into(), "true".into());
+        vars.insert("STATESYNC_TRUST_HEIGHT".into(), config.val("STATESYNC_TRUST_HEIGHT"));
+        vars.insert("STATESYNC_TRUST_HASH".into(), config.val("STATESYNC_TRUST_HASH"));
+        vars.insert("STATESYNC_TRUST_PERIOD".into(), config.val("STATESYNC_TRUST_PERIOD"));
+        // Clear snapshot download vars — statesync nodes don't need them.
+        vars.insert("OLINE_SNAP_FULL_URL".into(), String::new());
+        vars.insert("SNAPSHOT_URL".into(), String::new());
+        vars.insert("SNAPSHOT_JSON".into(), String::new());
+    } else {
+        vars.insert("STATESYNC_RPC_SERVERS".into(), String::new());
+        vars.insert("STATESYNC_ENABLE".into(), "false".into());
+        vars.insert("STATESYNC_TRUST_HEIGHT".into(), String::new());
+        vars.insert("STATESYNC_TRUST_HASH".into(), String::new());
+        vars.insert("STATESYNC_TRUST_PERIOD".into(), String::new());
 
-    // ── Snapshot JSON URL ─────────────────────────────────────────────────────
-    vars.insert(
-        "SNAPSHOT_JSON".into(),
-        format!(
-            "https://{}/{}/snapshot.json",
-            config.val("OLINE_SNAPSHOT_DOWNLOAD_DOMAIN"),
-            config.val("OLINE_SNAPSHOT_PATH").trim_matches('/')
-        ),
-    );
+        // ── Snapshot JSON URL (only in snapshot mode) ────────────────────────
+        vars.insert(
+            "SNAPSHOT_JSON".into(),
+            format!(
+                "https://{}/{}/snapshot.json",
+                config.val("OLINE_SNAP_DOWNLOAD_DOMAIN"),
+                config.val("OLINE_SNAP_PATH").trim_matches('/')
+            ),
+        );
+    }
 
     // ── Accept list for Argus REST API ────────────────────────────────────────
-    let api_domain = config.val("ARGUS_API_DOMAIN");
+    let api_domain = config.val("ARGUS_API_D");
     let argus_accepts = if api_domain.is_empty() {
         String::new()
     } else {

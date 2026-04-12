@@ -1,0 +1,89 @@
+events {
+    worker_connections 1024;
+}
+
+http {
+    client_max_body_size 0;
+
+    # IPFS Gateway — public website serving
+    server {
+        listen 80;
+        server_name ${SITES_GATEWAY_DOMAIN};
+
+        location / {
+            proxy_pass         http://localhost:8081;
+            proxy_http_version 1.1;
+            proxy_set_header   Host              $http_host;
+            proxy_set_header   X-Real-IP         $remote_addr;
+            proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Proto $scheme;
+            proxy_buffering    off;
+        }
+    }
+
+    # S3 API — uploads via oline sites upload
+    server {
+        listen 80;
+        server_name ${SITES_S3_DOMAIN};
+
+        location / {
+            proxy_pass         http://localhost:9000;
+            proxy_http_version 1.1;
+            proxy_set_header   Host              $http_host;
+            proxy_set_header   X-Real-IP         $remote_addr;
+            proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Proto $scheme;
+            proxy_set_header   Connection        "";
+            proxy_buffering    off;
+            proxy_request_buffering off;
+            proxy_connect_timeout 300s;
+            proxy_send_timeout    300s;
+            proxy_read_timeout    300s;
+        }
+    }
+
+    # MinIO Console UI
+    server {
+        listen 80;
+        server_name ${SITES_CONSOLE_DOMAIN};
+
+        location / {
+            proxy_pass         http://localhost:${MINIO_CONSOLE_INTERNAL_P};
+            proxy_http_version 1.1;
+            proxy_set_header   Upgrade           $http_upgrade;
+            proxy_set_header   Connection        "upgrade";
+            proxy_set_header   Host              $http_host;
+            proxy_set_header   X-Real-IP         $remote_addr;
+            proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Proto $scheme;
+        }
+    }
+
+    # Snapshot download proxy (backward compat with Phase A)
+    server {
+        listen 80;
+        server_name ${SNAPSHOT_DOWNLOAD_DOMAIN};
+
+        location / {
+            proxy_pass         http://localhost:9000;
+            proxy_http_version 1.1;
+            proxy_set_header   Host              $http_host;
+            proxy_set_header   X-Real-IP         $remote_addr;
+            proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Proto $scheme;
+            proxy_set_header   Connection        "";
+            proxy_buffering    off;
+            proxy_request_buffering off;
+            proxy_connect_timeout 300s;
+            proxy_send_timeout    300s;
+            proxy_read_timeout    300s;
+        }
+    }
+
+    # Catch-all — close for unknown Host headers
+    server {
+        listen 80 default_server;
+        server_name _;
+        return 444;
+    }
+}

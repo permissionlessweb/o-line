@@ -59,8 +59,13 @@ if [ "${OLINE_PHASE:-bootstrap}" = "bootstrap" ]; then
   # SSH sessions begin with a minimal environment — SDL vars won't be present otherwise.
   export -p | grep -v 'OLINE_PHASE' > /tmp/oline-env.sh
 
-  echo "Bootstrap complete — handing off to sshd. oline will connect shortly."
-  exec "$SSHD_BIN" -D
+  echo "Bootstrap complete — sshd started. oline will connect shortly."
+  # Run sshd in background; keep the shell as PID 1 so container stdout stays
+  # open for provider log streaming. The start-phase script writes to
+  # /proc/1/fd/1 which is this shell's stdout — visible via lease-logs / TUI.
+  "$SSHD_BIN" -D &
+  wait
+  exit 0
 fi
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -213,11 +218,11 @@ if [ "${OLINE_OFFLINE:-0}" = "1" ]; then
 fi
 
 # ── Operator snapshot override ────────────────────────────────────────────────
-# OLINE_SNAPSHOT_FULL_URL is an explicit operator-supplied snapshot URL that
+# OLINE_SNAP_FULL_URL is an explicit operator-supplied snapshot URL that
 # takes priority over chain-registry resolution. Survives OFFLINE mode because
 # the operator knows best.
-if [ -n "$OLINE_SNAPSHOT_FULL_URL" ] && [ -z "$SNAPSHOT_URL" ]; then
-  export SNAPSHOT_URL="$OLINE_SNAPSHOT_FULL_URL"
+if [ -n "$OLINE_SNAP_FULL_URL" ] && [ -z "$SNAPSHOT_URL" ]; then
+  export SNAPSHOT_URL="$OLINE_SNAP_FULL_URL"
 fi
 
 export PROJECT_BIN="${PROJECT_BIN:-$PROJECT}"
@@ -465,8 +470,8 @@ fi
 [ -n "$P2P_PERSISTENT_PEERS" ] && [ "$P2P_PERSISTENT_PEERS" != '0' ] && export "${NAMESPACE}_P2P_PERSISTENT_PEERS"=${P2P_PERSISTENT_PEERS}
 
 # Statesync
-if [ -n "$STATESYNC_SNAPSHOT_INTERVAL" ]; then
-  export "${NAMESPACE}_STATE_SYNC_SNAPSHOT_INTERVAL=$STATESYNC_SNAPSHOT_INTERVAL"
+if [ -n "$STATESYNC_SNAP_INTERVAL" ]; then
+  export "${NAMESPACE}_STATE_SYNC_SNAP_INTERVAL=$STATESYNC_SNAP_INTERVAL"
 fi
 
 if [ -n "$STATESYNC_RPC_SERVERS" ]; then
@@ -475,24 +480,30 @@ if [ -n "$STATESYNC_RPC_SERVERS" ]; then
   IFS=',' read -ra rpc_servers <<< "$STATESYNC_RPC_SERVERS"
   STATESYNC_TRUSTED_NODE=${STATESYNC_TRUSTED_NODE:-${rpc_servers[0]}}
   if [ -n "$STATESYNC_TRUSTED_NODE" ]; then
-    LATEST_HEIGHT=$(curl -Ls $STATESYNC_TRUSTED_NODE/block | jq -r .result.block.header.height)
-    BLOCK_HEIGHT=$((LATEST_HEIGHT - 2000))
-    TRUST_HASH=$(curl -Ls "$STATESYNC_TRUSTED_NODE/block?height=$BLOCK_HEIGHT" | jq -r .result.block_id.hash)
+    # Ensure HTTP scheme for bare host:port addresses (oline passes host:port without scheme)
+    _rpc_url="$STATESYNC_TRUSTED_NODE"
+    case "$_rpc_url" in http://*|https://*) ;; *) _rpc_url="http://$_rpc_url" ;; esac
+    echo "Fetching statesync trust params from $_rpc_url..."
+    LATEST_HEIGHT=$(curl -Ls "$_rpc_url/block" | jq -r .result.block.header.height)
+    BLOCK_HEIGHT=$((LATEST_HEIGHT - 1000))
+    TRUST_HASH=$(curl -Ls "$_rpc_url/block?height=$BLOCK_HEIGHT" | jq -r .result.block_id.hash)
+    echo "  trust_height=$BLOCK_HEIGHT trust_hash=$TRUST_HASH"
     export "${NAMESPACE}_STATESYNC_TRUST_HEIGHT=${STATESYNC_TRUST_HEIGHT:-$BLOCK_HEIGHT}"
     export "${NAMESPACE}_STATESYNC_TRUST_HASH=${STATESYNC_TRUST_HASH:-$TRUST_HASH}"
     export "${NAMESPACE}_STATESYNC_TRUST_PERIOD=${STATESYNC_TRUST_PERIOD:-168h0m0s}"
   fi
 fi
 
-if [[ -z $DOWNLOAD_SNAPSHOT && ( -n $SNAPSHOT_URL || -n $SNAPSHOT_BASE_URL || -n $SNAPSHOT_JSON || -n $SNAPSHOT_QUICKSYNC ) && ! -f "$PROJECT_ROOT/data/priv_validator_state.json" ]]; then
-  export DOWNLOAD_SNAPSHOT="1"
+# Skip snapshot download when statesync is enabled — statesync fetches state directly.
+if [[ -z $DOWNLOAD_SNAP && "${STATESYNC_ENABLE}" != "true" && ( -n $SNAPSHOT_URL || -n $SNAPSHOT_BASE_URL || -n $SNAPSHOT_JSON || -n $SNAPSHOT_QUICKSYNC ) && ! -f "$PROJECT_ROOT/data/priv_validator_state.json" ]]; then
+  export DOWNLOAD_SNAP="1"
 fi
 
 # SFTP delivery mode: deployer pushes snapshot file to this node rather than
 # the node downloading from broadband. Enables download-once, distribute-locally.
 # Set SNAPSHOT_MODE=sftp in the SDL to activate this mode.
 if [[ "${SNAPSHOT_MODE:-remote}" == "sftp" && ! -f "$PROJECT_ROOT/data/priv_validator_state.json" ]]; then
-  export DOWNLOAD_SNAPSHOT="1"
+  export DOWNLOAD_SNAP="1"
 fi
 
 if [[ -z $DOWNLOAD_GENESIS && -n $GENESIS_URL && ! -f "$CONFIG_PATH/genesis.json" ]]; then
@@ -552,7 +563,7 @@ if [ "$DOWNLOAD_GENESIS" == "1" ]; then
 fi
 
 # Snapshot
-if [ "$DOWNLOAD_SNAPSHOT" == "1" ]; then
+if [ "$DOWNLOAD_SNAP" == "1" ]; then
 
   # ── SFTP delivery mode ────────────────────────────────────────────────────────
   # Deployer pushes the snapshot archive via SFTP after this node's SSH comes up.
@@ -652,13 +663,13 @@ if [ "$DOWNLOAD_SNAPSHOT" == "1" ]; then
 
     # use DCS Storj uplink for the Storj backups (much faster)
     if [[ "${SNAPSHOT_URL}" == *"link.storjshare.io"* ]] && [ -n "$STORJ_ACCESS_GRANT" ]; then
-      STORJ_SNAPSHOT_URL=${SNAPSHOT_URL#*link.storjshare.io/s/}
-      STORJ_SNAPSHOT_URL=${STORJ_SNAPSHOT_URL#*/}
-      STORJ_SNAPSHOT_URL=${STORJ_SNAPSHOT_URL%%\?*}
+      STORJ_SNAP_URL=${SNAPSHOT_URL#*link.storjshare.io/s/}
+      STORJ_SNAP_URL=${STORJ_SNAP_URL#*/}
+      STORJ_SNAP_URL=${STORJ_SNAP_URL%%\?*}
       if [ -n "$pv_extra_args" ]; then
-        (set -o pipefail; uplink cp $storj_args sj://${STORJ_SNAPSHOT_URL} - | pv -petrafb -i 5 $pv_extra_args | eval $tar_cmd) 2>&1 | stdbuf -o0 tr '\r' '\n'
+        (set -o pipefail; uplink cp $storj_args sj://${STORJ_SNAP_URL} - | pv -petrafb -i 5 $pv_extra_args | eval $tar_cmd) 2>&1 | stdbuf -o0 tr '\r' '\n'
       else
-        (set -o pipefail; uplink cp $storj_args sj://${STORJ_SNAPSHOT_URL} - | pv -petrafb -i 5 | eval $tar_cmd) 2>&1 | stdbuf -o0 tr '\r' '\n'
+        (set -o pipefail; uplink cp $storj_args sj://${STORJ_SNAP_URL} - | pv -petrafb -i 5 | eval $tar_cmd) 2>&1 | stdbuf -o0 tr '\r' '\n'
       fi
     else
       if [ -n "$pv_extra_args" ]; then
@@ -706,9 +717,9 @@ fi
 # If we expected to download a snapshot, verify the data directory exists and
 # is non-empty. Catches silent download failures that would otherwise cause the
 # node to start at block 0 with an empty store.
-if [ "$DOWNLOAD_SNAPSHOT" == "1" ]; then
+if [ "$DOWNLOAD_SNAP" == "1" ]; then
   if [ ! -d "$PROJECT_ROOT/$DATA_DIR" ] || [ -z "$(ls -A "$PROJECT_ROOT/$DATA_DIR" 2>/dev/null)" ]; then
-    echo "ERROR: Snapshot was expected (DOWNLOAD_SNAPSHOT=1) but $PROJECT_ROOT/$DATA_DIR is missing or empty."
+    echo "ERROR: Snapshot was expected (DOWNLOAD_SNAP=1) but $PROJECT_ROOT/$DATA_DIR is missing or empty."
     echo "  SNAPSHOT_URL=$SNAPSHOT_URL"
     echo "  SNAPSHOT_MODE=${SNAPSHOT_MODE:-remote}"
     echo "  The node cannot start without snapshot data — it would begin at block 0."

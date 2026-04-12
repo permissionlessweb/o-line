@@ -14,7 +14,7 @@ use crate::{
     accounts::{child_address, derive_child_signer},
     akash::{
         build_phase_a_vars, build_phase_b_vars, build_phase_c_vars, build_phase_rly_vars,
-        endpoint_hostname, node_refresh_vars,
+        endpoint_hostname, fetch_statesync_trust_params, node_refresh_vars,
     },
     cli::prompt_continue,
     crypto::{
@@ -42,7 +42,7 @@ use akash_deploy_rs::{
 use std::{
     collections::HashMap,
     env::var,
-    io::{Lines, StdinLock},
+    io::{BufRead, Lines},
     path::PathBuf,
 };
 
@@ -239,7 +239,7 @@ async fn select_provider_for_phase(
     deployer: &OLineDeployer,
     bids: &[Bid],
     label: &str,
-    lines: &mut Lines<StdinLock<'_>>,
+    lines: &mut Lines<impl BufRead>,
     trusted_store: &TrustedProviderStore,
     non_interactive: bool,
 ) -> Result<String, DeployError> {
@@ -286,7 +286,7 @@ async fn select_provider_for_phase(
 /// snapshot sync.
 pub async fn deploy_all_units(
     w: &mut OLineWorkflow,
-    lines: &mut Lines<StdinLock<'_>>,
+    lines: &mut Lines<impl BufRead>,
 ) -> Result<StepResult, DeployError> {
     tracing::info!("\n── Parallel: deploy all units (concurrent MsgCreateDeployment) ──");
 
@@ -1284,7 +1284,7 @@ pub async fn deploy_all_units(
     let a_endpoints = eps_a?;
 
     // ── Node registration setup ────────────────────────────────────────────
-    let ssh_port_internal: u16 = var("SSH_PORT")
+    let ssh_port_internal: u16 = var("SSH_P")
         .unwrap_or_else(|_| "22".into())
         .parse()
         .unwrap_or(22);
@@ -1354,6 +1354,14 @@ pub async fn deploy_all_units(
             .iter()
             .map(|e| format!("{}:{}", e.service, e.port))
             .collect(),
+        gseq: state_a.gseq,
+        oseq: state_a.oseq,
+        services: {
+            let mut seen = std::collections::HashSet::new();
+            a_endpoints.iter().filter_map(|e| {
+                if seen.insert(e.service.clone()) { Some(e.service.clone()) } else { None }
+            }).collect()
+        },
     });
     w.ctx.set_endpoints(DeployPhase::SpecialTeams, a_endpoints);
     w.ctx.set_state(DeployPhase::SpecialTeams, state_a);
@@ -1408,6 +1416,14 @@ pub async fn deploy_all_units(
                     .iter()
                     .map(|e| format!("{}:{}", e.service, e.port))
                     .collect(),
+                gseq: b_state.gseq,
+                oseq: b_state.oseq,
+                services: {
+                    let mut seen = std::collections::HashSet::new();
+                    b_endpoints.iter().filter_map(|e| {
+                        if seen.insert(e.service.clone()) { Some(e.service.clone()) } else { None }
+                    }).collect()
+                },
             });
             w.ctx.set_endpoints(DeployPhase::Tackles, b_endpoints);
             w.ctx.set_state(DeployPhase::Tackles, b_state);
@@ -1465,6 +1481,14 @@ pub async fn deploy_all_units(
                     .iter()
                     .map(|e| format!("{}:{}", e.service, e.port))
                     .collect(),
+                gseq: c_state.gseq,
+                oseq: c_state.oseq,
+                services: {
+                    let mut seen = std::collections::HashSet::new();
+                    c_endpoints.iter().filter_map(|e| {
+                        if seen.insert(e.service.clone()) { Some(e.service.clone()) } else { None }
+                    }).collect()
+                },
             });
             w.ctx.set_endpoints(DeployPhase::Forwards, c_endpoints);
             w.ctx.set_state(DeployPhase::Forwards, c_state);
@@ -1549,6 +1573,14 @@ pub async fn deploy_all_units(
                     .iter()
                     .map(|e| format!("{}:{}", e.service, e.port))
                     .collect(),
+                gseq: e_state.gseq,
+                oseq: e_state.oseq,
+                services: {
+                    let mut seen = std::collections::HashSet::new();
+                    e_endpoints.iter().filter_map(|e| {
+                        if seen.insert(e.service.clone()) { Some(e.service.clone()) } else { None }
+                    }).collect()
+                },
             });
             w.ctx.set_endpoints(DeployPhase::Relayer, e_endpoints);
             w.ctx.set_state(DeployPhase::Relayer, e_state);
@@ -1590,8 +1622,8 @@ pub async fn deploy_all_units(
         let nginx_path =
             var("OLINE_NGINX_PATH").unwrap_or_else(|_| "plays/flea-flicker/nginx".into());
 
-        let has_pre_start = std::env::var("E2E_SNAPSHOT_PATH")
-            .or_else(|_| std::env::var("OLINE_PRE_START_SNAPSHOT"))
+        let has_pre_start = std::env::var("E2E_SNAP_PATH")
+            .or_else(|_| std::env::var("OLINE_PRE_START_SNAP"))
             .ok()
             .map(std::path::PathBuf::from)
             .filter(|p| p.exists())
@@ -1744,7 +1776,7 @@ pub async fn deploy_all_units(
 /// earlier propagation.)
 pub async fn select_all_providers(
     w: &mut OLineWorkflow,
-    _lines: &mut Lines<StdinLock<'_>>,
+    _lines: &mut Lines<impl BufRead>,
 ) -> Result<StepResult, DeployError> {
     tracing::info!("  [parallel] All providers selected — proceeding to DNS update.");
     w.step = OLineStep::UpdateAllDns;
@@ -1797,7 +1829,7 @@ pub async fn update_all_dns(w: &mut OLineWorkflow) -> Result<StepResult, DeployE
             "  Note: Cloudflare DNS not configured — update CNAMEs for accept domains manually."
         );
         w.step = OLineStep::WaitSnapshotReady {
-            timeout_secs: var("OLINE_SNAPSHOT_SYNC_TIMEOUT")
+            timeout_secs: var("OLINE_SNAP_SYNC_TIMEOUT")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(3600),
@@ -1824,7 +1856,7 @@ pub async fn update_all_dns(w: &mut OLineWorkflow) -> Result<StepResult, DeployE
         }
     }
 
-    let timeout_secs: u64 = var("OLINE_SNAPSHOT_SYNC_TIMEOUT")
+    let timeout_secs: u64 = var("OLINE_SNAP_SYNC_TIMEOUT")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(3600);
@@ -1854,8 +1886,8 @@ pub async fn wait_snapshot_ready(
 
     // Build pre-start files (snapshot archive if available for testing).
     let pre_start_files: Vec<PreStartFile> = {
-        let snapshot_path = std::env::var("E2E_SNAPSHOT_PATH")
-            .or_else(|_| std::env::var("OLINE_PRE_START_SNAPSHOT"))
+        let snapshot_path = std::env::var("E2E_SNAP_PATH")
+            .or_else(|_| std::env::var("OLINE_PRE_START_SNAP"))
             .ok()
             .map(std::path::PathBuf::from)
             .filter(|p| p.exists());
@@ -2022,9 +2054,9 @@ pub async fn distribute_snapshot(w: &mut OLineWorkflow) -> Result<StepResult, De
         return Ok(StepResult::Continue);
     }
 
-    let format = var("OLINE_SNAPSHOT_SAVE_FORMAT").unwrap_or_else(|_| "tar.lz4".into());
+    let format = var("OLINE_SNAP_SAVE_FORMAT").unwrap_or_else(|_| "tar.lz4".into());
     let remote_data_dir =
-        var("OLINE_SNAPSHOT_REMOTE_DATA_DIR").unwrap_or_else(|_| "/root/.terp/data".into());
+        var("OLINE_SNAP_REMOTE_DATA_DIR").unwrap_or_else(|_| "/root/.terpd/data".into());
     let secrets_path = var("SECRETS_PATH").unwrap_or_else(|_| ".".into());
     let local_path: PathBuf = format!("{}/oline-parallel-snapshot.{}", secrets_path, format).into();
     let remote_snapshot_path =
@@ -2116,12 +2148,18 @@ pub async fn distribute_snapshot(w: &mut OLineWorkflow) -> Result<StepResult, De
     }
 
     let gen = genesis_bytes.as_slice();
+    let sync_method = w.ctx.deployer.config.val("OLINE_SYNC_METHOD");
+    let skip_bc = sync_method == "statesync";
+    if skip_bc {
+        tracing::info!("  OLINE_SYNC_METHOD=statesync — skipping B/C snapshot push (they will statesync)");
+    }
+
     tokio::join!(
         push_one("parallel-seed",          &seed_eps, key, &local_path, rp, None),
-        push_one("parallel-left-tackle",   &lt_eps,   key, &local_path, rp, Some(gen)),
-        push_one("parallel-right-tackle",  &rt_eps,   key, &local_path, rp, Some(gen)),
-        push_one("parallel-left-forward",  &lf_eps,   key, &local_path, rp, Some(gen)),
-        push_one("parallel-right-forward", &rf_eps,   key, &local_path, rp, Some(gen)),
+        async { if !skip_bc { push_one("parallel-left-tackle",   &lt_eps,   key, &local_path, rp, Some(gen)).await } },
+        async { if !skip_bc { push_one("parallel-right-tackle",  &rt_eps,   key, &local_path, rp, Some(gen)).await } },
+        async { if !skip_bc { push_one("parallel-left-forward",  &lf_eps,   key, &local_path, rp, Some(gen)).await } },
+        async { if !skip_bc { push_one("parallel-right-forward", &rf_eps,   key, &local_path, rp, Some(gen)).await } },
     );
 
     w.step = OLineStep::SignalAllNodes;
@@ -2143,6 +2181,30 @@ pub async fn signal_all_nodes(w: &mut OLineWorkflow) -> Result<StepResult, Deplo
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(300);
+
+    // Auto-fetch statesync trust params from Phase A RPC if not manually set.
+    let sync_method = w.ctx.deployer.config.val("OLINE_SYNC_METHOD");
+    if sync_method == "statesync" {
+        let has_height = !w.ctx.deployer.config.val("STATESYNC_TRUST_HEIGHT").is_empty();
+        if !has_height {
+            let rpc = if w.ctx.statesync_rpc.is_empty() {
+                w.ctx.deployer.config.val("STATESYNC_RPC_SERVERS")
+            } else {
+                w.ctx.statesync_rpc.clone()
+            };
+            tracing::info!("  Fetching statesync trust params from {}...", rpc);
+            match fetch_statesync_trust_params(&rpc).await {
+                Ok((height, hash)) => {
+                    tracing::info!("  trust_height={} trust_hash={}", height, hash);
+                    w.ctx.deployer.config.set("STATESYNC_TRUST_HEIGHT", height);
+                    w.ctx.deployer.config.set("STATESYNC_TRUST_HASH", hash);
+                }
+                Err(e) => {
+                    tracing::warn!("  Failed to fetch trust params: {} — nodes will auto-fetch from entrypoint", e);
+                }
+            }
+        }
+    }
 
     let b_vars = build_phase_b_vars(
         &w.ctx.deployer.config,

@@ -35,7 +35,7 @@ pub enum FirewallSubcommand {
         host: Option<String>,
 
         /// SSH port
-        #[arg(long, env = "PFSENSE_SSH_PORT", default_value = "22")]
+        #[arg(long, env = "PFSENSE_SSH_P", default_value = "22")]
         port: u16,
 
         /// SSH username

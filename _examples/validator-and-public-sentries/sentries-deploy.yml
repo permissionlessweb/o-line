@@ -16,7 +16,7 @@ services:
       - ADDRBOOK_URL=https://raw.githubusercontent.com/111STAVR111/props/main/Terp/addrbook.json
       - SNAPSHOT_URL=https://snapshots.nodejumper.io/terp/terp_latest.tar.lz4
       - FASTSYNC_VERSION=v0
-      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - STATESYNC_SNAP_INTERVAL=500
     expose:
       - port: 26657
         as: 80
@@ -51,7 +51,7 @@ services:
       - ADDRBOOK_URL=https://raw.githubusercontent.com/111STAVR111/props/main/Terp/addrbook.json
       - SNAPSHOT_URL=https://snapshots.nodejumper.io/terp/terp_latest.tar.lz4
       - FASTSYNC_VERSION=v0
-      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - STATESYNC_SNAP_INTERVAL=500
     expose:
       - port: 26657
         as: 80
