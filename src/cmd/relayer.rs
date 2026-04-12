@@ -26,7 +26,7 @@ pub struct RelayerConnArgs {
     pub host: String,
 
     /// SSH port
-    #[arg(long, env = "RLY_SSH_PORT", default_value = "22")]
+    #[arg(long, env = "RLY_SSH_P", default_value = "22")]
     pub port: u16,
 
     /// SSH user

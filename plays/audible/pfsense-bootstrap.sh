@@ -44,14 +44,14 @@ NAT_RULES=""
 NAT_USER=""
 DO_RESET=""
 RESUBNET_IP=""
-PF_PORT="22"
+PF_P="22"
 REVERSE_TUNNEL=""       # user@host[:back-port] — pfSense calls home here on boot
 REVERSE_TUNNEL_INFO=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -i)           KEY="$2"; shift 2 ;;
-    -p|--port)    PF_PORT="$2"; shift 2 ;;
+    -p|--port)    PF_P="$2"; shift 2 ;;
     --client-ip)  CLIENT_IP="$2"; shift 2 ;;
     --client-key) CLIENT_KEY="$2"; shift 2 ;;
     --client-user) CLIENT_USER="$2"; shift 2 ;;
@@ -68,7 +68,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=10 -p $PF_PORT"
+SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=10 -p $PF_P"
 [[ -n "$KEY" ]] && SSH_OPTS="$SSH_OPTS -i $KEY"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -720,7 +720,7 @@ step_ssh_config() {
   CONFIG+="Host pfsense
   HostName $WAN_IP
   User $PF_USER
-  Port $PF_PORT
+  Port $PF_P
 ${KEY_LINE}
   StrictHostKeyChecking no
   UserKnownHostsFile /dev/null
@@ -851,7 +851,7 @@ step_verify_wan() {
   # Detect context: are we on the LAN (oline-server) or the client?
   # If we can reach pfSense at LAN_IP directly, we're on the LAN side.
   local on_lan=""
-  if ssh $SSH_COMMON -p "$PF_PORT" $KEY_OPT "$PFSENSE" "/bin/sh -c 'echo ok'" &>/dev/null; then
+  if ssh $SSH_COMMON -p "$PF_P" $KEY_OPT "$PFSENSE" "/bin/sh -c 'echo ok'" &>/dev/null; then
     on_lan=1
   fi
 
@@ -863,7 +863,7 @@ step_verify_wan() {
     echo "  Context: LAN side (oline-server)"
 
     # Test pfSense WAN reachability
-    echo -n "  pfSense WAN ($WAN_IP:$PF_PORT) ... "
+    echo -n "  pfSense WAN ($WAN_IP:$PF_P) ... "
     if ssh $SSH_COMMON $KEY_OPT "${PF_USER}@${WAN_IP}" "/bin/sh -c 'echo ok'" &>/dev/null; then
       echo "OK"
     else
@@ -901,7 +901,7 @@ step_verify_wan() {
     # Running on client side — test inward to pfSense + LAN
     echo "  Context: client side (WAN)"
 
-    echo -n "  SSH to pfSense WAN ($WAN_IP:$PF_PORT) ... "
+    echo -n "  SSH to pfSense WAN ($WAN_IP:$PF_P) ... "
     if ssh $SSH_COMMON $KEY_OPT "${PF_USER}@${WAN_IP}" "/bin/sh -c 'echo ok'" &>/dev/null; then
       echo "OK"
     else

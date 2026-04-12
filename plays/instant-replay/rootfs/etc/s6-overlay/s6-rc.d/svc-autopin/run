@@ -5,7 +5,7 @@ INTERVAL="${AUTOPIN_INTERVAL:-300}"
 PATTERNS="${AUTOPIN_PATTERNS:-*.tar.gz,*.tar.zst,*.tar.lz4,*.tar.xz,snapshot.json}"
 PINNED_LOG="/data/ipfs/.autopin-state"
 STAGING="/tmp/autopin"
-MINIO_PORT="${MINIO_PORT:-9000}"
+MINIO_P="${MINIO_P:-9000}"
 MINIO_BUCKET="${MINIO_BUCKET:-snapshots}"
 MINIO_ROOT_USER="${MINIO_ROOT_USER:-minioadmin}"
 MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-minioadmin}"
@@ -16,7 +16,7 @@ mkdir -p "$STAGING"
 touch "$PINNED_LOG"
 
 # Configure mc alias
-mc alias set local "http://localhost:${MINIO_PORT}" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" --api S3v4 > /dev/null 2>&1
+mc alias set local "http://localhost:${MINIO_P}" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" --api S3v4 > /dev/null 2>&1
 
 echo "[autopin] Watching MinIO bucket '${MINIO_BUCKET}' every ${INTERVAL}s for: ${PATTERNS}"
 
@@ -48,7 +48,7 @@ update_metadata() {
 
     # Push updated metadata back to MinIO (anonymous GET still applies)
     if mc cp "$META_LOCAL" "local/${MINIO_BUCKET}/${META_OBJ}" > /dev/null 2>&1; then
-        echo "[autopin] Metadata updated: http://localhost:${MINIO_PORT}/${MINIO_BUCKET}/${META_OBJ}"
+        echo "[autopin] Metadata updated: http://localhost:${MINIO_P}/${MINIO_BUCKET}/${META_OBJ}"
     else
         echo "[autopin] Warning: failed to upload ${META_OBJ} to MinIO"
     fi
@@ -58,7 +58,7 @@ update_metadata() {
     meta_cid=$(s6-setuidgid app ipfs add --pin=true -Q "$META_LOCAL" 2>/dev/null)
     if [ -n "$meta_cid" ]; then
         echo "[autopin] Metadata pinned -> ${meta_cid}"
-        echo "[autopin]   http://localhost:${IPFS_GATEWAY_PORT:-8081}/ipfs/${meta_cid}"
+        echo "[autopin]   http://localhost:${IPFS_GATEWAY_P:-8081}/ipfs/${meta_cid}"
     else
         echo "[autopin] Warning: failed to pin ${META_OBJ} to IPFS"
     fi
@@ -95,7 +95,7 @@ while true; do
             if [ -n "$CID" ]; then
                 echo "$key" >> "$PINNED_LOG"
                 echo "[autopin] Pinned ${objname} -> ${CID}"
-                echo "[autopin]   http://localhost:${IPFS_GATEWAY_PORT:-8081}/ipfs/${CID}"
+                echo "[autopin]   http://localhost:${IPFS_GATEWAY_P:-8081}/ipfs/${CID}"
 
                 update_metadata "$objname" "$CID" "$etag"
             else

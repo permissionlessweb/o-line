@@ -1,17 +1,17 @@
-#   ${GRPC_DOMAIN}  - server_name for TLS gRPC (e.g. grpc.terp.network)
-#   ${GRPC_PORT}    - cosmos native gRPC port   (default: 9090)
+#   ${GRPC_D}  - server_name for TLS gRPC (e.g. grpc.terp.network)
+#   ${GRPC_P}    - cosmos native gRPC port   (default: 9090)
 #   ${TLS_CERT}     - TLS certificate path      (default: /tmp/tls/cert.pem)
 #   ${TLS_KEY}      - TLS private key path      (default: /tmp/tls/privkey.pem)
 #
 # Nginx terminates TLS on port 9091 (mapped to external 9090 via Akash NodePort).
 # This bypasses the Akash HTTP ingress entirely — native gRPC (HTTP/2) works
 # because there is no intermediate proxy to downgrade the protocol.
-# DNS for ${GRPC_DOMAIN} must be a grey-cloud (unproxied) A record → provider IP.
+# DNS for ${GRPC_D} must be a grey-cloud (unproxied) A record → provider IP.
 
 server {
     listen      9091 ssl;
     http2       on;
-    server_name ${GRPC_DOMAIN};
+    server_name ${GRPC_D};
 
     ssl_certificate     ${TLS_CERT};
     ssl_certificate_key ${TLS_KEY};
@@ -19,7 +19,7 @@ server {
     ssl_ciphers         HIGH:!aNULL:!MD5;
 
     location / {
-        grpc_pass            grpc://127.0.0.1:${GRPC_PORT};
+        grpc_pass            grpc://127.0.0.1:${GRPC_P};
         grpc_set_header Host $host;
     }
 }

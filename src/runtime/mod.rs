@@ -8,7 +8,7 @@ use crate::{
 use akash_deploy_rs::DeployError;
 use events::WorkflowEvent;
 use state::{StateFile, WorkflowRecord};
-use std::io::{Lines, StdinLock};
+use std::io::{BufRead, Lines};
 use tokio::sync::broadcast;
 
 /// A named workflow slot managed by [`OLineRuntime`].
@@ -100,7 +100,7 @@ impl OLineRuntime {
     ///   populates peer IDs or endpoints in the workflow context.
     pub async fn run_single(
         &mut self,
-        lines: &mut Lines<StdinLock<'_>>,
+        lines: &mut Lines<impl BufRead>,
     ) -> Result<(), DeployError> {
         if self.handles.is_empty() {
             return Ok(());

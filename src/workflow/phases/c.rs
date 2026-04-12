@@ -7,11 +7,11 @@ use crate::{
     workflow::step::{DeployPhase, OLineStep, PeerTarget},
 };
 use akash_deploy_rs::{DeployError, DeploymentRecord, DeploymentStore};
-use std::io::{BufRead, Lines, StdinLock};
+use std::io::{BufRead, Lines};
 
 pub async fn deploy_forwards(
     w: &mut OLineWorkflow,
-    lines: &mut Lines<StdinLock<'_>>,
+    lines: &mut Lines<impl BufRead>,
 ) -> Result<StepResult, DeployError> {
     tracing::info!("\n── Phase 3: Deploy Left & Right Forwards ──");
 
@@ -75,7 +75,7 @@ pub async fn deploy_forwards(
         .ok();
 
     {
-        let ssh_port_internal: u16 = std::env::var("SSH_PORT")
+        let ssh_port_internal: u16 = std::env::var("SSH_P")
             .unwrap_or_else(|_| "22".into())
             .parse()
             .unwrap_or(22);

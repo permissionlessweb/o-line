@@ -24,22 +24,28 @@ services:
         as: 9090
         to:
           - global: true
+      - port: 5000
+        as: 80
+        to:
+          - global: true
+        accept:
+${VALIDATOR_80_ACCEPTS}
     env:
       - CHAINID=${TESTNET_CHAIN_ID}
       - FAST_BLOCKS=${TESTNET_FAST_BLOCKS}
   ${SNAPSHOT_SVC}:
     image: ${OMNIBUS_IMAGE}
     expose:
-      - port: ${P2P_PORT_SNAPSHOT}
-        as: ${P2P_PORT_SNAPSHOT}
+      - port: ${P2P_P_SNAP}
+        as: ${P2P_P_SNAP}
         to:
           - global: true
-      - port: ${RPC_PORT_SNAPSHOT}
-        as: ${RPC_PORT_SNAPSHOT}
+      - port: ${RPC_P_SNAP}
+        as: ${RPC_P_SNAP}
         to:
           - global: true
       - port: 9091
-        as: ${GRPC_PORT_SNAPSHOT}
+        as: ${GRPC_P_SNAP}
         to:
           - global: true
       - port: 80
@@ -48,8 +54,8 @@ services:
           - global: true
         accept:
 ${SNAPSHOT_80_ACCEPTS}
-      - port: ${SSH_PORT}
-        as: ${SSH_PORT}
+      - port: ${SSH_P}
+        as: ${SSH_P}
         to:
           - global: true
     env:
@@ -61,19 +67,19 @@ ${SNAPSHOT_80_ACCEPTS}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - FASTSYNC_VERSION=v0
       - PRUNING=nothing
-      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - STATESYNC_SNAP_INTERVAL=500
       - TERPD_P2P_PEX=false
       - TERPD_P2P_PERSISTENT_PEERS=${TERPD_P2P_PERSISTENT_PEERS}
       - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${TERPD_P2P_UNCONDITIONAL_PEER_IDS}
       - TERPD_P2P_PRIVATE_PEER_IDS=${TERPD_P2P_PRIVATE_PEER_IDS}
-      - RPC_DOMAIN=${RPC_DOMAIN_SNAPSHOT}
-      - RPC_PORT=${RPC_PORT_SNAPSHOT}
-      - API_DOMAIN=${API_DOMAIN_SNAPSHOT}
-      - API_PORT=${API_PORT_SNAPSHOT}
-      - P2P_DOMAIN=${P2P_DOMAIN_SNAPSHOT}
-      - P2P_PORT=${P2P_PORT_SNAPSHOT}
-      - GRPC_PORT=${GRPC_PORT_SNAPSHOT}
-      - GRPC_DOMAIN=${GRPC_DOMAIN_SNAPSHOT}
+      - RPC_DOMAIN=${RPC_D_SNAP}
+      - RPC_P=${RPC_P_SNAP}
+      - API_D=${API_D_SNAP}
+      - API_P=${API_P_SNAP}
+      - P2P_D=${P2P_D_SNAP}
+      - P2P_P=${P2P_P_SNAP}
+      - GRPC_P=${GRPC_P_SNAP}
+      - GRPC_D=${GRPC_D_SNAP}
       - SSH_PUBKEY=${SSH_PUBKEY}
   ${SEED_SVC}:
     image: ${OMNIBUS_IMAGE}
@@ -87,7 +93,7 @@ ${SNAPSHOT_80_ACCEPTS}
         to:
           - global: true
       - port: 9091
-        as: ${GRPC_PORT_SEED}
+        as: ${GRPC_P_SEED}
         to:
           - global: true
       - port: 80
@@ -96,8 +102,8 @@ ${SNAPSHOT_80_ACCEPTS}
           - global: true
         accept:
 ${SEED_80_ACCEPTS}
-      - port: ${SSH_PORT}
-        as: ${SSH_PORT}
+      - port: ${SSH_P}
+        as: ${SSH_P}
         to:
           - global: true
     env:
@@ -111,18 +117,18 @@ ${SEED_80_ACCEPTS}
       - PRUNING=default
       - TERPD_P2P_PEX=true
       - FASTSYNC_VERSION=v0
-      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - STATESYNC_SNAP_INTERVAL=500
       - TERPD_P2P_PERSISTENT_PEERS=${TERPD_P2P_PERSISTENT_PEERS}
       - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${TERPD_P2P_UNCONDITIONAL_PEER_IDS}
       - TERPD_P2P_PRIVATE_PEER_IDS=${TERPD_P2P_PRIVATE_PEER_IDS}
-      - RPC_DOMAIN=${RPC_DOMAIN_SEED}
-      - RPC_PORT=${RPC_PORT_SEED}
-      - API_DOMAIN=${API_DOMAIN_SEED}
-      - API_PORT=${API_PORT_SEED}
-      - P2P_DOMAIN=${P2P_DOMAIN_SEED}
-      - P2P_PORT=${P2P_PORT_SEED}
-      - GRPC_PORT=${GRPC_PORT_SEED}
-      - GRPC_DOMAIN=${GRPC_DOMAIN_SEED}
+      - RPC_DOMAIN=${RPC_D_SEED}
+      - RPC_P=${RPC_P_SEED}
+      - API_D=${API_D_SEED}
+      - API_P=${API_P_SEED}
+      - P2P_D=${P2P_D_SEED}
+      - P2P_P=${P2P_P_SEED}
+      - GRPC_P=${GRPC_P_SEED}
+      - GRPC_D=${GRPC_D_SEED}
 profiles:
   compute:
     ${VALIDATOR_SVC}:

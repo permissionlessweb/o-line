@@ -5,12 +5,12 @@ set -uo pipefail
 # ── Configuration ────────────────────────────────────────────────────────────
 IMAGE="${E2E_IMAGE:-ghcr.io/permissionlessweb/minio-ipfs:v0.0.9}"
 CONTAINER_NAME="minio-ipfs-e2e"
-IPFS_GW_PORT=18081
-MINIO_PORT=19000
-MINIO_CONSOLE_PORT=19001
-MINIO_URL="http://localhost:${MINIO_PORT}"
-MINIO_CONSOLE_URL="http://localhost:${MINIO_CONSOLE_PORT}"
-IPFS_GW_URL="http://localhost:${IPFS_GW_PORT}"
+IPFS_GW_P=18081
+MINIO_P=19000
+MINIO_CONSOLE_P=19001
+MINIO_URL="http://localhost:${MINIO_P}"
+MINIO_CONSOLE_URL="http://localhost:${MINIO_CONSOLE_P}"
+IPFS_GW_URL="http://localhost:${IPFS_GW_P}"
 TMPDIR="$(mktemp -d)"
 PASSED=0
 FAILED=0
@@ -124,9 +124,9 @@ test_container_start() {
     local run_output
     run_output=$(docker run -d \
         --name "$CONTAINER_NAME" \
-        -p "${IPFS_GW_PORT}:8081" \
-        -p "${MINIO_PORT}:9000" \
-        -p "${MINIO_CONSOLE_PORT}:9001" \
+        -p "${IPFS_GW_P}:8081" \
+        -p "${MINIO_P}:9000" \
+        -p "${MINIO_CONSOLE_P}:9001" \
         -e MINIO_ENABLED=true \
         -e MINIO_ROOT_USER=minioadmin \
         -e MINIO_ROOT_PASSWORD=minioadmin \
@@ -419,7 +419,7 @@ test_snapshot_json_in_metadata() {
     #   into metadata.json under .snapshots["snapshot.json"].
     #   Success is confirmed by reading metadata.json from the public MinIO URL.
 
-    local snap_url="http://localhost:${MINIO_PORT}/snapshots/s3-pipeline-snapshot.tar.gz"
+    local snap_url="http://localhost:${MINIO_P}/snapshots/s3-pipeline-snapshot.tar.gz"
     local snap_json
     snap_json=$(printf '{"chain_id":"test-chain-1","snapshots":["%s"],"latest":"%s"}' \
         "$snap_url" "$snap_url")

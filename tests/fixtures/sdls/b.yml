@@ -10,16 +10,16 @@ services:
         as: 80
         to:
           - global: true
-      - port: ${RPC_PORT_TACKLE_L}
-        as: ${RPC_PORT_TACKLE_L}
+      - port: ${RPC_P_TL}
+        as: ${RPC_P_TL}
         to:
           - global: true
-      - port: ${P2P_PORT_TACKLE_L}
-        as: ${P2P_PORT_TACKLE_L}
+      - port: ${P2P_P_TL}
+        as: ${P2P_P_TL}
         to:
           - global: true
-      - port: ${SSH_PORT}
-        as: ${SSH_PORT}
+      - port: ${SSH_P}
+        as: ${SSH_P}
         to:
           - global: true
     env:
@@ -32,16 +32,16 @@ services:
         as: 80
         to:
           - global: true
-      - port: ${RPC_PORT_TACKLE_R}
-        as: ${RPC_PORT_TACKLE_R}
+      - port: ${RPC_P_TACKLE_R}
+        as: ${RPC_P_TACKLE_R}
         to:
           - global: true
-      - port: ${P2P_PORT_TACKLE_R}
-        as: ${P2P_PORT_TACKLE_R}
+      - port: ${P2P_P_TACKLE_R}
+        as: ${P2P_P_TACKLE_R}
         to:
           - global: true
-      - port: ${SSH_PORT}
-        as: ${SSH_PORT}
+      - port: ${SSH_P}
+        as: ${SSH_P}
         to:
           - global: true
     env:

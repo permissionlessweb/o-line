@@ -35,7 +35,7 @@ pub async fn cmd_registry(args: &RegistryArgs) -> Result<(), Box<dyn Error>> {
 }
 
 async fn cmd_registry_serve() -> Result<(), Box<dyn Error>> {
-    let port: u16 = std::env::var("OLINE_REGISTRY_PORT")
+    let port: u16 = std::env::var("OLINE_REGISTRY_P")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(5000);
@@ -48,7 +48,7 @@ async fn cmd_registry_serve() -> Result<(), Box<dyn Error>> {
 async fn cmd_registry_import(image: &str, push: bool) -> Result<(), Box<dyn Error>> {
     if push {
         // Push via Docker API — requires running registry
-        let port: u16 = std::env::var("OLINE_REGISTRY_PORT")
+        let port: u16 = std::env::var("OLINE_REGISTRY_P")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(5000);

@@ -176,17 +176,20 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
     let mut lines = stdin.lock().lines();
 
     tracing::info!("\n── Provider selection: Phase A ──");
-    let provider_a = deployer.interactive_select_provider(&bids_a, &mut lines).await?;
+    let provider_a = deployer.interactive_select_provider(&bids_a, &mut lines).await
+        .map_err(|e| -> Box<dyn Error> { e })?;
     DeploymentWorkflow::<AkashClient>::select_provider(&mut state_a, &provider_a)
         .map_err(|e| -> Box<dyn Error> { e.into() })?;
 
     tracing::info!("\n── Provider selection: Phase B ──");
-    let provider_b = deployer.interactive_select_provider(&bids_b, &mut lines).await?;
+    let provider_b = deployer.interactive_select_provider(&bids_b, &mut lines).await
+        .map_err(|e| -> Box<dyn Error> { e })?;
     DeploymentWorkflow::<AkashClient>::select_provider(&mut state_b, &provider_b)
         .map_err(|e| -> Box<dyn Error> { e.into() })?;
 
     tracing::info!("\n── Provider selection: Phase C ──");
-    let provider_c = deployer.interactive_select_provider(&bids_c, &mut lines).await?;
+    let provider_c = deployer.interactive_select_provider(&bids_c, &mut lines).await
+        .map_err(|e| -> Box<dyn Error> { e })?;
     DeploymentWorkflow::<AkashClient>::select_provider(&mut state_c, &provider_c)
         .map_err(|e| -> Box<dyn Error> { e.into() })?;
 
@@ -328,11 +331,11 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
     };
 
     // Inject explicit snapshot URL so sentries don't rely on chain-registry resolution.
-    // OLINE_SNAPSHOT_FULL_URL → SNAPSHOT_URL (operator override, survives OFFLINE mode).
-    let snapshot_full_url = var("OLINE_SNAPSHOT_FULL_URL").unwrap_or_default();
+    // OLINE_SNAP_FULL_URL → SNAPSHOT_URL (operator override, survives OFFLINE mode).
+    let snapshot_full_url = var("OLINE_SNAP_FULL_URL").unwrap_or_default();
     if !snapshot_full_url.is_empty() {
         a_vars.insert("SNAPSHOT_URL".into(), snapshot_full_url.clone());
-        a_vars.insert("OLINE_SNAPSHOT_FULL_URL".into(), snapshot_full_url);
+        a_vars.insert("OLINE_SNAP_FULL_URL".into(), snapshot_full_url);
         tracing::info!("  Snapshot URL: {}", a_vars["SNAPSHOT_URL"]);
     }
 
@@ -605,6 +608,15 @@ async fn build_testnet_a_vars(
     vars.insert("SNAPSHOT_80_ACCEPTS".into(), build_accept_items(&vars, "SNAPSHOT"));
     vars.insert("SEED_80_ACCEPTS".into(), build_accept_items(&vars, "SEED"));
 
+    // Faucet domain — route HTTP port 80 → container port 5000
+    let faucet_d = config.val("FAUCET_D");
+    let validator_accepts = if faucet_d.is_empty() {
+        String::new()
+    } else {
+        format!("          - {}", faucet_d)
+    };
+    vars.insert("VALIDATOR_80_ACCEPTS".into(), validator_accepts);
+
     Ok(vars)
 }
 
@@ -659,8 +671,8 @@ fn build_testnet_c_vars(
     vars.insert("LF_SVC".into(), "oline-c-left-forward".into());
     vars.insert("RF_SVC".into(), "oline-c-right-forward".into());
     vars.insert("TESTNET_CHAIN_ID".into(), chain_id.to_string());
-    vars.insert("LEFT_FORWARD_MONIKER".into(), generate_credential(12));
-    vars.insert("RIGHT_FORWARD_MONIKER".into(), generate_credential(12));
+    vars.insert("LEFT_FMONIKER".into(), generate_credential(12));
+    vars.insert("RIGHT_FMONIKER".into(), generate_credential(12));
 
     // SSH key — reuse Phase A's keypair so bootstrap_sentry can SFTP in
     vars.insert("SSH_PUBKEY".into(), ssh_pubkey.to_string());

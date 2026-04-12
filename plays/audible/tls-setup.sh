@@ -2,7 +2,7 @@
 # tls-setup.sh
 #
 # Sets up nginx reverse-proxy for RPC, API, and/or GRPC services.
-# Reads *_DOMAIN + *_PORT env vars (as set by the Akash SDL).
+# Reads *_D + *_P env vars (as set by the Akash SDL).
 #
 # TLS is terminated by the Akash provider's nginx-ingress at port 443.
 # Traffic arriving at this nginx instance is already plain HTTP — the nginx
@@ -26,20 +26,20 @@ RENDERED_DIR="${RENDERED_DIR:-/etc/nginx/conf.d}"
 NGINX_FULL="${NGINX_FULL:-/etc/nginx/nginx.conf}"
 
 # ── validation ─────────────────────────────────────────────────────────────────
-# Services use *_DOMAIN + *_PORT naming (SDL env convention: RPC_DOMAIN, P2P_DOMAIN, etc.)
+# Services use *_D + *_P naming (SDL env convention: RPC_DOMAIN, P2P_D, etc.)
 services="RPC API GRPC"
 at_least_one=false
 for svc in $services; do
-    eval "domain_val=\"\$${svc}_DOMAIN\""
-    eval "port_val=\"\$${svc}_PORT\""
+    eval "domain_val=\"\$${svc}_D\""
+    eval "port_val=\"\$${svc}_P\""
     if [ -n "$domain_val" ] && [ -n "$port_val" ]; then
         case "$port_val" in
             ''|*[!0-9]*)
-                die "${svc}_PORT must be a numeric value"
+                die "${svc}_P must be a numeric value"
                 ;;
             *)
                 if [ "$port_val" -lt 1 ] || [ "$port_val" -gt 65535 ]; then
-                   die "${svc}_PORT $port_val out of range 1-65535"
+                   die "${svc}_P $port_val out of range 1-65535"
                 fi
                 at_least_one=true
                 ;;
@@ -55,9 +55,9 @@ if [ "$at_least_one" = false ]; then
     exit 0
 fi
 log "Configuration validated."
-if [ -n "$RPC_DOMAIN"  ] && [ -n "$RPC_PORT"  ]; then log "  RPC:  $RPC_DOMAIN:$RPC_PORT";  fi
-if [ -n "$API_DOMAIN"  ] && [ -n "$API_PORT"  ]; then log "  API:  $API_DOMAIN:$API_PORT";   fi
-if [ -n "$GRPC_DOMAIN" ] && [ -n "$GRPC_PORT" ]; then log "  GRPC: $GRPC_DOMAIN:$GRPC_PORT"; fi
+if [ -n "$RPC_DOMAIN"  ] && [ -n "$RPC_P"  ]; then log "  RPC:  $RPC_DOMAIN:$RPC_P";  fi
+if [ -n "$API_D"  ] && [ -n "$API_P"  ]; then log "  API:  $API_D:$API_P";   fi
+if [ -n "$GRPC_D" ] && [ -n "$GRPC_P" ]; then log "  GRPC: $GRPC_D:$GRPC_P"; fi
 
 # TLS certs were previously used as a startup sync signal (SFTP delivery).
 # Akash provider terminates TLS at the ingress — nginx here uses plain HTTP
@@ -67,13 +67,13 @@ if [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ]; then
   log "TLS cert: $TLS_CERT (present)"
 else
   log "No TLS certs found at $TLS_CERT / $TLS_KEY"
-  if [ -n "$GRPC_DOMAIN" ] && [ -n "$GRPC_PORT" ]; then
+  if [ -n "$GRPC_D" ] && [ -n "$GRPC_P" ]; then
     log "gRPC configured — generating self-signed cert for NodePort TLS..."
     mkdir -p "$(dirname "$TLS_CERT")"
     openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
       -keyout "$TLS_KEY" -out "$TLS_CERT" -days 365 -nodes \
-      -subj "/CN=${GRPC_DOMAIN}" 2>/dev/null
-    log "Self-signed cert generated for ${GRPC_DOMAIN}"
+      -subj "/CN=${GRPC_D}" 2>/dev/null
+    log "Self-signed cert generated for ${GRPC_D}"
   else
     log "Continuing without certs (Akash ingress handles TLS for RPC/API)"
   fi
@@ -112,8 +112,8 @@ cp "$MAIN_NGINX_TMPL" "$NGINX_FULL"
 # simply by writing its .conf file here.  No sed editing of nginx.conf needed.
 log "Rendering per-service nginx configs..."
 for svc in $services; do
-    PORT_VAR="${svc}_PORT"
-    DOMAIN_VAR="${svc}_DOMAIN"
+    PORT_VAR="${svc}_P"
+    DOMAIN_VAR="${svc}_D"
     port_val=$(printenv "$PORT_VAR" || true)
     domain_val=$(printenv "$DOMAIN_VAR" || true)
     if [ -n "$port_val" ] && [ -n "$domain_val" ]; then
@@ -145,8 +145,8 @@ done
 log "Testing nginx configuration..."
 nginx -t 2>&1 || die "nginx config test failed — check rendered configs above"
 if [ -n "$RPC_DOMAIN"  ]; then log "  RPC  -> https://$RPC_DOMAIN";  fi
-if [ -n "$API_DOMAIN"  ]; then log "  API  -> https://$API_DOMAIN";  fi
-if [ -n "$GRPC_DOMAIN" ]; then log "  GRPC -> https://$GRPC_DOMAIN"; fi
+if [ -n "$API_D"  ]; then log "  API  -> https://$API_D";  fi
+if [ -n "$GRPC_D" ]; then log "  GRPC -> https://$GRPC_D"; fi
 # When invoked as START_CMD with a command (e.g. 'terpd start'), exec it now.
 # When called with no args (from oline-entrypoint.sh), exit 0 — the entrypoint
 # starts nginx and the cosmos node separately.

@@ -6,7 +6,7 @@ use crate::deployer::OLineDeployer;
 use akash_deploy_rs::DeployError;
 use context::{OLineContext, PhaseResult};
 use phases::{a, b, c, e, parallel};
-use std::io::{Lines, StdinLock};
+use std::io::{BufRead, Lines};
 use step::{DeployPhase, NodeTarget, OLineStep, PeerTarget};
 
 pub enum StepResult {
@@ -57,7 +57,7 @@ impl OLineWorkflow {
     /// Process exactly one step. Each step fn sets `self.step = <next>` before returning `Continue`.
     pub async fn advance(
         &mut self,
-        lines: &mut Lines<StdinLock<'_>>,
+        lines: &mut Lines<impl BufRead>,
     ) -> Result<StepResult, DeployError> {
         use OLineStep::*;
         match self.step.clone() {
@@ -120,7 +120,7 @@ impl OLineWorkflow {
     }
 
     /// Drive the workflow to completion.
-    pub async fn run(&mut self, lines: &mut Lines<StdinLock<'_>>) -> Result<(), DeployError> {
+    pub async fn run(&mut self, lines: &mut Lines<impl BufRead>) -> Result<(), DeployError> {
         loop {
             match self.advance(lines).await? {
                 StepResult::Continue => {}
@@ -129,6 +129,16 @@ impl OLineWorkflow {
             }
         }
         Ok(())
+    }
+
+    /// Drive the workflow to completion without stdin.
+    ///
+    /// Used by the TUI deploy path: after the interactive phase completes,
+    /// the remaining automated steps run headless in a background task while
+    /// the TUI displays progress.
+    pub async fn run_headless(&mut self) -> Result<(), DeployError> {
+        let mut lines = std::io::BufReader::new(std::io::empty()).lines();
+        self.run(&mut lines).await
     }
 
     /// Capture the deployment summary as a vec of lines (for TUI display).
@@ -175,8 +185,8 @@ impl OLineWorkflow {
         let get = |k: &str| a_vars.get(k).map(|s| s.as_str()).unwrap_or("");
         out.push("  ┌── Public Endpoints ──────────────────────────────────────────────────".to_string());
         for (label, rpc, api, grpc, p2p, p2p_port) in [
-            ("Snapshot", "RPC_DOMAIN_SNAPSHOT", "API_DOMAIN_SNAPSHOT", "GRPC_DOMAIN_SNAPSHOT", "P2P_DOMAIN_SNAPSHOT", "P2P_PORT_SNAPSHOT"),
-            ("Seed    ", "RPC_DOMAIN_SEED", "API_DOMAIN_SEED", "GRPC_DOMAIN_SEED", "P2P_DOMAIN_SEED", "P2P_PORT_SEED"),
+            ("Snapshot", "RPC_D_SNAP", "API_D_SNAP", "GRPC_D_SNAP", "P2P_D_SNAP", "P2P_P_SNAP"),
+            ("Seed    ", "RPC_D_SEED", "API_D_SEED", "GRPC_D_SEED", "P2P_D_SEED", "P2P_P_SEED"),
         ] {
             let (rpc_d, api_d, grpc_d, p2p_d, p2p_p) = (get(rpc), get(api), get(grpc), get(p2p), get(p2p_port));
             if !rpc_d.is_empty() { out.push(format!("  │  {} RPC:   https://{}", label, rpc_d)); }

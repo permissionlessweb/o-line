@@ -257,7 +257,7 @@ pub async fn push_pre_start_files(
         return Ok(());
     }
 
-    let ssh_port: u16 = var("SSH_PORT")
+    let ssh_port: u16 = var("SSH_P")
         .unwrap_or_else(|_| "22".into())
         .parse()
         .unwrap_or(22);
@@ -420,7 +420,7 @@ pub async fn push_scripts_sftp(
     use openssh_sftp_client::Sftp;
     use std::path::Path;
 
-    let ssh_port: u16 = var("SSH_PORT")
+    let ssh_port: u16 = var("SSH_P")
         .unwrap_or_else(|_| "22".into())
         .parse()
         .unwrap_or(22);
@@ -535,7 +535,7 @@ pub async fn verify_files_and_signal_start(
     remote_paths: &[String],
     sdl_vars: &HashMap<String, String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let ssh_port: u16 = var("SSH_PORT")
+    let ssh_port: u16 = var("SSH_P")
         .unwrap_or_else(|_| "22".into())
         .parse()
         .unwrap_or(22);
@@ -619,19 +619,24 @@ pub async fn verify_files_and_signal_start(
         "OMNIBUS_IMAGE",
         "SNAPSHOT_JSON",
         "SNAPSHOT_URL",
-        "OLINE_SNAPSHOT_FULL_URL",
+        "OLINE_SNAP_FULL_URL",
         "TERPD_P2P_PRIVATE_PEER_IDS",
         "TERPD_P2P_PERSISTENT_PEERS",
         "RPC_DOMAIN",
-        "RPC_PORT",
-        "API_DOMAIN",
-        "API_PORT",
-        "GRPC_DOMAIN",
-        "GRPC_PORT",
-        "P2P_DOMAIN",
-        "P2P_PORT",
+        "RPC_P",
+        "API_D",
+        "API_P",
+        "GRPC_D",
+        "GRPC_P",
+        "P2P_D",
+        "P2P_P",
         "P2P_PEX",
         "P2P_ADDR_BOOK_STRICT",
+        "STATESYNC_ENABLE",
+        "STATESYNC_RPC_SERVERS",
+        "STATESYNC_TRUST_HEIGHT",
+        "STATESYNC_TRUST_HASH",
+        "STATESYNC_TRUST_PERIOD",
     ];
     let export_lines: Vec<String> = sdl_vars
         .iter()
@@ -701,7 +706,7 @@ pub async fn update_nginx_grpc_tls(
     tls_cert: &str,
     tls_key: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let ssh_port: u16 = var("SSH_PORT")
+    let ssh_port: u16 = var("SSH_P")
         .unwrap_or_else(|_| "22".into())
         .parse()
         .unwrap_or(22);

@@ -68,6 +68,18 @@ pub enum ManageSubcommand {
         #[arg(long, default_value = "100")]
         tail: u64,
     },
+    /// Reconnect to a session's TUI log viewer
+    Tui {
+        /// Session ID (default: latest session)
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// Check liveness of deployments in a session
+    Status {
+        /// Session ID (default: latest session)
+        #[arg(long)]
+        session: Option<String>,
+    },
     /// Return remaining funds from HD child accounts back to master.
     ///
     /// Queries each child's on-chain balance, subtracts gas reserve,
@@ -96,8 +108,8 @@ with_examples! {
         #[arg(long, env = "OLINE_PRIVATE_NODE_HOST")]
         pub host: Option<String>,
 
-        /// SSH port (env: OLINE_PRIVATE_NODE_PORT)
-        #[arg(long, env = "OLINE_PRIVATE_NODE_PORT", default_value = "22")]
+        /// SSH port (env: OLINE_PRIVATE_NODE_P)
+        #[arg(long, env = "OLINE_PRIVATE_NODE_P", default_value = "22")]
         pub port: u16,
 
         /// SSH private key path (env: OLINE_PRIVATE_NODE_KEY)
@@ -116,12 +128,12 @@ with_examples! {
         #[arg(long, env = "OLINE_PERSISTENT_PEERS")]
         pub peers: Option<String>,
 
-        /// Snapshot URL (env: OLINE_SNAPSHOT_BASE_URL)
-        #[arg(long, env = "OLINE_SNAPSHOT_BASE_URL")]
+        /// Snapshot URL (env: OLINE_SNAP_BASE_URL)
+        #[arg(long, env = "OLINE_SNAP_BASE_URL")]
         pub snapshot: Option<String>,
 
-        /// Snapshot format (env: OLINE_SNAPSHOT_SAVE_FORMAT)
-        #[arg(long, env = "OLINE_SNAPSHOT_SAVE_FORMAT", default_value = "tar.lz4")]
+        /// Snapshot format (env: OLINE_SNAP_SAVE_FORMAT)
+        #[arg(long, env = "OLINE_SNAP_SAVE_FORMAT", default_value = "tar.lz4")]
         pub format: String,
 
         /// Skip confirmation prompt
@@ -295,6 +307,8 @@ pub async fn cmd_manage(args: &ManageArgs) -> Result<(), Box<dyn Error>> {
         Some(ManageSubcommand::Logs { dseq, service, tail }) => {
             cmd_manage_logs(*dseq, service.as_deref(), *tail).await
         }
+        Some(ManageSubcommand::Tui { session }) => cmd_manage_tui(session.as_deref()).await,
+        Some(ManageSubcommand::Status { session }) => cmd_manage_status(session.as_deref()).await,
         Some(ManageSubcommand::Drain {
             session,
             gas_reserve,
@@ -661,9 +675,9 @@ pub async fn cmd_bootstrap_private(args: BootstrapArgs) -> Result<(), Box<dyn Er
     let snap_default: String = if let Some(url) = args.snapshot.clone() {
         url
     } else {
-        let full = var("OLINE_SNAPSHOT_FULL_URL").unwrap_or_default();
-        let state_url = var("OLINE_SNAPSHOT_STATE_URL").unwrap_or_default();
-        let base_url = var("OLINE_SNAPSHOT_BASE_URL").unwrap_or_default();
+        let full = var("OLINE_SNAP_FULL_URL").unwrap_or_default();
+        let state_url = var("OLINE_SNAP_STATE_URL").unwrap_or_default();
+        let base_url = var("OLINE_SNAP_BASE_URL").unwrap_or_default();
         if !full.is_empty() {
             full
         } else if !state_url.is_empty() && !base_url.is_empty() {
@@ -839,6 +853,161 @@ async fn cmd_manage_logs(
             }
         }
     }
+    Ok(())
+}
+
+// ── manage tui ──────────────────────────────────────────────────────────────
+
+async fn cmd_manage_tui(session_id: Option<&str>) -> Result<(), Box<dyn Error>> {
+    use crate::sessions::OLineSessionStore;
+    use crate::tui::{build_log_targets_from_session, TuiController, run_tui};
+
+    tracing::info!("=== Manage: TUI Log Viewer ===\n");
+
+    let store = OLineSessionStore::new();
+    let session = match session_id {
+        Some(id) => store.load(id)?,
+        None => store
+            .latest()?
+            .ok_or("No sessions found. Run `oline deploy --parallel` first.")?,
+    };
+
+    tracing::info!("  Session:      {}", session.id);
+    tracing::info!("  Master:       {}", session.master_address);
+    tracing::info!("  Deployments:  {}", session.deployments.len());
+
+    if session.deployments.is_empty() {
+        tracing::info!("  No deployments recorded in session.");
+        return Ok(());
+    }
+
+    let (mnemonic, _password) = unlock_mnemonic()?;
+    let rpc = var("OLINE_RPC_ENDPOINT")
+        .unwrap_or_else(|_| "https://rpc-akash.ecostake.com:443".into());
+    let grpc = var("OLINE_GRPC_ENDPOINT")
+        .unwrap_or_else(|_| "https://akash.lavenderfive.com:443".into());
+
+    let client = AkashClient::new_from_mnemonic(&mnemonic, &rpc, &grpc).await?;
+    let targets = build_log_targets_from_session(&session, &client).await;
+
+    if targets.is_empty() {
+        tracing::info!("  No connectable log targets found.");
+        return Ok(());
+    }
+
+    tracing::info!("  Connecting to {} log stream(s)...\n", targets.len());
+
+    let controller = TuiController::new();
+    controller.add_targets(targets).await;
+    run_tui(controller).await?;
+
+    Ok(())
+}
+
+// ── manage status ───────────────────────────────────────────────────────────
+
+async fn cmd_manage_status(session_id: Option<&str>) -> Result<(), Box<dyn Error>> {
+    use crate::sessions::OLineSessionStore;
+    use akash_deploy_rs::gen::akash::deployment::v1beta5::{
+        query_client::QueryClient as DeployQueryClient, DeploymentFilters, QueryDeploymentsRequest,
+    };
+
+    tracing::info!("=== Manage: Session Status ===\n");
+
+    let store = OLineSessionStore::new();
+    let session = match session_id {
+        Some(id) => store.load(id)?,
+        None => store
+            .latest()?
+            .ok_or("No sessions found. Run `oline deploy --parallel` first.")?,
+    };
+
+    tracing::info!("  Session:  {}", session.id);
+    tracing::info!("  Master:   {}", session.master_address);
+    tracing::info!("  Chain:    {}", session.chain_id);
+
+    if session.deployments.is_empty() {
+        tracing::info!("  No deployments recorded.");
+        return Ok(());
+    }
+
+    let grpc = normalize_grpc_endpoint(
+        &var("OLINE_GRPC_ENDPOINT")
+            .unwrap_or_else(|_| "https://akash.lavenderfive.com:443".into()),
+    );
+
+    let mut deploy_client = DeployQueryClient::connect(grpc)
+        .await
+        .map_err(|e| format!("Failed to connect gRPC: {}", e))?;
+
+    let resp = deploy_client
+        .deployments(QueryDeploymentsRequest {
+            filters: Some(DeploymentFilters {
+                owner: session.master_address.clone(),
+                dseq: 0,
+                state: "active".to_string(),
+            }),
+            pagination: None,
+        })
+        .await
+        .map_err(|e| format!("Deployment query failed: {}", e))?;
+
+    let on_chain: HashSet<u64> = resp
+        .into_inner()
+        .deployments
+        .iter()
+        .filter_map(|d| {
+            d.deployment
+                .as_ref()
+                .and_then(|dep| dep.id.as_ref())
+                .map(|id| id.dseq)
+        })
+        .collect();
+
+    tracing::info!("\n  {:<8} {:<16} {:<20} {:<10}", "DSEQ", "Phase", "Provider", "Status");
+    tracing::info!("  {:-<60}", "");
+
+    for dep in &session.deployments {
+        let provider = dep
+            .provider
+            .as_deref()
+            .map(|p| {
+                if p.len() > 18 {
+                    format!("{}..{}", &p[..8], &p[p.len() - 4..])
+                } else {
+                    p.to_string()
+                }
+            })
+            .unwrap_or_else(|| "-".into());
+
+        let status = if dep.dseq == 0 {
+            "no-dseq"
+        } else if on_chain.contains(&dep.dseq) {
+            "active"
+        } else {
+            "CLOSED"
+        };
+
+        tracing::info!(
+            "  {:<8} {:<16} {:<20} {:<10}",
+            dep.dseq,
+            dep.phase,
+            provider,
+            status,
+        );
+    }
+
+    let active_count = session
+        .deployments
+        .iter()
+        .filter(|d| d.dseq > 0 && on_chain.contains(&d.dseq))
+        .count();
+    tracing::info!(
+        "\n  {}/{} deployment(s) active on-chain.",
+        active_count,
+        session.deployments.len()
+    );
+
     Ok(())
 }
 

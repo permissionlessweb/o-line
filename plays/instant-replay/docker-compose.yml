@@ -10,10 +10,10 @@ services:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
       - MINIO_BUCKET=${MINIO_BUCKET:-snapshots}
-      - MINIO_PORT=${MINIO_PORT:-9000}
-      - MINIO_CONSOLE_PORT=${MINIO_CONSOLE_PORT:-9001}
+      - MINIO_P=${MINIO_P:-9000}
+      - MINIO_CONSOLE_P=${MINIO_CONSOLE_P:-9001}
       # Ports
-      - IPFS_GATEWAY_PORT=${IPFS_GATEWAY_PORT:-8081}
+      - IPFS_GATEWAY_P=${IPFS_GATEWAY_P:-8081}
       # IPFS
       - IPFS_PROFILE=${IPFS_PROFILE:-server}
       # Auto-pin (scans MinIO bucket for snapshots and pins to IPFS)

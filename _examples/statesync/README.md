@@ -1,6 +1,6 @@
 # Statesync
 
-To statesync a node, you need at least 2x existing nodes with `state-sync.snapshot-interval` set to a non-zero value (`{NAMESPACE}_SNAPSHOT_INTERVAL`). 
+To statesync a node, you need at least 2x existing nodes with `state-sync.snapshot-interval` set to a non-zero value (`{NAMESPACE}_SNAP_INTERVAL`). 
 
 This example includes 2 deploy files - `snapshot-deploy.yml` for the two snapshotting nodes, and `statesync-deploy` for a third statesynced node. 
 

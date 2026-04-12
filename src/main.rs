@@ -1,3 +1,4 @@
+use akash_deploy_rs::AkashBackend as _;
 use clap::{Parser, Subcommand};
 use o_line_sdl::{
     self,
@@ -9,7 +10,8 @@ use o_line_sdl::{
     crypto::encrypt_mnemonic,
     deployer::OLineDeployer,
     runtime::OLineRuntime,
-    workflow::{step::OLineStep, OLineWorkflow},
+    tui::TracingSwitch,
+    workflow::{step::{DeployPhase, OLineStep}, OLineWorkflow},
     BootstrapArgs, DeployArgs, DnsArgs, EncryptArgs, EndpointsArgs, FirewallArgs, InitArgs,
     ManageArgs, NodeArgs, ProvidersArgs, RefreshArgs, RegistryArgs, RelayerArgs, SdlArgs,
     SitesArgs, TestGrpcArgs, TestS3Args, TestnetDeployArgs, VpnArgs,
@@ -17,7 +19,11 @@ use o_line_sdl::{
 use std::{
     error::Error,
     io::{self, BufRead},
+    sync::LazyLock,
 };
+
+/// Global tracing writer switch: stdout by default, channel when TUI is active.
+static TRACING_SWITCH: LazyLock<TracingSwitch> = LazyLock::new(TracingSwitch::new);
 
 /// O-Line: Akash deployment orchestrator for Terp Network validator infrastructure.
 #[derive(Parser, Debug)]
@@ -150,16 +156,66 @@ async fn cmd_deploy(raw: bool, parallel: bool) -> Result<(), Box<dyn Error>> {
         let session_store = OLineSessionStore::new();
         let mut workflow =
             OLineWorkflow::new_with_session(deployer, OLineStep::FundChildAccounts, session, session_store);
-        let stdin2 = io::stdin();
-        let mut lines2 = stdin2.lock().lines();
-        workflow
-            .run(&mut lines2)
-            .await
-            .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
-        drop(lines2); // release stdin lock before entering TUI
 
-        if !non_interactive {
-            o_line_sdl::tui::run_post_deploy_tui(&workflow.ctx).await?;
+        if non_interactive {
+            // Non-interactive: run entire workflow headless, no TUI.
+            workflow
+                .run_headless()
+                .await
+                .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+        } else {
+            // ── Phase 1: Interactive (normal terminal) ──
+            // Run steps that need stdin: FundChildAccounts → DeployAllUnits → SelectAllProviders
+            let stdin2 = io::stdin();
+            let mut lines2 = stdin2.lock().lines();
+            loop {
+                workflow
+                    .advance(&mut lines2)
+                    .await
+                    .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+                if matches!(
+                    workflow.step,
+                    OLineStep::UpdateAllDns | OLineStep::Complete
+                ) {
+                    break;
+                }
+            }
+            drop(lines2); // release stdin lock before entering TUI
+
+            if matches!(workflow.step, OLineStep::Complete) {
+                // Workflow finished during interactive phase (user aborted).
+                return Ok(());
+            }
+
+            // ── Phase 2: Automated (split-pane TUI) ──
+            // Redirect tracing to channel, build TUI, drive workflow as pinned local future.
+            let (deploy_tx, deploy_rx) = tokio::sync::mpsc::unbounded_channel();
+            TRACING_SWITCH.activate(deploy_tx);
+
+            // Populate provider host URIs so TUI log targets can build WS URLs
+            // without requiring the trusted provider store.
+            for phase in [DeployPhase::SpecialTeams, DeployPhase::Tackles, DeployPhase::Forwards, DeployPhase::Relayer] {
+                let provider_addr = workflow.ctx.state(phase)
+                    .and_then(|s| s.selected_provider.clone());
+                if let Some(addr) = provider_addr {
+                    if !workflow.ctx.provider_hosts.contains_key(&addr) {
+                        if let Ok(Some(info)) = workflow.ctx.deployer.client.query_provider_info(&addr).await {
+                            workflow.ctx.provider_hosts.insert(addr, info.host_uri.clone());
+                        }
+                    }
+                }
+            }
+
+            let controller = o_line_sdl::tui::TuiController::from_context(&workflow.ctx);
+
+            let workflow_fut = async move {
+                if let Err(e) = workflow.run_headless().await {
+                    tracing::error!("Deploy workflow failed: {}", e);
+                }
+            };
+
+            o_line_sdl::tui::run_deploy_tui(controller, deploy_rx, workflow_fut).await?;
+            TRACING_SWITCH.deactivate();
         }
         Ok(())
     } else {
@@ -206,6 +262,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .with_target(false)
+        .with_writer(TRACING_SWITCH.clone())
         .init();
     rustls::crypto::ring::default_provider()
         .install_default()

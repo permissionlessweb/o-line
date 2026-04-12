@@ -79,47 +79,47 @@ Pick subdomains on your Cloudflare-managed domain.
 
 ```env
 # Snapshot node
-RPC_DOMAIN_SNAPSHOT=statesync.terp.network
-P2P_DOMAIN_SNAPSHOT=statesync-peer.terp.network
+RPC_D_SNAP=statesync.terp.network
+P2P_D_SNAP=statesync-peer.terp.network
 # Optional — leave blank to skip
-API_DOMAIN_SNAPSHOT=
-GRPC_DOMAIN_SNAPSHOT=
+API_D_SNAP=
+GRPC_D_SNAP=
 
 # Seed node
-RPC_DOMAIN_SEED=seed-rpc.terp.network
-P2P_DOMAIN_SEED=seed.terp.network
-API_DOMAIN_SEED=
-GRPC_DOMAIN_SEED=
+RPC_D_SEED=seed-rpc.terp.network
+P2P_D_SEED=seed.terp.network
+API_D_SEED=
+GRPC_D_SEED=
 ```
 
 **Phase B — Tackles (sentry nodes that face your validator)**
 
 ```env
-RPC_DOMAIN_TACKLE_L=tackle-l.terp.network
-P2P_DOMAIN_TACKLE_L=tackle-l-peer.terp.network
-RPC_DOMAIN_TACKLE_R=tackle-r.terp.network
-P2P_DOMAIN_TACKLE_R=tackle-r-peer.terp.network
+RPC_D_TL=tackle-l.terp.network
+P2P_D_TL=tackle-l-peer.terp.network
+RPC_D_TR=tackle-r.terp.network
+P2P_D_TACKLE_R=tackle-r-peer.terp.network
 ```
 
 **Phase C — Forwards (public-facing RPC/API/gRPC)**
 
 ```env
-RPC_DOMAIN_FORWARD_L=rpc-l.terp.network
-API_DOMAIN_FORWARD_L=api-l.terp.network
-GRPC_DOMAIN_FORWARD_L=grpc-l.terp.network
-P2P_DOMAIN_FORWARD_L=rpc-l-peer.terp.network
+RPC_D_FL=rpc-l.terp.network
+API_D_FL=api-l.terp.network
+GRPC_D_FL=grpc-l.terp.network
+P2P_D_FL=rpc-l-peer.terp.network
 
-RPC_DOMAIN_FORWARD_R=rpc-r.terp.network
-API_DOMAIN_FORWARD_R=api-r.terp.network
-GRPC_DOMAIN_FORWARD_R=grpc-r.terp.network
-P2P_DOMAIN_FORWARD_R=rpc-r-peer.terp.network
+RPC_D_FR=rpc-r.terp.network
+API_D_FR=api-r.terp.network
+GRPC_D_FR=grpc-r.terp.network
+P2P_D_FR=rpc-r-peer.terp.network
 ```
 
 **Ports** — leave at defaults unless your chain uses non-standard ports:
 
 ```env
-RPC_PORT_SNAPSHOT=26657
-P2P_PORT_SNAPSHOT=26656
+RPC_P_SNAP=26657
+P2P_P_SNAP=26656
 # ... (all PORT_* vars default to standard Cosmos ports)
 ```
 
@@ -128,8 +128,8 @@ P2P_PORT_SNAPSHOT=26656
 ```env
 # Where nodes download state snapshots on first boot.
 # Defaults point to itrocket.net public snapshots for terpnetwork — change if needed.
-OLINE_SNAPSHOT_STATE_URL=https://server-4.itrocket.net/mainnet/terp/.current_state.json
-OLINE_SNAPSHOT_BASE_URL=https://server-4.itrocket.net/mainnet/terp/
+OLINE_SNAP_STATE_URL=https://server-4.itrocket.net/mainnet/terp/.current_state.json
+OLINE_SNAP_BASE_URL=https://server-4.itrocket.net/mainnet/terp/
 ```
 
 ### Secrets directory
@@ -268,7 +268,7 @@ Add to `.env`:
 ```env
 RLY_REMOTE_CHAIN_ID=osmosis-1
 RLY_IMAGE=ghcr.io/permissionlessweb/rly-docker:latest
-RLY_API_DOMAIN=relayer.terp.network
+RLY_API_D=relayer.terp.network
 ```
 
 The relayer deploys after Phase C completes. Phase E is optional — the array works
@@ -285,26 +285,26 @@ Full list of all supported env vars with descriptions:
 | `OLINE_ENCRYPTED_MNEMONIC` | ★ | Written by `oline encrypt` |
 | `OLINE_CF_API_TOKEN` | ★ | Cloudflare API token (Zone:Edit) |
 | `OLINE_CF_ZONE_ID` | ★ | Cloudflare zone ID |
-| `RPC_DOMAIN_SNAPSHOT` | ★ | Snapshot RPC subdomain |
-| `P2P_DOMAIN_SNAPSHOT` | ★ | Snapshot P2P subdomain |
-| `RPC_DOMAIN_SEED` | ★ | Seed RPC subdomain |
-| `P2P_DOMAIN_SEED` | ★ | Seed P2P subdomain |
-| `RPC_DOMAIN_TACKLE_L/R` | ★ | Left/Right tackle RPC subdomains |
-| `P2P_DOMAIN_TACKLE_L/R` | ★ | Left/Right tackle P2P subdomains |
-| `RPC_DOMAIN_FORWARD_L/R` | ★ | Left/Right forward RPC subdomains |
-| `P2P_DOMAIN_FORWARD_L/R` | ★ | Left/Right forward P2P subdomains |
+| `RPC_D_SNAP` | ★ | Snapshot RPC subdomain |
+| `P2P_D_SNAP` | ★ | Snapshot P2P subdomain |
+| `RPC_D_SEED` | ★ | Seed RPC subdomain |
+| `P2P_D_SEED` | ★ | Seed P2P subdomain |
+| `RPC_D_TL/R` | ★ | Left/Right tackle RPC subdomains |
+| `P2P_D_TL/R` | ★ | Left/Right tackle P2P subdomains |
+| `RPC_D_FL/R` | ★ | Left/Right forward RPC subdomains |
+| `P2P_D_FL/R` | ★ | Left/Right forward P2P subdomains |
 | `OLINE_VALIDATOR_PEER_ID` | recommended | Your validator's peer string `nodeid@host:port` |
 | `OLINE_RPC_ENDPOINT` | default ok | Akash RPC endpoint |
 | `OLINE_GRPC_ENDPOINT` | default ok | Akash gRPC endpoint |
 | `OLINE_CHAIN_JSON` | default ok | Chain registry JSON URL |
-| `OLINE_SNAPSHOT_BASE_URL` | default ok | Bootstrap snapshot URL |
-| `OLINE_SNAPSHOT_STATE_URL` | default ok | Snapshot state metadata URL |
+| `OLINE_SNAP_BASE_URL` | default ok | Bootstrap snapshot URL |
+| `OLINE_SNAP_STATE_URL` | default ok | Snapshot state metadata URL |
 | `SECRETS_PATH` | default ok | Local dir for SSH key + certs (`secrets`) |
 | `OMNIBUS_IMAGE` | default ok | SDL deployment image |
-| `API_DOMAIN_*`, `GRPC_DOMAIN_*` | optional | Public API/gRPC subdomains per node |
+| `API_D_*`, `GRPC_D_*` | optional | Public API/gRPC subdomains per node |
 | `RLY_REMOTE_CHAIN_ID` | optional | Remote chain for IBC relayer (Phase E) |
 
-All `*_PORT_*` variables default to standard Cosmos ports (26657/26656/1317/9090).
+All `*_P_*` variables default to standard Cosmos ports (26657/26656/1317/9090).
 
 ---
 
@@ -319,7 +319,7 @@ or increase the AKT/day in `templates/sdls/`.
 Run `oline dns` to test DNS updates in isolation.
 
 **Node is stuck waiting for snapshot**
-→ The snapshot URL may be temporarily down. Check `OLINE_SNAPSHOT_BASE_URL` in a browser.
+→ The snapshot URL may be temporarily down. Check `OLINE_SNAP_BASE_URL` in a browser.
 Resume with `oline refresh` after the URL becomes available.
 
 **SSH connection refused after deployment**

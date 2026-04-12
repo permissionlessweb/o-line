@@ -9,7 +9,7 @@ with_examples! {
 with_examples! {
     #[derive(clap::Args, Debug)]
     pub struct TestGrpcArgs {
-        /// gRPC-Web domain to test (falls back to GRPC_DOMAIN_SNAPSHOT env var)
+        /// gRPC-Web domain to test (falls back to GRPC_D_SNAP env var)
         #[arg(value_name = "DOMAIN")]
         pub domain: Option<String>
     }
@@ -224,11 +224,11 @@ pub async fn cmd_test_s3() -> Result<(), Box<dyn Error>> {
 
 // ── Subcommand: test-grpc ──
 // Sends a gRPC-Web GetNodeInfo request to the given domain and prints the result.
-// Usage: oline test-grpc [domain]   (defaults to GRPC_DOMAIN_SNAPSHOT env var)
+// Usage: oline test-grpc [domain]   (defaults to GRPC_D_SNAP env var)
 pub async fn cmd_test_grpc(domain: Option<String>) -> Result<(), Box<dyn Error>> {
     let domain = domain
         .or_else(|| {
-            std::env::var("GRPC_DOMAIN_SNAPSHOT")
+            std::env::var("GRPC_D_SNAP")
                 .ok()
                 .filter(|s| !s.is_empty())
         })

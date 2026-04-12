@@ -1,5 +1,5 @@
 upstream api_backend {
-    server 127.0.0.1:${API_PORT};
+    server 127.0.0.1:${API_P};
 }
 
 # ── REST API — HTTP proxy (TLS terminated by Akash provider ingress) ───────
@@ -7,7 +7,7 @@ upstream api_backend {
 # with the `accept:` domain routing rule. Traffic arriving here is plain HTTP.
 server {
     listen 80;
-    server_name ${API_DOMAIN};
+    server_name ${API_D};
 
     location / {
         add_header Access-Control-Allow-Origin   *;

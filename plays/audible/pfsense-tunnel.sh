@@ -22,20 +22,20 @@
 #   PF_WAN        pfSense WAN IP          [192.168.1.168]
 #   PF_USER       pfSense SSH user        [admin]
 #   PF_KEY        SSH key (client side)    [~/.ssh/oline-client]
-#   PF_PORT       pfSense SSH port        [22]
+#   PF_P       pfSense SSH port        [22]
 #   TUNNEL_USER   user on tunnel target   [rhonine]
 #   TUNNEL_HOST   tunnel target IP         [192.168.1.101]
-#   SOCKS_PORT    local SOCKS proxy port  [1080]
+#   SOCKS_P    local SOCKS proxy port  [1080]
 #   SSH_CONFIG    SSH config path          [~/.ssh/config]
 set -euo pipefail
 
 PF_WAN="${PF_WAN:-192.168.1.168}"
 PF_USER="${PF_USER:-admin}"
 PF_KEY="${PF_KEY:-$HOME/.ssh/oline-client}"
-PF_PORT="${PF_PORT:-22}"
+PF_P="${PF_P:-22}"
 TUNNEL_USER="${TUNNEL_USER:-rhonine}"
 TUNNEL_HOST="${TUNNEL_HOST:-192.168.1.101}"
-SOCKS_PORT="${SOCKS_PORT:-1080}"
+SOCKS_P="${SOCKS_P:-1080}"
 SSH_CONFIG="${SSH_CONFIG:-$HOME/.ssh/config}"
 TUNNEL_HOST_LABEL="oline-tunnels"
 PF_HOST_LABEL="pfsense"
@@ -89,7 +89,7 @@ ensure_config() {
             "Host ${PF_HOST_LABEL}" \
             "  HostName ${PF_WAN}" \
             "  User ${PF_USER}" \
-            "  Port ${PF_PORT}" \
+            "  Port ${PF_P}" \
             "  IdentityFile ${PF_KEY}" \
             "  StrictHostKeyChecking no" \
             "  UserKnownHostsFile /dev/null" \
@@ -105,7 +105,7 @@ ensure_config() {
             "  User ${TUNNEL_USER}" \
             "  IdentityFile ${PF_KEY}" \
             "  ProxyJump ${PF_HOST_LABEL}" \
-            "  DynamicForward ${SOCKS_PORT}" \
+            "  DynamicForward ${SOCKS_P}" \
             "  ServerAliveInterval 30" \
             "  ServerAliveCountMax 3" \
         >> "$SSH_CONFIG"
@@ -132,12 +132,12 @@ get_forwards() {
 get_socks_port() {
     local range
     range=$(host_block_lines "$TUNNEL_HOST_LABEL")
-    [[ -z "$range" ]] && { echo "$SOCKS_PORT"; return; }
+    [[ -z "$range" ]] && { echo "$SOCKS_P"; return; }
     local start end
     read -r start end <<< "$range"
     local port
     port=$(sed -n "${start},${end}p" "$SSH_CONFIG" | grep "DynamicForward" | awk '{print $2}' | head -1 || true)
-    echo "${port:-$SOCKS_PORT}"
+    echo "${port:-$SOCKS_P}"
 }
 
 # ── Commands ─────────────────────────────────────────────────────────────────
@@ -155,7 +155,7 @@ cmd_up() {
 
     # Check SOCKS port
     if port_in_use "$sport"; then
-        die "Port $sport already in use. Set SOCKS_PORT=<port> or stop the existing process."
+        die "Port $sport already in use. Set SOCKS_P=<port> or stop the existing process."
     fi
 
     echo "Starting tunnel to ${TUNNEL_HOST} via pfSense (${PF_WAN}) ..."
@@ -292,10 +292,10 @@ cmd_test() {
     local failures=0
 
     # Test 1: pfSense SSH
-    echo "Testing pfSense SSH (${PF_WAN}:${PF_PORT}) ..."
+    echo "Testing pfSense SSH (${PF_WAN}:${PF_P}) ..."
     if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
         -o BatchMode=yes -o ConnectTimeout=5 \
-        -i "$PF_KEY" -p "$PF_PORT" \
+        -i "$PF_KEY" -p "$PF_P" \
         "${PF_USER}@${PF_WAN}" '/bin/sh -c "echo ok"' &>/dev/null; then
         info "OK — pfSense SSH"
     else
@@ -474,7 +474,7 @@ cmd_sync() {
             | grep -v "^[[:space:]]*DynamicForward "
         # Insert the right forward directive(s) based on mode
         if [[ "$mode" == "all" ]]; then
-            printf '  DynamicForward %s\n' "$SOCKS_PORT"
+            printf '  DynamicForward %s\n' "$SOCKS_P"
         else
             for i in "${!ports[@]}"; do
                 printf '  LocalForward %s 127.0.0.1:%s\n' "${ports[$i]}" "${ports[$i]}"
@@ -486,7 +486,7 @@ cmd_sync() {
 
     echo ""
     if [[ "$mode" == "all" ]]; then
-        echo "  DynamicForward set — SOCKS proxy on localhost:${SOCKS_PORT}"
+        echo "  DynamicForward set — SOCKS proxy on localhost:${SOCKS_P}"
         echo "  All ports on ${TUNNEL_HOST} will be accessible via SOCKS."
         if [[ "${#names[@]}" -gt 0 ]]; then
             echo ""
@@ -580,7 +580,7 @@ Recommended workflow:
 Environment:
   PF_WAN=${PF_WAN}  PF_USER=${PF_USER}  PF_KEY=${PF_KEY}
   TUNNEL_HOST=${TUNNEL_HOST}  TUNNEL_USER=${TUNNEL_USER}
-  SOCKS_PORT=${SOCKS_PORT}  SSH_CONFIG=${SSH_CONFIG}
+  SOCKS_P=${SOCKS_P}  SSH_CONFIG=${SSH_CONFIG}
 EOF
         ;;
 esac

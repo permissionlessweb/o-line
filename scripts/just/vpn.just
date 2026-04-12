@@ -7,7 +7,7 @@
 #
 # Optional env vars:
 #   VPN_SERVER_ADDR   — VPN subnet (default: 10.99.0.1/24)
-#   VPN_PORT          — UDP listen port (default: 51820)
+#   VPN_P          — UDP listen port (default: 51820)
 #   VPN_IFACE         — WireGuard interface (default: wg0)
 #   VPN_ENDPOINT      — WAN endpoint hint (e.g. 1.2.3.4:51820)
 #   PFSENSE_LABEL     — firewall label (auto-selects if only one)
@@ -20,7 +20,7 @@ vpn-bootstrap:
     set -euo pipefail
     args=(bootstrap)
     [[ -n "${VPN_SERVER_ADDR:-}" ]] && args+=(--server-addr "$VPN_SERVER_ADDR")
-    [[ -n "${VPN_PORT:-}"        ]] && args+=(--port "$VPN_PORT")
+    [[ -n "${VPN_P:-}"        ]] && args+=(--port "$VPN_P")
     [[ -n "${VPN_IFACE:-}"       ]] && args+=(--iface "$VPN_IFACE")
     [[ -n "${VPN_ENDPOINT:-}"    ]] && args+=(--endpoint "$VPN_ENDPOINT")
     [[ -n "${PFSENSE_LABEL:-}"   ]] && args+=(--firewall "$PFSENSE_LABEL")

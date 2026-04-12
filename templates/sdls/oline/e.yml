@@ -5,8 +5,8 @@ services:
     image: ${RLY_IMAGE}
     expose:
     # ssh port for sftp & live-reloads
-      - port: ${SSH_PORT}
-        as: ${SSH_PORT}
+      - port: ${SSH_P}
+        as: ${SSH_P}
         to:
           - global: true
       - port: 5183

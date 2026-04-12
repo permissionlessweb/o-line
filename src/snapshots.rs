@@ -191,7 +191,7 @@ pub async fn fetch_snapshot_url_from_metadata(metadata_url: &str, fallback_url: 
 ///   3. If `local_path` already exists and is non-empty → return it immediately (cache hit).
 ///   4. Otherwise download via `wget -c` and return the path.
 ///
-/// Pass this path as `E2E_SNAPSHOT_PATH` so the e2e harness distributes it via SSH
+/// Pass this path as `E2E_SNAP_PATH` so the e2e harness distributes it via SSH
 /// instead of each node downloading independently.
 ///
 /// # Example
@@ -527,7 +527,7 @@ fn ssh_user_host_port(
     _ssh_key_path: &PathBuf,
     label: &str,
 ) -> Result<(String, String), Box<dyn Error>> {
-    let ssh_port_env: u16 = var("SSH_PORT")
+    let ssh_port_env: u16 = var("SSH_P")
         .unwrap_or_else(|_| "22".into())
         .parse()
         .unwrap_or(22);

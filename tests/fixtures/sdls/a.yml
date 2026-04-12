@@ -12,16 +12,16 @@ services:
         as: 80
         to:
           - global: true
-      - port: ${RPC_PORT_SNAPSHOT}
-        as: ${RPC_PORT_SNAPSHOT}
+      - port: ${RPC_P_SNAP}
+        as: ${RPC_P_SNAP}
         to:
           - global: true
-      - port: ${P2P_PORT_SNAPSHOT}
-        as: ${P2P_PORT_SNAPSHOT}
+      - port: ${P2P_P_SNAP}
+        as: ${P2P_P_SNAP}
         to:
           - global: true
-      - port: ${SSH_PORT}
-        as: ${SSH_PORT}
+      - port: ${SSH_P}
+        as: ${SSH_P}
         to:
           - global: true
     env:
@@ -33,16 +33,16 @@ services:
         as: 80
         to:
           - global: true
-      - port: ${RPC_PORT_SEED}
-        as: ${RPC_PORT_SEED}
+      - port: ${RPC_P_SEED}
+        as: ${RPC_P_SEED}
         to:
           - global: true
-      - port: ${P2P_PORT_SEED}
-        as: ${P2P_PORT_SEED}
+      - port: ${P2P_P_SEED}
+        as: ${P2P_P_SEED}
         to:
           - global: true
-      - port: ${SSH_PORT}
-        as: ${SSH_PORT}
+      - port: ${SSH_P}
+        as: ${SSH_P}
         to:
           - global: true
     env:

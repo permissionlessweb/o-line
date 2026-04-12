@@ -8,12 +8,12 @@ use crate::{
     workflow::step::{DeployPhase, OLineStep},
 };
 use akash_deploy_rs::{DeployError, DeploymentRecord, DeploymentStore};
-use std::io::{BufRead, Lines, StdinLock};
+use std::io::{BufRead, Lines};
 use std::path::PathBuf;
 
 pub async fn deploy_relayer(
     w: &mut OLineWorkflow,
-    lines: &mut Lines<StdinLock<'_>>,
+    lines: &mut Lines<impl BufRead>,
 ) -> Result<StepResult, DeployError> {
     tracing::info!("\n── Phase 5: Deploy IBC Relayer ──");
     if !prompt_continue(lines, "Deploy e.yml?")
@@ -66,7 +66,7 @@ pub async fn deploy_relayer(
 
     // Phase E has its own SSH key — save to disk and register nodes.
     if let Some(privkey_pem) = e_vars.get("SSH_PRIVKEY") {
-        let ssh_port_internal: u16 = std::env::var("SSH_PORT")
+        let ssh_port_internal: u16 = std::env::var("SSH_P")
             .unwrap_or_else(|_| "22".into())
             .parse()
             .unwrap_or(22);

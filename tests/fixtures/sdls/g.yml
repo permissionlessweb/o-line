@@ -21,16 +21,16 @@ services:
         as: 8081
         to:
           - global: true
-      - port: ${SSH_PORT}
-        as: ${SSH_PORT}
+      - port: ${SSH_P}
+        as: ${SSH_P}
         to:
           - global: true
     env:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
       - MINIO_BUCKET=${IPFS_BUCKET}
-      - MINIO_CONSOLE_PORT=9001
-      - IPFS_GATEWAY_PORT=8081
+      - MINIO_CONSOLE_P=9001
+      - IPFS_GATEWAY_P=8081
       - IPFS_PROFILE=server
       - AUTOPIN_INTERVAL=10
       - AUTOPIN_PATTERNS=*.html,*.css,*.js,*.json,*.ico,*.png,*.svg,*.wasm,index.html

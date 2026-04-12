@@ -7,7 +7,7 @@
 #   RLY_SSH_KEY    — path to SSH private key
 #
 # Optional env vars (with defaults):
-#   RLY_SSH_PORT   — SSH port           [22]
+#   RLY_SSH_P   — SSH port           [22]
 #   RLY_SSH_USER   — SSH user           [relayer]
 
 # Show relayer process status and rly API health.
@@ -15,7 +15,7 @@ relayer-status:
     oline relayer status \
         --host "${RLY_SSH_HOST:?RLY_SSH_HOST required}" \
         --key  "${RLY_SSH_KEY:?RLY_SSH_KEY required}" \
-        ${RLY_SSH_PORT:+--port $RLY_SSH_PORT} \
+        ${RLY_SSH_P:+--port $RLY_SSH_P} \
         ${RLY_SSH_USER:+--user $RLY_SSH_USER}
 
 # Tail relayer logs.
@@ -28,7 +28,7 @@ relayer-logs:
         --host  "${RLY_SSH_HOST:?RLY_SSH_HOST required}" \
         --key   "${RLY_SSH_KEY:?RLY_SSH_KEY required}" \
         --lines "${LINES:-50}" \
-        ${RLY_SSH_PORT:+--port $RLY_SSH_PORT} \
+        ${RLY_SSH_P:+--port $RLY_SSH_P} \
         ${RLY_SSH_USER:+--user $RLY_SSH_USER}
 
 # Hot-swap the rly binary without restarting the container.
@@ -41,7 +41,7 @@ relayer-update-binary:
     oline relayer update-binary \
         --host "${RLY_SSH_HOST:?RLY_SSH_HOST required}" \
         --key  "${RLY_SSH_KEY:?RLY_SSH_KEY required}" \
-        ${RLY_SSH_PORT:+--port $RLY_SSH_PORT} \
+        ${RLY_SSH_P:+--port $RLY_SSH_P} \
         ${RLY_SSH_USER:+--user $RLY_SSH_USER} \
         "${RLY_BINARY:?RLY_BINARY required (path to new rly binary)}"
 
@@ -55,7 +55,7 @@ relayer-update-config:
     oline relayer update-config \
         --host "${RLY_SSH_HOST:?RLY_SSH_HOST required}" \
         --key  "${RLY_SSH_KEY:?RLY_SSH_KEY required}" \
-        ${RLY_SSH_PORT:+--port $RLY_SSH_PORT} \
+        ${RLY_SSH_P:+--port $RLY_SSH_P} \
         ${RLY_SSH_USER:+--user $RLY_SSH_USER} \
         "${RLY_CONFIG:?RLY_CONFIG required (path to config.yaml)}"
 
@@ -73,5 +73,5 @@ relayer-keys:
         --key           "${RLY_SSH_KEY:?RLY_SSH_KEY required}" \
         --chain-id      "${RLY_CHAIN_ID:?RLY_CHAIN_ID required}" \
         --mnemonic-file "${RLY_MNEMONIC_FILE:?RLY_MNEMONIC_FILE required}" \
-        ${RLY_SSH_PORT:+--port $RLY_SSH_PORT} \
+        ${RLY_SSH_P:+--port $RLY_SSH_P} \
         ${RLY_SSH_USER:+--user $RLY_SSH_USER}

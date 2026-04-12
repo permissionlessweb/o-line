@@ -39,8 +39,8 @@ services:
       - CHAIN_ID=${OLINE_CHAIN_ID}
       - CHAIN_JSON=${OLINE_CHAIN_JSON}
       - ADDRBOOK_URL=${OLINE_ADDRBOOK_URL}
-      - SNAPSHOT_URL=${OLINE_SNAPSHOT_FULL_URL}
-      - SNAPSHOT_FORMAT=${OLINE_SNAPSHOT_SAVE_FORMAT}
+      - SNAPSHOT_URL=${OLINE_SNAP_FULL_URL}
+      - SNAPSHOT_FORMAT=${OLINE_SNAP_SAVE_FORMAT}
       - PRUNING=default
       - MINIMUM_GAS_PRICES=0.05uthiol
       - FASTSYNC_VERSION=v0
@@ -48,6 +48,10 @@ services:
       - TERPD_P2P_SEEDS=${ARGUS_NODE_SEEDS}
       - TERPD_P2P_PERSISTENT_PEERS=${ARGUS_NODE_PERSISTENT_PEERS}
       - STATESYNC_RPC_SERVERS=${STATESYNC_RPC_SERVERS}
+      - STATESYNC_ENABLE=${STATESYNC_ENABLE}
+      - STATESYNC_TRUST_HEIGHT=${STATESYNC_TRUST_HEIGHT}
+      - STATESYNC_TRUST_HASH=${STATESYNC_TRUST_HASH}
+      - STATESYNC_TRUST_PERIOD=${STATESYNC_TRUST_PERIOD}
       - WASMVM_PATH=/lib/libwasmvm.x86_64.so
       - WASMVM_VERSION=v3.0.2
       - WASMVM_URL=https://github.com/CosmWasm/wasmvm/releases/download/v3.0.2/libwasmvm.x86_64.so
@@ -79,14 +83,14 @@ ${ARGUS_80_ACCEPTS}
       - ARGUS_CHAIN_ID=${OLINE_CHAIN_ID}
       # ── PostgreSQL ────────────────────────────────────────────────────────────
       - ARGUS_DB_HOST=oline-f-db
-      - ARGUS_DB_PORT=5432
+      - ARGUS_DB_P=5432
       - ARGUS_DB_DATA_NAME=${ARGUS_DB_DATA_NAME}
       - ARGUS_DB_ACCOUNTS_NAME=${ARGUS_DB_ACCOUNTS_NAME}
       - ARGUS_DB_USER=${ARGUS_DB_USER}
       - ARGUS_DB_PASSWORD=${ARGUS_DB_PASSWORD}
       # ── Redis ────────────────────────────────────────────────────────────────
       - ARGUS_REDIS_HOST=oline-f-redis
-      - ARGUS_REDIS_PORT=6379
+      - ARGUS_REDIS_P=6379
 
   oline-f-db:
     image: timescale/timescaledb:2.18.1-pg17

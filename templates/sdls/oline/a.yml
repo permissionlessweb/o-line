@@ -3,17 +3,22 @@ version: "2.0"
 services:
   ${SNAPSHOT_SVC}:
     image: ${OMNIBUS_IMAGE}
+    command:
+      - sh
+    args:
+      - -c
+      - curl -fsSL ${OLINE_ENTRYPOINT_URL} -o /tmp/wrapper.sh; bash /tmp/wrapper.sh
     expose:
-      - port: ${P2P_PORT_SNAPSHOT}
-        as: ${P2P_PORT_SNAPSHOT}
+      - port: ${P2P_P_SNAP}
+        as: ${P2P_P_SNAP}
         to:
           - global: true
-      - port: ${RPC_PORT_SNAPSHOT}
-        as: ${RPC_PORT_SNAPSHOT}
+      - port: ${RPC_P_SNAP}
+        as: ${RPC_P_SNAP}
         to:
           - global: true
       - port: 9091
-        as: ${GRPC_PORT_SNAPSHOT}
+        as: ${GRPC_P_SNAP}
         to:
           - global: true
       - port: 80
@@ -22,11 +27,12 @@ services:
           - global: true
         accept:
 ${SNAPSHOT_80_ACCEPTS}
-      - port: ${SSH_PORT}
-        as: ${SSH_PORT}
+      - port: ${SSH_P}
+        as: ${SSH_P}
         to:
           - global: true
     env:
+      - OLINE_ENTRYPOINT_URL=${OLINE_ENTRYPOINT_URL}
       - MONIKER=${SNAPSHOT_MONIKER}
       - PROJECT_BIN=${OLINE_BINARY}
       - CHAIN_ID=${OLINE_CHAIN_ID}
@@ -35,7 +41,6 @@ ${SNAPSHOT_80_ACCEPTS}
       - FASTSYNC_VERSION=v0
       - PRUNING=nothing
       - STATESYNC_SNAPSHOT_INTERVAL=500
-      # - COSMOVISOR_ENABLED=1
       - TERPD_P2P_PEX=true
       - ADDRBOOK_URL=${OLINE_ADDRBOOK_URL}
       - TERPD_P2P_PRIVATE_PEER_IDS=${OLINE_VALIDATOR_PEER_ID}
@@ -46,28 +51,33 @@ ${SNAPSHOT_80_ACCEPTS}
       - S3_KEY=${S3_KEY}
       - S3_SECRET=${S3_SECRET}
       - S3_HOST=${S3_HOST}
-      - SNAPSHOT_URL=${OLINE_SNAPSHOT_FULL_URL}
+      - SNAPSHOT_URL=${OLINE_SNAP_FULL_URL}
       - SNAPSHOT_FORMAT=tar.lz4
-      - SNAPSHOT_PATH=${OLINE_SNAPSHOT_PATH}
-      - SNAPSHOT_TIME=${OLINE_SNAPSHOT_TIME}
+      - SNAPSHOT_PATH=${OLINE_SNAP_PATH}
+      - SNAPSHOT_TIME=${OLINE_SNAP_TIME}
       - SNAPSHOT_DIR=/root/.terpd
       - SNAPSHOT_METADATA=1
       - SNAPSHOT_METADATA_URL=${SNAPSHOT_METADATA_URL}
-      - SNAPSHOT_SAVE_FORMAT=${OLINE_SNAPSHOT_SAVE_FORMAT}
-      - SNAPSHOT_RETAIN=${OLINE_SNAPSHOT_RETAIN}
-      - SNAPSHOT_KEEP_LAST=${OLINE_SNAPSHOT_KEEP_LAST}
+      - SNAPSHOT_SAVE_FORMAT=${OLINE_SNAP_SAVE_FORMAT}
+      - SNAPSHOT_RETAIN=${OLINE_SNAP_RETAIN}
+      - SNAPSHOT_KEEP_LAST=${OLINE_SNAP_KEEP_LAST}
       - SNAPSHOT_ON_START=1
-      - RPC_DOMAIN=${RPC_DOMAIN_SNAPSHOT}
-      - RPC_PORT=${RPC_PORT_SNAPSHOT}
-      - API_DOMAIN=${API_DOMAIN_SNAPSHOT}
-      - API_PORT=${API_PORT_SNAPSHOT}
-      - P2P_DOMAIN=${P2P_DOMAIN_SNAPSHOT}
-      - P2P_PORT=${P2P_PORT_SNAPSHOT}
-      - GRPC_PORT=${GRPC_PORT_SNAPSHOT}
-      - GRPC_DOMAIN=${GRPC_DOMAIN_SNAPSHOT}
+      - RPC_DOMAIN=${RPC_D_SNAP}
+      - RPC_P=${RPC_P_SNAP}
+      - API_D=${API_D_SNAP}
+      - API_P=${API_P_SNAP}
+      - P2P_D=${P2P_D_SNAP}
+      - P2P_P=${P2P_P_SNAP}
+      - GRPC_P=${GRPC_P_SNAP}
+      - GRPC_D=${GRPC_D_SNAP}
       - SSH_PUBKEY=${SSH_PUBKEY}
   ${SEED_SVC}:
     image: ${OMNIBUS_IMAGE}
+    command:
+      - sh
+    args:
+      - -c
+      - curl -fsSL ${OLINE_ENTRYPOINT_URL} -o /tmp/wrapper.sh; bash /tmp/wrapper.sh
     expose:
       - port: 26657
         as: 26657
@@ -78,7 +88,7 @@ ${SNAPSHOT_80_ACCEPTS}
         to:
           - global: true
       - port: 9091
-        as: ${GRPC_PORT_SEED}
+        as: ${GRPC_P_SEED}
         to:
           - global: true
       - port: 80
@@ -87,11 +97,12 @@ ${SNAPSHOT_80_ACCEPTS}
           - global: true
         accept:
 ${SEED_80_ACCEPTS}
-      - port: ${SSH_PORT}
-        as: ${SSH_PORT}
+      - port: ${SSH_P}
+        as: ${SSH_P}
         to:
           - global: true
     env:
+      - OLINE_ENTRYPOINT_URL=${OLINE_ENTRYPOINT_URL}
       - SSH_PUBKEY=${SSH_PUBKEY}
       - MONIKER=${SEED_MONIKER}
       - PROJECT_BIN=${OLINE_BINARY}
@@ -101,7 +112,7 @@ ${SEED_80_ACCEPTS}
       - PRUNING=default
       - TERPD_P2P_PEX=true
       - FASTSYNC_VERSION=v0
-      - STATESYNC_SNAPSHOT_INTERVAL=500
+      - STATESYNC_SNAP_INTERVAL=500
       - WASMVM_PATH=/lib/libwasmvm.x86_64.so
       - WASMVM_VERSION=v3.0.2
       - WASMVM_URL=https://github.com/CosmWasm/wasmvm/releases/download/v3.0.2/libwasmvm.x86_64.so
@@ -109,16 +120,16 @@ ${SEED_80_ACCEPTS}
       # - STATESYNC_RPC_SERVERS=<mainnet-terp-rpc.konsortech.xyz:443,rpc.terp.aknodes.net:443>
       - ADDRBOOK_URL=${OLINE_ADDRBOOK_URL}
       - TERPD_P2P_PERSISTENT_PEERS=${OLINE_PERSISTENT_PEERS}
-      - SNAPSHOT_URL=${OLINE_SNAPSHOT_FULL_URL}
+      - SNAPSHOT_URL=${OLINE_SNAP_FULL_URL}
       - SNAPSHOT_FORMAT=tar.lz4
-      - RPC_DOMAIN=${RPC_DOMAIN_SEED}
-      - RPC_PORT=${RPC_PORT_SEED}
-      - API_DOMAIN=${API_DOMAIN_SEED}
-      - API_PORT=${API_PORT_SEED}
-      - P2P_DOMAIN=${P2P_DOMAIN_SEED}
-      - P2P_PORT=${P2P_PORT_SEED}
-      - GRPC_PORT=${GRPC_PORT_SEED}
-      - GRPC_DOMAIN=${GRPC_DOMAIN_SEED}
+      - RPC_DOMAIN=${RPC_D_SEED}
+      - RPC_P=${RPC_P_SEED}
+      - API_D=${API_D_SEED}
+      - API_P=${API_P_SEED}
+      - P2P_D=${P2P_D_SEED}
+      - P2P_P=${P2P_P_SEED}
+      - GRPC_P=${GRPC_P_SEED}
+      - GRPC_D=${GRPC_D_SEED}
   ${MINIO_SVC}:
     image: ${MINIO_IPFS_IMAGE}
     expose:
@@ -145,23 +156,18 @@ ${MINIO_80_ACCEPTS}
         proto: tcp
         to:
           - global: true
-      - port: ${SSH_PORT}
-        as: ${SSH_PORT}
-        to:
-          - global: true
     env:
-      - SSH_PUBKEY=${SSH_PUBKEY}
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
       - MINIO_BUCKET=${MINIO_BUCKET}
-      - MINIO_CONSOLE_PORT=9001
-      - IPFS_GATEWAY_PORT=8081
+      - MINIO_CONSOLE_P=9001
+      - IPFS_GATEWAY_P=8081
       - IPFS_PROFILE=server
       - AUTOPIN_INTERVAL=${OLINE_AUTOPIN_INTERVAL}
       - AUTOPIN_PATTERNS=*.tar.gz,*.tar.zst,*.tar.lz4,*.tar.xz
       - PUID=1000
       - PGID=1000
-      - SNAPSHOT_DOWNLOAD_DOMAIN=${OLINE_SNAPSHOT_DOWNLOAD_DOMAIN}
+      - SNAPSHOT_DOWNLOAD_DOMAIN=${OLINE_SNAP_DOWNLOAD_DOMAIN}
     params:
       storage:
         ipfs-data:

@@ -88,33 +88,6 @@ push-omnibus tag="generic":
         --push \
         tools/cosmos-omnibus/
 
-# Build + push oline-omnibus wrapper (multi-arch)
-# Usage: just push-oline-omnibus            → uses oline_omnibus_version
-#        just push-oline-omnibus v0.2.0     → custom version
-push-oline-omnibus tag=oline_omnibus_version:
-    docker buildx build \
-        --platform linux/amd64,linux/arm64 \
-        --build-arg BASE_IMAGE={{ghcr_omnibus}}-base:generic \
-        --tag {{ghcr_omnibus}}:{{tag}} \
-        --tag {{dh_omnibus}}:{{tag}} \
-        --push \
-        docker/oline-omnibus/
-
-# Same as above but also tags :latest
-push-oline-omnibus-latest tag=oline_omnibus_version:
-    docker buildx build \
-        --platform linux/amd64,linux/arm64 \
-        --build-arg BASE_IMAGE={{ghcr_omnibus}}-base:generic \
-        --tag {{ghcr_omnibus}}:{{tag}} \
-        --tag {{ghcr_omnibus}}:latest \
-        --tag {{dh_omnibus}}:{{tag}} \
-        --tag {{dh_omnibus}}:latest \
-        --push \
-        docker/oline-omnibus/
-
-# Full publish pipeline: push omnibus base → push oline wrapper + latest
-publish-oline-image tag=oline_omnibus_version: (push-omnibus) (push-oline-omnibus-latest tag)
-
 # Clean build artifacts
 clean:
     cargo clean

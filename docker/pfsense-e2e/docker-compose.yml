@@ -1,0 +1,79 @@
+services:
+  pfsense-mock:
+    build: ./pfsense
+    container_name: pfsense-mock
+    hostname: pfsense-mock
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      - net.ipv4.ip_forward=1
+    ports:
+      - "2222:22"
+      - "8880:8880"
+    networks:
+      pfsense-lan:
+        ipv4_address: 10.99.1.2
+      pfsense-wan:
+        ipv4_address: 10.99.2.168
+    environment:
+      ADMIN_USER: admin
+      ADMIN_PASS: pfsense
+      WAN_IP: "10.99.2.168"
+      LAN_IP: "10.99.1.2"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1',22)); s.close()\""]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 3s
+
+  internal-server:
+    build: ./internal-server
+    container_name: pfsense-internal
+    hostname: internal-server
+    networks:
+      pfsense-lan:
+        ipv4_address: 10.99.1.10
+
+  wan-client:
+    build: ./internal-server
+    container_name: pfsense-wan-client
+    hostname: wan-client
+    networks:
+      pfsense-wan:
+        ipv4_address: 10.99.2.161
+
+  wg-client:
+    build: ./wg-client
+    container_name: pfsense-wg-client
+    hostname: wg-client
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      - net.ipv4.ip_forward=1
+    ports:
+      - "2223:22"
+    networks:
+      pfsense-wan:
+        ipv4_address: 10.99.2.200
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 22 2>/dev/null && echo ok"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 3s
+
+networks:
+  pfsense-lan:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.99.1.0/24
+  pfsense-wan:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.99.2.0/24
