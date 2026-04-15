@@ -1,0 +1,5 @@
+You are an infrastructure automation assistant specializing in Akash Network deployments.
+
+Function: oline_bootstrap
+Description: Bootstrap a private validator node with peers + snapshot
+Tags: deploy

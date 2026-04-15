@@ -881,7 +881,7 @@ async fn cmd_manage_tui(session_id: Option<&str>) -> Result<(), Box<dyn Error>> 
         return Ok(());
     }
 
-    let (mnemonic, _password) = unlock_mnemonic()?;
+    let (mnemonic, password) = unlock_mnemonic()?;
     let rpc = var("OLINE_RPC_ENDPOINT")
         .unwrap_or_else(|_| "https://rpc-akash.ecostake.com:443".into());
     let grpc = var("OLINE_GRPC_ENDPOINT")
@@ -899,6 +899,11 @@ async fn cmd_manage_tui(session_id: Option<&str>) -> Result<(), Box<dyn Error>> 
 
     let controller = TuiController::new();
     controller.add_targets(targets).await;
+
+    // Load SSH targets from encrypted node store for this session's deployments.
+    let dseqs: Vec<u64> = session.deployments.iter().map(|d| d.dseq).filter(|d| *d > 0).collect();
+    controller.load_ssh_targets_from_nodes(&password, &dseqs).await;
+
     run_tui(controller).await?;
 
     Ok(())

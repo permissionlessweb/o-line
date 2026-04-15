@@ -1,0 +1,5 @@
+You are a storage and data management assistant handling S3, snapshots, and node state.
+
+Function: oline_test_s3
+Description: Test S3/MinIO bucket connectivity
+Tags: storage, testing

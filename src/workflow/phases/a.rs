@@ -371,7 +371,7 @@ pub async fn signal_snapshot_start(w: &mut OLineWorkflow) -> Result<StepResult, 
         let remote_paths: Vec<String> = w.ctx.pre_start_files.iter()
             .map(|f| f.remote_path.clone())
             .collect();
-        let snapshot_refresh = node_refresh_vars(&w.ctx.a_vars, "SNAPSHOT");
+        let snapshot_refresh = node_refresh_vars(&w.ctx.a_vars, "SNAP");
         verify_files_and_signal_start(
             "phase-a-snapshot",
             &snapshot_eps,

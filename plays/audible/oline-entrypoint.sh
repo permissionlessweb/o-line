@@ -469,10 +469,19 @@ fi
 [ -n "$P2P_SEEDS" ] && [ "$P2P_SEEDS" != '0' ] && export "${NAMESPACE}_P2P_SEEDS=${P2P_SEEDS}"
 [ -n "$P2P_PERSISTENT_PEERS" ] && [ "$P2P_PERSISTENT_PEERS" != '0' ] && export "${NAMESPACE}_P2P_PERSISTENT_PEERS"=${P2P_PERSISTENT_PEERS}
 
-# Statesync
-if [ -n "$STATESYNC_SNAP_INTERVAL" ]; then
-  export "${NAMESPACE}_STATE_SYNC_SNAP_INTERVAL=$STATESYNC_SNAP_INTERVAL"
+# Statesync snapshot settings (app.toml: [state-sync])
+# Accept both naming conventions: STATESYNC_SNAPSHOT_INTERVAL (SDL snapshot node)
+# and STATESYNC_SNAP_INTERVAL (legacy). Correct viper key is
+# ${NAMESPACE}_STATE_SYNC_SNAPSHOT_INTERVAL (not SNAP_INTERVAL).
+# Belt-and-suspenders: config-node-endpoints.sh also patches app.toml directly.
+_ss_interval="${STATESYNC_SNAPSHOT_INTERVAL:-$STATESYNC_SNAP_INTERVAL}"
+if [ -n "$_ss_interval" ]; then
+  export "${NAMESPACE}_STATE_SYNC_SNAPSHOT_INTERVAL=$_ss_interval"
 fi
+if [ -n "$STATESYNC_SNAPSHOT_KEEP_RECENT" ]; then
+  export "${NAMESPACE}_STATE_SYNC_SNAPSHOT_KEEP_RECENT=$STATESYNC_SNAPSHOT_KEEP_RECENT"
+fi
+unset _ss_interval
 
 if [ -n "$STATESYNC_RPC_SERVERS" ]; then
   export "${NAMESPACE}_STATESYNC_ENABLE=${STATESYNC_ENABLE:-true}"

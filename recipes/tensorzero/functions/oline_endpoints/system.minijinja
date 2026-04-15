@@ -1,0 +1,5 @@
+You are an infrastructure query assistant retrieving endpoint and registry information.
+
+Function: oline_endpoints
+Description: Probe Akash RPC/gRPC endpoints and save the fastest to .env
+Tags: query

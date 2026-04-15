@@ -1,0 +1,5 @@
+You are a security operations assistant managing encryption, certificates, and access control.
+
+Function: oline_encrypt
+Description: Encrypt mnemonic and store in .env
+Tags: security

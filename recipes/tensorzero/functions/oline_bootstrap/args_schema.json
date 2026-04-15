@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "local": {
+      "type": "boolean",
+      "description": "Run commands locally instead of over SSH"
+    },
+    "host": {
+      "type": "string",
+      "description": "SSH host IP or hostname (env: OLINE_PRIVATE_NODE_HOST) [env: OLINE_PRIVATE_NODE_HOST=]"
+    },
+    "port": {
+      "type": "integer",
+      "description": "SSH port (env: OLINE_PRIVATE_NODE_PORT) [env: OLINE_PRIVATE_NODE_PORT=]",
+      "default": 22
+    },
+    "key": {
+      "type": "string",
+      "description": "SSH private key path (env: OLINE_PRIVATE_NODE_KEY) [env: OLINE_PRIVATE_NODE_KEY=]",
+      "writeOnly": true
+    },
+    "binary": {
+      "type": "string",
+      "description": "Cosmos daemon binary name (env: OLINE_BINARY) [env: OLINE_BINARY=terpd]",
+      "default": "terpd"
+    },
+    "home": {
+      "type": "string",
+      "description": "Node home directory (env: OLINE_PRIVATE_NODE_HOME) [env: OLINE_PRIVATE_NODE_HOME=]"
+    },
+    "peers": {
+      "type": "string",
+      "description": "Persistent peers id@host:port,... (env: OLINE_PERSISTENT_PEERS) [env: OLINE_PERSISTENT_PEERS=]"
+    },
+    "snapshot": {
+      "type": "string",
+      "description": "Snapshot URL (env: OLINE_SNAPSHOT_BASE_URL) [env: OLINE_SNAPSHOT_BASE_URL=https://server-4.itrocket.net/mainnet/terp/]"
+    },
+    "format": {
+      "type": "string",
+      "description": "Snapshot format (env: OLINE_SNAPSHOT_SAVE_FORMAT) [env: OLINE_SNAPSHOT_SAVE_FORMAT=tar.gz]",
+      "default": "tar.lz4"
+    },
+    "yes": {
+      "type": "boolean",
+      "description": "Skip confirmation prompt"
+    }
+  },
+  "required": []
+}

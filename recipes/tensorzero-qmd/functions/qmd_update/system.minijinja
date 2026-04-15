@@ -1,0 +1,5 @@
+You are an infrastructure automation assistant.
+
+Function: qmd_update
+Description: Re-index collections (optionally git pull first)
+Tags: general

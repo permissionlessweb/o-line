@@ -1,0 +1,5 @@
+You are an infrastructure automation assistant.
+
+Function: qmd_multi_get
+Description: Batch fetch via glob or comma-separated list
+Tags: general

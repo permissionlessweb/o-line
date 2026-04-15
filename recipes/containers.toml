@@ -1,0 +1,50 @@
+# oline container registry
+# All image references used in SDL templates.
+# Local tags = docker build targets for local test/push
+# Remote tags = what Akash providers pull from public registries
+#
+# Usage: LLM references containers.<name>.remote in SDL var arrays.
+# Example: ["OMNIBUS_IMAGE", "{containers.omnibus.mainnet}"]
+
+[omnibus]
+description = "cosmos-omnibus — generic cosmos node entrypoint"
+local       = "cosmos-omnibus:local"
+mainnet     = "ghcr.io/akash-network/cosmos-omnibus:v1.2.38-generic"
+# pin a specific chain build if available:
+# terp    = "ghcr.io/permissionlessweb/cosmos-omnibus:v1.2.38-terpd"
+
+[minio_ipfs]
+description = "MinIO + IPFS combined gateway — snapshot storage + pinning"
+local       = "minio-ipfs:local"
+remote      = "ghcr.io/permissionlessweb/minio-ipfs:latest"
+# fallback:
+minio_only  = "minio/minio:latest"
+
+[relayer]
+description = "go-relayer IBC binary"
+local       = "rly:local"
+remote      = "ghcr.io/permissionlessweb/rly-docker:latest"
+
+[argus]
+description = "Argus CosmWasm indexer"
+local       = "argus:local"
+remote      = "ghcr.io/permissionlessweb/argus:latest"
+
+# ── Port standards ─────────────────────────────────────────────────────────────
+# These are the default container-internal ports for cosmos nodes.
+# SDL 'as:' (external Akash port) is set per-node in sdl-vars.toml.
+[ports]
+p2p   = 26656
+rpc   = 26657
+api   = 1317
+grpc  = 9090
+ssh   = 22
+http  = 80
+# MinIO
+s3_api    = 9000
+s3_console = 9001
+# IPFS
+ipfs_gateway = 8081
+ipfs_p2p     = 4001
+# Relayer REST
+relayer_rest = 3000

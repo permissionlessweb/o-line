@@ -182,23 +182,32 @@ pub fn load_dotenv(env_key: &str) {
 /// from descriptors — templates, `--load-config`, interactive prompts, and
 /// `collect_config`. Env vars always win.
 pub fn resolve_fd_value(fd: &Fd, override_val: Option<&str>) -> String {
-    std::env::var(fd.ev)
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| {
+    // If the env var is set (even to ""), the user's intent is to use that value
+    // and override any saved config. Only fall through to saved/default when the
+    // env var is truly absent (Err from std::env::var).
+    match std::env::var(fd.ev) {
+        Ok(v) if !v.is_empty() => v,
+        Ok(_empty) => {
+            // Env var explicitly set to "" — use FD default, skip saved config.
+            fd.d.to_string()
+        }
+        Err(_) => {
+            // Env var not set — fall through to saved config > FD default.
             override_val
                 .filter(|v| !v.is_empty())
                 .unwrap_or(fd.d)
                 .to_string()
-        })
+        }
+    }
 }
 
 /// Resolve a default value with priority: env var > saved config > hardcoded default.
 pub fn default_val(env_key: &str, saved: Option<&str>, hardcoded: &str) -> String {
-    std::env::var(env_key)
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| saved.unwrap_or(hardcoded).to_string())
+    match std::env::var(env_key) {
+        Ok(v) if !v.is_empty() => v,
+        Ok(_empty) => hardcoded.to_string(),
+        Err(_) => saved.unwrap_or(hardcoded).to_string(),
+    }
 }
 
 /// Like `default_val` but for optional values (no hardcoded fallback).
@@ -340,28 +349,57 @@ pub fn has_saved_config() -> bool {
     config_path().exists()
 }
 
+/// Collect deployment config interactively.
+///
+/// By default, builds from env vars + FD defaults only (fresh every time).
+/// Pass `saved_config_path` to load a previously saved session config as baseline.
 pub async fn collect_config(
     password: &str,
     mnemonic: String,
     lines: &mut io::Lines<impl io::BufRead>,
 ) -> Result<OLineConfig, Box<dyn Error>> {
-    // Load saved config silently — use it as baseline if available.
-    let saved = if has_saved_config() {
-        match load_config(password) {
-            Some(cfg) => {
-                tracing::info!("  Loaded saved config.\n");
-                Some(cfg)
-            }
-            None => {
-                tracing::info!("  Saved config found but could not decrypt (wrong password?). Using defaults.\n");
-                None
+    collect_config_inner(password, mnemonic, lines, None).await
+}
+
+/// Like `collect_config`, but loads a saved config file as baseline.
+/// Values from the saved config fill in where env vars are absent.
+pub async fn collect_config_from_saved(
+    password: &str,
+    mnemonic: String,
+    lines: &mut io::Lines<impl io::BufRead>,
+    saved_config_path: &str,
+) -> Result<OLineConfig, Box<dyn Error>> {
+    collect_config_inner(password, mnemonic, lines, Some(saved_config_path)).await
+}
+
+async fn collect_config_inner(
+    password: &str,
+    mnemonic: String,
+    lines: &mut io::Lines<impl io::BufRead>,
+    saved_config_path: Option<&str>,
+) -> Result<OLineConfig, Box<dyn Error>> {
+    // Only load saved config when explicitly requested via path.
+    let saved = match saved_config_path {
+        Some(path) => {
+            let data = fs::read_to_string(path)
+                .map_err(|e| format!("Failed to read config {}: {}", path, e))?;
+            let decrypted = crate::crypto::decrypt_mnemonic(&data.trim(), password)
+                .map_err(|e| format!("Failed to decrypt config: {}", e))?;
+            match serde_json::from_str::<OLineConfig>(&decrypted) {
+                Ok(cfg) => {
+                    tracing::info!("  Loaded saved config from {}\n", path);
+                    Some(cfg)
+                }
+                Err(e) => {
+                    tracing::warn!("  Failed to parse saved config: {} — using env + defaults.\n", e);
+                    None
+                }
             }
         }
-    } else {
-        None
+        None => None,
     };
 
-    // Resolve all values: env var > saved config > FD default.
+    // Resolve all values: env var > (optional saved config) > FD default.
     let resolved_values: Vec<String> = FIELD_DESCRIPTORS
         .iter()
         .map(|fd| {

@@ -1,0 +1,16 @@
+# TensorZero Function Index
+# Generated functions: 11
+#
+# name | description | tags
+
+oline | validator deployment orchestrator | general
+oline_bootstrap | Bootstrap a private validator node with peers + snapshot | deploy
+oline_deploy | Full automated deployment (phases A → B → C → E) | deploy
+oline_dns | Upsert Cloudflare DNS records | network
+oline_encrypt | Encrypt mnemonic and store in .env | security
+oline_endpoints | Probe Akash RPC/gRPC endpoints and save the fastest to .env | query
+oline_init | Collect deployment config and write deploy-config.json | management
+oline_manage | View and manage active deployments | management
+oline_sdl | Render SDL templates without broadcasting | deploy
+oline_test_grpc | Test gRPC-Web endpoint health | testing
+oline_test_s3 | Test S3/MinIO bucket connectivity | storage, testing

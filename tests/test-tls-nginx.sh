@@ -20,7 +20,7 @@ fail() { echo "  [FAIL] $*"; FAIL=$((FAIL + 1)); }
 section() { echo ""; echo "=== $* ==="; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 NGINX_TEMPLATES="${NGINX_TEMPLATES:-$REPO_ROOT/plays/flea-flicker/nginx}"
 
 # ── workspace ────────────────────────────────────────────────────────────────
@@ -58,8 +58,8 @@ RPC_TMPL="$NGINX_TEMPLATES/rpc"
 [ -f "$RPC_TMPL" ] || { fail "rpc template not found"; }
 
 if [ -f "$RPC_TMPL" ]; then
-    export RPC_DOMAIN="rpc.example.com" RPC_P="26657"
-    envsubst '$RPC_DOMAIN,$RPC_P' < "$RPC_TMPL" > "$CONF_D/rpc.conf"
+    export RPC_D="rpc.example.com" RPC_P="26657"
+    envsubst '$RPC_D,$RPC_P' < "$RPC_TMPL" > "$CONF_D/rpc.conf"
 
     grep -q "server_name rpc.example.com" "$CONF_D/rpc.conf" \
         && ok "RPC: server_name rendered" \
@@ -80,7 +80,7 @@ if [ -f "$RPC_TMPL" ]; then
     fi
 
     # Verify no unreplaced template variables remain
-    if grep -qE '\$\{RPC_(DOMAIN|PORT)\}' "$CONF_D/rpc.conf"; then
+    if grep -qE '\$\{RPC_(D|P)\}' "$CONF_D/rpc.conf"; then
         fail "RPC: unreplaced template variable remains in rendered conf"
     else
         ok "RPC: all template variables substituted"

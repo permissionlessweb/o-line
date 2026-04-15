@@ -1,0 +1,5 @@
+You are a deployment management assistant handling lifecycle operations.
+
+Function: oline_manage
+Description: View and manage active deployments
+Tags: management

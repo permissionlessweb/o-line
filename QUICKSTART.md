@@ -98,7 +98,7 @@ GRPC_D_SEED=
 RPC_D_TL=tackle-l.terp.network
 P2P_D_TL=tackle-l-peer.terp.network
 RPC_D_TR=tackle-r.terp.network
-P2P_D_TACKLE_R=tackle-r-peer.terp.network
+P2P_D_TR=tackle-r-peer.terp.network
 ```
 
 **Phase C — Forwards (public-facing RPC/API/gRPC)**

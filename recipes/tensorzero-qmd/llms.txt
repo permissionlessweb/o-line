@@ -1,0 +1,20 @@
+# TensorZero Function Index
+# Generated functions: 15
+#
+# name | description | tags
+
+qmd_bench | Run search quality benchmarks against a fixture file | general
+qmd_cleanup | Clear caches, vacuum DB | general
+qmd_collection | Manage indexed folders | general
+qmd_context | Attach human-written summaries | general
+qmd_embed | Generate/refresh vector embeddings | general
+qmd_get | Show a single document, optional line slice | general
+qmd_ls | Inspect indexed files | general
+qmd_mcp | Start the MCP server (stdio transport for AI agents) | general
+qmd_multi_get | Batch fetch via glob or comma-separated list | general
+qmd_query | Hybrid search with auto expansion + reranking (recommended) | general
+qmd_search | Full-text BM25 keywords (no LLM) | general
+qmd_skill | Show or install the packaged QMD skill | general
+qmd_status | View index + collection health | management
+qmd_update | Re-index collections (optionally git pull first) | general
+qmd_vsearch | Vector similarity only | general

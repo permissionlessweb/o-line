@@ -348,7 +348,7 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
     if !snapshot_eps.is_empty() {
         bootstrap_sentry(
             "testnet-snapshot", &snapshot_eps, &ssh_key_path, &scripts_path,
-            Some(&nginx_path), &genesis_file, &node_refresh_vars(&a_vars, "SNAPSHOT"),
+            Some(&nginx_path), &genesis_file, &node_refresh_vars(&a_vars, "SNAP"),
         )
         .await?;
     }
@@ -433,7 +433,7 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
             .cloned()
             .collect();
         if !eps.is_empty() {
-            let suffix = if svc.contains("left") { "TACKLE_L" } else { "TACKLE_R" };
+            let suffix = if svc.contains("left") { "TL" } else { "TR" };
             bootstrap_sentry(
                 label, &eps, &ssh_key_path, &scripts_path, None,
                 &genesis_file, &node_refresh_vars(&b_refresh_base, suffix),
@@ -504,7 +504,7 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
             .cloned()
             .collect();
         if !eps.is_empty() {
-            let suffix = if svc.contains("left") { "FORWARD_L" } else { "FORWARD_R" };
+            let suffix = if svc.contains("left") { "FL" } else { "FR" };
             bootstrap_sentry(
                 label, &eps, &ssh_key_path, &scripts_path, None,
                 &genesis_file, &node_refresh_vars(&c_refresh_base, suffix),
@@ -605,7 +605,7 @@ async fn build_testnet_a_vars(
     vars.insert("TERPD_P2P_UNCONDITIONAL_PEER_IDS".into(), String::new());
     vars.insert("TERPD_P2P_PRIVATE_PEER_IDS".into(), String::new());
 
-    vars.insert("SNAPSHOT_80_ACCEPTS".into(), build_accept_items(&vars, "SNAPSHOT"));
+    vars.insert("SNAPSHOT_80_ACCEPTS".into(), build_accept_items(&vars, "SNAP"));
     vars.insert("SEED_80_ACCEPTS".into(), build_accept_items(&vars, "SEED"));
 
     // Faucet domain — route HTTP port 80 → container port 5000
@@ -648,8 +648,8 @@ fn build_testnet_b_vars(
     vars.insert("TERPD_P2P_UNCONDITIONAL_PEER_IDS".into(), validator_node_id.to_string());
     vars.insert("STATESYNC_RPC_SERVERS".into(), statesync_rpc.to_string());
 
-    vars.insert("LT_80_ACCEPTS".into(), build_accept_items(&vars, "TACKLE_L"));
-    vars.insert("RT_80_ACCEPTS".into(), build_accept_items(&vars, "TACKLE_R"));
+    vars.insert("LT_80_ACCEPTS".into(), build_accept_items(&vars, "TL"));
+    vars.insert("RT_80_ACCEPTS".into(), build_accept_items(&vars, "TR"));
 
     vars
 }
@@ -690,8 +690,8 @@ fn build_testnet_c_vars(
     vars.insert("TERPD_P2P_UNCONDITIONAL_PEER_IDS".into(), private_ids);
     vars.insert("STATESYNC_RPC_SERVERS".into(), statesync_rpc.to_string());
 
-    vars.insert("LF_80_ACCEPTS".into(), build_accept_items(&vars, "FORWARD_L"));
-    vars.insert("RF_80_ACCEPTS".into(), build_accept_items(&vars, "FORWARD_R"));
+    vars.insert("LF_80_ACCEPTS".into(), build_accept_items(&vars, "FL"));
+    vars.insert("RF_80_ACCEPTS".into(), build_accept_items(&vars, "FR"));
 
     vars
 }

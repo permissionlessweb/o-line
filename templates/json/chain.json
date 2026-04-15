@@ -49,11 +49,6 @@
   "peers": {
     "seeds": [
       {
-        "id": "tbd",
-        "address": "seed.terp.network:26656",
-        "provider": "TerpNET Foundation"
-      },
-      {
         "id": "5f5cfac5c38506fbb4275c19e87c4107ec48808d",
         "address": "seeds.nodex.one:10410",
         "provider": "nodex.one"
@@ -66,14 +61,44 @@
     ],
     "persistent_peers": [
       {
+        "id": "5bf887027701d3b8c4d95c0ba898cc8bf6d166ff",
+        "address": "188.165.194.110:26676"
+      },
+      {
         "id": "58e01ab84eb931a82a024324520021d2e075ec67",
-        "address": "185.248.24.16:29656",
-        "provider": "zelivsky | apollo"
+        "address": "185.16.39.125:29656"
+      },
+      {
+        "id": "fafb76ea47967a229d092d7ffb0d9957a4254667",
+        "address": "94.130.138.48:33656"
+      },
+      {
+        "id": "6f3677c65945ddb6946cbdaa6ec74b4cfec737f8",
+        "address": "65.108.232.168:37656"
+      },
+      {
+        "id": "06a68cd28f6b57768c950af7f2ba37b4d8bd7f5e",
+        "address": "142.132.248.253:65532"
+      },
+      {
+        "id": "3e04cc80b4647c9ff652d75b0cb12cb6fc36f5d4",
+        "address": "46.4.23.120:13656"
+      },
+      {
+        "id": "c8f6b5ad4048bc667cbe8465176046222d770735",
+        "address": "46.46.119.150:26656"
+      },
+      {
+        "id": "f2e0f122b681d84b70711770d34ad92a784e0405",
+        "address": "167.235.14.83:656"
+      },
+      {
+        "id": "5ba3e8458f584edfe5434186af74f846190d5475",
+        "address": "213.133.100.93:16056"
       },
       {
         "id": "b04c5acab1c821b95f26662d8ebb7ccd4a39e97f",
-        "address": "144.76.97.251:34656",
-        "provider": "AlxVoy | Anode"
+        "address": "65.108.120.161:34657"
       }
     ]
   },

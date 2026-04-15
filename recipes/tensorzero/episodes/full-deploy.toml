@@ -1,0 +1,23 @@
+# Episode: Full Sentry Array Deployment
+# Source: recipes/episodes/full-deploy.md
+
+[episode.full-deploy]
+title = "Full Sentry Array Deployment"
+description = "A complete Terp Network sentry topology live on Akash with public RPC/API endpoints."
+wall_clock = "~90–120 min (dominated by snapshot node sync time)."
+groups = "foundation (A+B parallel) → public (C) → [relayer, indexer optional]."
+functions = ["oline_preflight", "oline_endpoints", "oline_sdl", "oline_deploy_group", "oline_bootstrap", "oline_wait_ready", "oline_distribute_snapshot", "oline_wait_peer", "oline_update_dns", "oline_inject_peers", "oline_session"]
+
+[episode.full-deploy.steps]
+step_1 = "Populate SDL for Group A (foundation)"
+step_2 = "Deploy Group foundation (A + B in parallel)"
+step_3 = "Bootstrap Phase A"
+step_4 = "Bootstrap Phase B (tackles start offline)"
+step_5 = "Wait for snapshot node ready"
+step_6 = "Distribute snapshot to tackles"
+step_7 = "Wait for tackle peer IDs"
+step_8 = "Populate SDL for Group B (public forwards)"
+step_9 = "Deploy Group public (C)"
+step_10 = "Bootstrap Phase C + Update DNS + Back-inject peers"
+step_11 = "Session summary"
+step_12 = "Deploy Relayer"

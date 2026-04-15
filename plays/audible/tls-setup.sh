@@ -25,8 +25,13 @@ export TLS_KEY="${TLS_KEY:-/tmp/tls/privkey.pem}"
 RENDERED_DIR="${RENDERED_DIR:-/etc/nginx/conf.d}"
 NGINX_FULL="${NGINX_FULL:-/etc/nginx/nginx.conf}"
 
+# ── normalize RPC naming ──────────────────────────────────────────────────────
+# SDL convention sets RPC_DOMAIN (not RPC_D) — alias it so the generic ${svc}_D
+# loop works for RPC the same as for API_D and GRPC_D.
+[ -n "$RPC_DOMAIN" ] && [ -z "$RPC_D" ] && export RPC_D="$RPC_DOMAIN"
+
 # ── validation ─────────────────────────────────────────────────────────────────
-# Services use *_D + *_P naming (SDL env convention: RPC_DOMAIN, P2P_D, etc.)
+# Services use *_D + *_P naming (SDL env convention: RPC_D, API_D, GRPC_D).
 services="RPC API GRPC"
 at_least_one=false
 for svc in $services; do
@@ -55,7 +60,7 @@ if [ "$at_least_one" = false ]; then
     exit 0
 fi
 log "Configuration validated."
-if [ -n "$RPC_DOMAIN"  ] && [ -n "$RPC_P"  ]; then log "  RPC:  $RPC_DOMAIN:$RPC_P";  fi
+if [ -n "$RPC_D"  ] && [ -n "$RPC_P"  ]; then log "  RPC:  $RPC_D:$RPC_P";  fi
 if [ -n "$API_D"  ] && [ -n "$API_P"  ]; then log "  API:  $API_D:$API_P";   fi
 if [ -n "$GRPC_D" ] && [ -n "$GRPC_P" ]; then log "  GRPC: $GRPC_D:$GRPC_P"; fi
 
@@ -144,7 +149,7 @@ done
 # ── 4. validate nginx configuration (start deferred to entrypoint) ─────────────
 log "Testing nginx configuration..."
 nginx -t 2>&1 || die "nginx config test failed — check rendered configs above"
-if [ -n "$RPC_DOMAIN"  ]; then log "  RPC  -> https://$RPC_DOMAIN";  fi
+if [ -n "$RPC_D"  ]; then log "  RPC  -> https://$RPC_D";  fi
 if [ -n "$API_D"  ]; then log "  API  -> https://$API_D";  fi
 if [ -n "$GRPC_D" ]; then log "  GRPC -> https://$GRPC_D"; fi
 # When invoked as START_CMD with a command (e.g. 'terpd start'), exec it now.

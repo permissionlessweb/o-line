@@ -394,9 +394,10 @@ pub async fn connect_and_stream(
             Ok(Message::Text(line)) => {
                 // Akash log lines may contain embedded newlines; split them.
                 for l in line.lines() {
+                    let cleaned = clean_log_line(l);
                     let _ = tx.send(LogLine {
                         service_index,
-                        text: l.to_string(),
+                        text: cleaned,
                     });
                 }
             }
@@ -407,4 +408,46 @@ pub async fn connect_and_stream(
     }
 
     Ok(())
+}
+
+/// Clean a raw Akash provider log line for TUI display.
+///
+/// Akash provider logs arrive as JSON: `{"name":"svc-pod","message":"..."}`.
+/// Extract the message field and strip ANSI escape codes so the TUI renders
+/// clean, readable text.
+fn clean_log_line(raw: &str) -> String {
+    let text = match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(obj) => obj
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or(raw)
+            .to_string(),
+        Err(_) => raw.to_string(),
+    };
+    strip_ansi(&text)
+}
+
+/// Strip ANSI escape sequences (CSI codes like \x1b[...m).
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Consume the CSI sequence: ESC [ ... (final byte 0x40-0x7E)
+            if let Some(next) = chars.next() {
+                if next == '[' {
+                    // Skip until we hit a letter (the terminator)
+                    for ch in chars.by_ref() {
+                        if ch.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                }
+                // else: non-CSI escape, just skip the one char
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }

@@ -207,11 +207,17 @@ async fn cmd_deploy(raw: bool, parallel: bool) -> Result<(), Box<dyn Error>> {
             }
 
             let controller = o_line_sdl::tui::TuiController::from_context(&workflow.ctx);
+            let controller_for_ssh = controller.clone();
+            let password_for_ssh = workflow.ctx.deployer.password.clone();
 
             let workflow_fut = async move {
                 if let Err(e) = workflow.run_headless().await {
                     tracing::error!("Deploy workflow failed: {}", e);
                 }
+                // Populate SSH targets from NodeRecords written during deploy.
+                controller_for_ssh
+                    .load_ssh_targets_from_nodes(&password_for_ssh, &[])
+                    .await;
             };
 
             o_line_sdl::tui::run_deploy_tui(controller, deploy_rx, workflow_fut).await?;

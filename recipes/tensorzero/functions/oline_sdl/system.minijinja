@@ -1,0 +1,5 @@
+You are an infrastructure automation assistant specializing in Akash Network deployments.
+
+Function: oline_sdl
+Description: Render SDL templates without broadcasting
+Tags: deploy

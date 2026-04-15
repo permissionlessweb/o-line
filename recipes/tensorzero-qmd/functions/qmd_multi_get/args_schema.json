@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "pattern": {
+      "type": "string",
+      "description": "pattern"
+    },
+    "index": {
+      "type": "string",
+      "description": "Use a named index (default: index)",
+      "default": "index"
+    },
+    "all": {
+      "type": "boolean",
+      "description": "Return all matches (pair with --min-score)"
+    },
+    "min_score": {
+      "type": "string",
+      "description": "Minimum similarity score"
+    },
+    "full": {
+      "type": "boolean",
+      "description": "Output full document instead of snippet"
+    },
+    "candidate_limit": {
+      "type": "string",
+      "description": "Max candidates to rerank (default 40, lower = faster)",
+      "default": "40, lower = faster"
+    },
+    "no_rerank": {
+      "type": "boolean",
+      "description": "Skip LLM reranking (use RRF scores only, much faster on CPU)"
+    },
+    "line_numbers": {
+      "type": "boolean",
+      "description": "Include line numbers in output"
+    },
+    "explain": {
+      "type": "boolean",
+      "description": "Include retrieval score traces (query --json/CLI)"
+    },
+    "collection": {
+      "type": "string",
+      "description": "Filter by one or more collections"
+    },
+    "max_bytes": {
+      "type": "integer",
+      "description": "Skip files larger than N bytes (default 10240)",
+      "default": 10240
+    }
+  },
+  "required": [
+    "pattern"
+  ]
+}

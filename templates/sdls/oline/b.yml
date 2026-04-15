@@ -72,20 +72,20 @@ ${LT_80_ACCEPTS}
       - -c
       - curl -fsSL ${OLINE_ENTRYPOINT_URL} -o /tmp/wrapper.sh; bash /tmp/wrapper.sh
     expose:
-      - port: ${P2P_P_TACKLE_R}
-        as: ${P2P_P_TACKLE_R}
+      - port: ${P2P_P_TR}
+        as: ${P2P_P_TR}
         to:
           - global: true
-      - port: ${RPC_P_TACKLE_R}
-        as: ${RPC_P_TACKLE_R}
+      - port: ${RPC_P_TR}
+        as: ${RPC_P_TR}
         to:
           - global: true
-      - port: ${API_P_TACKLE_R}
-        as: ${API_P_TACKLE_R}
+      - port: ${API_P_TR}
+        as: ${API_P_TR}
         to:
           - global: true
-      - port: ${GRPC_P_TACKLE_R}
-        as: ${GRPC_P_TACKLE_R}
+      - port: ${GRPC_P_TR}
+        as: ${GRPC_P_TR}
         to:
           - global: true
       - port: 80

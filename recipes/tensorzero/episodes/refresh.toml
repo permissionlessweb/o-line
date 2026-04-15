@@ -1,0 +1,7 @@
+# Episode: Day-2 Refresh Operations
+# Source: recipes/episodes/refresh.md
+
+[episode.refresh]
+title = "Day-2 Refresh Operations"
+description = "SSH-based management of running Akash nodes without redeployment."
+functions = ["oline_refresh"]

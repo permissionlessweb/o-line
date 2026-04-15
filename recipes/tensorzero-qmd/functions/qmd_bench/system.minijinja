@@ -1,0 +1,5 @@
+You are an infrastructure automation assistant.
+
+Function: qmd_bench
+Description: Run search quality benchmarks against a fixture file
+Tags: general

@@ -1669,7 +1669,7 @@ pub async fn deploy_all_units(
                     }
                 };
                 if pushed {
-                    let snap_refresh = node_refresh_vars(&w.ctx.a_vars, "SNAPSHOT");
+                    let snap_refresh = node_refresh_vars(&w.ctx.a_vars, "SNAP");
                     match verify_files_and_signal_start(
                         "init-snapshot",
                         &snapshot_eps,
@@ -1939,7 +1939,7 @@ pub async fn wait_snapshot_ready(
                 .iter()
                 .map(|f| f.remote_path.clone())
                 .collect();
-            let snap_refresh = node_refresh_vars(&w.ctx.a_vars, "SNAPSHOT");
+            let snap_refresh = node_refresh_vars(&w.ctx.a_vars, "SNAP");
             verify_files_and_signal_start(
                 "parallel-snapshot",
                 &snapshot_eps,
@@ -2225,7 +2225,7 @@ pub async fn signal_all_nodes(w: &mut OLineWorkflow) -> Result<StepResult, Deplo
             None,
         )
         .await;
-        let lt_refresh = node_refresh_vars(&b_vars, "TACKLE_L");
+        let lt_refresh = node_refresh_vars(&b_vars, "TL");
         let _ = verify_files_and_signal_start(
             "parallel-left-tackle",
             &lt_eps,
@@ -2249,7 +2249,7 @@ pub async fn signal_all_nodes(w: &mut OLineWorkflow) -> Result<StepResult, Deplo
             None,
         )
         .await;
-        let rt_refresh = node_refresh_vars(&b_vars, "TACKLE_R");
+        let rt_refresh = node_refresh_vars(&b_vars, "TR");
         let _ = verify_files_and_signal_start(
             "parallel-right-tackle",
             &rt_eps,
@@ -2336,7 +2336,7 @@ pub async fn inject_peers(w: &mut OLineWorkflow) -> Result<StepResult, DeployErr
             None,
         )
         .await;
-        let lf_refresh = node_refresh_vars(&c_vars, "FORWARD_L");
+        let lf_refresh = node_refresh_vars(&c_vars, "FL");
         let _ = verify_files_and_signal_start(
             "parallel-left-forward",
             &lf_eps,
@@ -2359,7 +2359,7 @@ pub async fn inject_peers(w: &mut OLineWorkflow) -> Result<StepResult, DeployErr
             None,
         )
         .await;
-        let rf_refresh = node_refresh_vars(&c_vars, "FORWARD_R");
+        let rf_refresh = node_refresh_vars(&c_vars, "FR");
         let _ = verify_files_and_signal_start(
             "parallel-right-forward",
             &rf_eps,

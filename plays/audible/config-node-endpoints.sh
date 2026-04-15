@@ -45,10 +45,33 @@ fi
 
 if [ -n "${P2P_D}" ]; then
   log "Patching p2p support..."
-    # p2p.laddr — P2P always on all interfaces (not proxied by nginx)
+    # p2p.laddr — P2P is direct TCP (not proxied by nginx or Akash ingress).
+    # Always bind on all interfaces so the NodePort can reach the container.
     sed -i \
         -e "/^\[p2p\]$/,/^\[/ s|^laddr *=.*|laddr = \"tcp://0.0.0.0:${P2P_P}\"|" \
         "${PROJECT_ROOT}/config/config.toml"
+
+  # external_address — advertise the Akash NodePort IP so remote peers and
+  # statesync clients can actually reach this node for chunk downloads.
+  # P2P traffic is direct TCP (no nginx/TLS), so P2P_D resolves to the
+  # Akash provider host IP where the NodePort lives.
+  # We resolve to an IP (not a hostname) so CometBFT doesn't try DNS at startup.
+  _ext_ip=""
+  for _try in $(seq 1 18); do
+    _ext_ip=$(getent ahosts "${P2P_D}" 2>/dev/null | awk '/STREAM/{print $1; exit}')
+    [ -z "$_ext_ip" ] && _ext_ip=$(dig +short "${P2P_D}" 2>/dev/null | grep -Eo '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+    [ -n "$_ext_ip" ] && break
+    log "Waiting for P2P DNS (${P2P_D}) to resolve — attempt ${_try}/18..."
+    sleep 10
+  done
+  if [ -n "$_ext_ip" ]; then
+    log "Setting external_address = tcp://${_ext_ip}:${P2P_P} (resolved from ${P2P_D})"
+    sed -i \
+        -e "/^\[p2p\]$/,/^\[/ s|^external_address *=.*|external_address = \"tcp://${_ext_ip}:${P2P_P}\"|" \
+        "${PROJECT_ROOT}/config/config.toml"
+  else
+    log "WARNING: Could not resolve ${P2P_D} after 3 min — external_address not set. Statesync chunk serving may fail."
+  fi
 fi
 
 # Patch persistent_peers directly into config.toml.
@@ -111,3 +134,33 @@ if [ "${_ABS}" = "false" ] || [ "${_ABS}" = "0" ]; then
   sed -i 's/^addr_book_strict=true$/addr_book_strict=false/' "${PROJECT_ROOT}/config/config.toml"
 fi
 unset _ABS
+
+# state-sync snapshot settings — patch app.toml [state-sync] section.
+#
+# snapshot-interval: how often to take an ABCI snapshot (in blocks).
+#   Accepts STATESYNC_SNAPSHOT_INTERVAL (SDL snapshot node) or STATESYNC_SNAP_INTERVAL.
+#   Cosmos SDK retains snapshot heights during creation regardless of pruning,
+#   so any pruning mode is compatible. 0 = disabled (default).
+#
+# snapshot-keep-recent: number of recent snapshots to keep on disk.
+#   Align with pruning: keep enough snapshots to cover the statesync trust window.
+#   E.g. snapshot-interval=500, snapshot-keep-recent=2 → 1000 blocks of snapshots
+#   available, matching the trust_height offset (latest - 1000) in oline-entrypoint.sh.
+#   0 = keep all (not recommended for disk space).
+_ss_interval="${STATESYNC_SNAPSHOT_INTERVAL:-${STATESYNC_SNAP_INTERVAL:-}}"
+_ss_keep="${STATESYNC_SNAPSHOT_KEEP_RECENT:-}"
+if [ -n "$_ss_interval" ] && [ "$_ss_interval" != "0" ] && [ -f "${PROJECT_ROOT}/config/app.toml" ]; then
+  log "Patching state-sync.snapshot-interval = ${_ss_interval} in app.toml..."
+  sed -i \
+      -e "/^\[state-sync\]$/,/^\[/ s|^snapshot-interval *=.*|snapshot-interval = ${_ss_interval}|" \
+      "${PROJECT_ROOT}/config/app.toml"
+  # Set snapshot-keep-recent when explicitly configured.
+  # Default cosmos-sdk value is 2 — only override when provided.
+  if [ -n "$_ss_keep" ]; then
+    log "Patching state-sync.snapshot-keep-recent = ${_ss_keep} in app.toml..."
+    sed -i \
+        -e "/^\[state-sync\]$/,/^\[/ s|^snapshot-keep-recent *=.*|snapshot-keep-recent = ${_ss_keep}|" \
+        "${PROJECT_ROOT}/config/app.toml"
+  fi
+fi
+unset _ss_interval _ss_keep

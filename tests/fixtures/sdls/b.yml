@@ -32,12 +32,12 @@ services:
         as: 80
         to:
           - global: true
-      - port: ${RPC_P_TACKLE_R}
-        as: ${RPC_P_TACKLE_R}
+      - port: ${RPC_P_TR}
+        as: ${RPC_P_TR}
         to:
           - global: true
-      - port: ${P2P_P_TACKLE_R}
-        as: ${P2P_P_TACKLE_R}
+      - port: ${P2P_P_TR}
+        as: ${P2P_P_TR}
         to:
           - global: true
       - port: ${SSH_P}

@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "raw": {
+      "type": "boolean",
+      "description": "Enter mnemonic interactively instead of reading from .env"
+    },
+    "parallel": {
+      "type": "boolean",
+      "description": "Use parallel deployment: deploy all phases before snapshot sync wait. All phases (A, B, C) are deployed up-front; B and C use SNAPSHOT_MODE=sftp and receive the snapshot archive after phase A syncs, saving ~60 min"
+    },
+    "sequential": {
+      "type": "boolean",
+      "description": "Use sequential deployment (legacy, one phase at a time)"
+    }
+  },
+  "required": []
+}

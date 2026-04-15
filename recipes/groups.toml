@@ -1,0 +1,104 @@
+# oline deployment groups
+#
+# A group = one or more phases deployed as a unit in a single `oline deploy-group` call.
+# Groups define parallelism constraints and sequencing between each other.
+#
+# Parallel groups (same call, --parallel flag):
+#   - Each phase gets its own HD child account (separate Akash address)
+#   - No sequence number conflicts — safe to broadcast simultaneously
+#   - oline derives child accounts: m/44'/118'/0'/0/{hd_index}
+#
+# group.id is used as: oline deploy-group --group <id> [--episode <uuid7>]
+
+# ── Group A: Foundation ───────────────────────────────────────────────────────
+# Deploy snapshot + seed + minio (phase A) AND both tackles (phase B) together.
+# B deploys while A syncs (~30 min savings).
+# B nodes start offline (OLINE_OFFLINE=1) and wait for snapshot delivery.
+
+[foundation]
+description  = "Phase A (special teams) + Phase B (tackles) — launch simultaneously"
+phases       = ["a", "b"]
+parallel     = true
+hd_indices   = [1, 2]  # child account indices; 0 = master (reserved for funding)
+sequence     = 1        # this group must complete before 'public' can run
+notes        = """
+  Deploy order matters within group:
+  1. Broadcast A and B CreateDeployment in parallel (different accounts = no seq conflict)
+  2. User selects providers interactively for each unit
+  3. Wait for snapshot node to fully sync (catching_up = false) — can take 30–90 min
+  4. Distribute snapshot archive via SSH stream to tackles
+  5. Bootstrap all A+B nodes (push TLS certs, fire OLINE_PHASE=start)
+  6. Inject peer IDs into tackle env vars via SSH
+  7. Wait for tackle nodes to report peers
+"""
+
+# ── Group B: Public ────────────────────────────────────────────────────────────
+# Deploy the two forwards (phase C) after tackles have peer IDs.
+# Must know: seed_peer, snapshot_peer, lt_peer, rt_peer from group 'foundation'.
+
+[public]
+description  = "Phase C (forwards) — public RPC/API endpoints"
+phases       = ["c"]
+parallel     = false   # only 2 services, single account is fine
+hd_indices   = [3]
+sequence     = 2        # depends_on: foundation must be complete + peers known
+depends_on   = ["foundation"]
+notes        = """
+  Requires from session state:
+  - seed_peer (from phase_a session outputs)
+  - snapshot_peer (from phase_a session outputs)
+  - lt_peer, rt_peer (from phase_b session outputs)
+
+  Deploy order:
+  1. Build phase C vars with runtime peer IDs injected
+  2. Broadcast C CreateDeployment
+  3. User selects provider
+  4. Bootstrap forwards (push certs, fire OLINE_PHASE=start)
+  5. Wait for forwards to report peers
+  6. Update DNS CNAME records (RPC, API, gRPC domains)
+"""
+
+# ── Group E: Relayer (optional) ────────────────────────────────────────────────
+[relayer]
+description  = "Phase E — IBC relayer"
+phases       = ["e"]
+parallel     = false
+hd_indices   = [4]
+sequence     = 3
+depends_on   = []   # can deploy independently, doesn't need peer IDs
+notes        = """
+  Bootstrap includes:
+  1. Install relayer config file via SFTP
+  2. Install chain key files via SSH
+  3. Fire relayer start signal
+"""
+
+# ── Group F: Indexer (optional) ───────────────────────────────────────────────
+[indexer]
+description  = "Phase F — Argus indexer"
+phases       = ["f"]
+parallel     = false
+hd_indices   = [5]
+sequence     = 3
+depends_on   = []
+notes        = "Independent — statesync to chain tip on startup."
+
+# ── Full deploy sequence ───────────────────────────────────────────────────────
+[full_deploy]
+description  = "Complete sentry array: foundation → public → relayer (optional)"
+ordered_groups = ["foundation", "public"]
+optional_groups = ["relayer", "indexer"]
+notes = """
+  Total wall-clock: ~90–120 min depending on snapshot sync speed.
+  Parallelism saves ~30 min vs sequential A→B→C.
+"""
+
+# ── Testnet deploy sequence ────────────────────────────────────────────────────
+[testnet]
+description  = "Fresh testnet: validator + faucet + sentries"
+templates    = ["testnet-a.yml", "testnet-b.yml", "testnet-c.yml"]
+phases       = ["testnet-a", "testnet-b", "testnet-c"]
+notes        = """
+  Testnet-A also deploys a validator node and a faucet service.
+  Bootstrap for testnet-a includes genesis file delivery.
+"""

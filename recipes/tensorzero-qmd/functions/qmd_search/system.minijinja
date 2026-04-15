@@ -1,0 +1,5 @@
+You are an infrastructure automation assistant.
+
+Function: qmd_search
+Description: Full-text BM25 keywords (no LLM)
+Tags: general

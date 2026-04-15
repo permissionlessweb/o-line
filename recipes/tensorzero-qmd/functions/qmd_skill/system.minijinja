@@ -1,0 +1,5 @@
+You are an infrastructure automation assistant.
+
+Function: qmd_skill
+Description: Show or install the packaged QMD skill
+Tags: general

@@ -63,8 +63,8 @@ list:
     #!/usr/bin/env bash
     just --list --list-submodules 2>/dev/null | sed -n '/test:/,$ p'
 
-# All no-infra tests (unit + nginx + testnet render + firewall unit + vpn unit)
-all: unit nginx testnet-render
+# All no-infra tests (unit + nginx + envcheck + testnet render + firewall unit + vpn unit)
+all: unit nginx envcheck testnet-render
     cargo test --lib firewall
     cargo test --lib vpn
 
@@ -114,3 +114,7 @@ unit:
 # Nginx template validation (no Docker required)
 nginx:
     bash tests/test-tls-nginx.sh
+
+# Cross-file env var consistency (FD naming, refresh vars, nginx templates)
+envcheck:
+    cargo test --features testing --test env_var_consistency

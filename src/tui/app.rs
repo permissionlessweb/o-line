@@ -15,6 +15,7 @@ use tokio::task::JoinHandle;
 
 use super::log_stream::{build_log_targets, ConnStatus, LogBuffer, LogLine, LogTarget};
 use super::ui;
+use crate::nodes::NodeStore;
 use crate::workflow::context::OLineContext;
 
 /// Page-scroll jump size.
@@ -67,8 +68,12 @@ impl TuiController {
     pub fn from_context(ctx: &OLineContext) -> Self {
         let targets = build_log_targets(ctx);
         let ctrl = Self::new();
+
         // Synchronous population — no tokio runtime needed since we own the lock.
         let mut inner = ctrl.inner.try_lock().unwrap();
+
+        // Load SSH targets from encrypted node store (best-effort, sync).
+        load_ssh_targets_into(&mut inner.ssh_targets, &ctx.deployer.password, &[]);
         if !targets.is_empty() {
             let base_idx = inner.log_buffers.len();
             for t in &targets {
@@ -201,6 +206,70 @@ impl TuiController {
     /// Get SSH targets for the service picker.
     pub async fn ssh_targets(&self) -> Vec<SshTarget> {
         self.inner.lock().await.ssh_targets.clone()
+    }
+
+    /// Load SSH targets from the encrypted node store into the controller.
+    ///
+    /// Called after deploy completes — reads `nodes.enc` and converts each
+    /// `NodeRecord` into an `SshTarget` with label format `"PHASE:service"`
+    /// matching the log tab labels.
+    pub async fn load_ssh_targets_from_nodes(&self, password: &str, dseqs: &[u64]) {
+        let mut inner = self.inner.lock().await;
+        load_ssh_targets_into(&mut inner.ssh_targets, password, dseqs);
+    }
+}
+
+// ── SSH target loading helper ────────────────────────────────────────────────
+
+/// Populate `ssh_targets` from the encrypted node store (`nodes.enc`).
+///
+/// Shared by `from_context` (sync, lock already held) and `load_ssh_targets_from_nodes` (async).
+fn load_ssh_targets_into(ssh_targets: &mut Vec<SshTarget>, password: &str, dseqs: &[u64]) {
+    let path = NodeStore::default_path();
+    if !path.exists() {
+        tracing::info!("  SSH: no node store at {}", path.display());
+        return;
+    }
+    let store = NodeStore::open(&path, password);
+    let records = match store.load() {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("  SSH: could not decrypt node store: {}", e);
+            return;
+        }
+    };
+
+    // Clear stale targets before repopulating.
+    ssh_targets.clear();
+
+    let total = records.len();
+    for rec in records {
+        if !dseqs.is_empty() && !dseqs.contains(&rec.dseq) {
+            continue;
+        }
+        if rec.host.is_empty() || rec.ssh_port == 0 {
+            continue;
+        }
+        let key = rec.key_path();
+        tracing::debug!(
+            "  SSH target: {}:{} -> {}:{} key={}",
+            rec.phase, rec.service, rec.host, rec.ssh_port, key.display(),
+        );
+        ssh_targets.push(SshTarget {
+            label: format!("{}:{}", rec.phase, rec.service),
+            host: rec.host.clone(),
+            port: rec.ssh_port.to_string(),
+            ssh_key_path: key,
+        });
+    }
+    if ssh_targets.is_empty() && total > 0 {
+        tracing::info!("  SSH: {} node record(s) but none usable", total);
+    } else if !ssh_targets.is_empty() {
+        tracing::info!(
+            "  SSH: {} target(s) ready: {}",
+            ssh_targets.len(),
+            ssh_targets.iter().map(|t| format!("{} [key={}]", t.label, t.ssh_key_path.display())).collect::<Vec<_>>().join(", "),
+        );
     }
 }
 
@@ -474,7 +543,7 @@ pub async fn run_deploy_tui(
 
     let buffers = std::mem::take(&mut inner.log_buffers);
     let mut log_rx = inner.collector.take().map(|(rx, _)| rx);
-    let ssh_targets = inner.ssh_targets.clone();
+    let mut ssh_targets = inner.ssh_targets.clone();
     drop(inner);
 
     let mut app = TuiApp::new_deploy(buffers);
@@ -503,6 +572,13 @@ pub async fn run_deploy_tui(
             () = &mut workflow_fut, if !workflow_done => {
                 workflow_done = true;
                 app.deploy_done = true;
+                // Refresh SSH targets — deploy just wrote NodeRecords to nodes.enc.
+                ssh_targets = controller.inner.lock().await.ssh_targets.clone();
+                tracing::info!(
+                    "  Deploy done. SSH targets: {}",
+                    if ssh_targets.is_empty() { "none".into() }
+                    else { ssh_targets.iter().map(|t| t.label.as_str()).collect::<Vec<_>>().join(", ") },
+                );
                 needs_redraw = true;
             }
             // Container log lines
@@ -586,9 +662,9 @@ pub async fn run_deploy_tui(
                         KeyEvent { code: KeyCode::End, .. } => {
                             app.deploy_scroll = app.deploy_lines.len().saturating_sub(1);
                         }
-                        // s -> SSH into active service
+                        // Alt+s -> SSH into active service
                         KeyEvent { code: KeyCode::Char('s'), modifiers, .. }
-                            if !modifiers.contains(KeyModifiers::CONTROL) =>
+                            if modifiers.contains(KeyModifiers::ALT) =>
                         {
                             if !ssh_targets.is_empty() && !app.log_buffers.is_empty() {
                                 let active_label = &app.log_buffers[app.active_tab].label;
@@ -600,24 +676,43 @@ pub async fn run_deploy_tui(
                                 if let Some(target) = target {
                                     execute!(stdout(), LeaveAlternateScreen)?;
                                     disable_raw_mode()?;
+                                    use std::io::Write;
+                                    io::stdout().flush().ok();
 
-                                    let _ = std::process::Command::new("ssh")
-                                        .args([
-                                            "-i",
-                                            &target.ssh_key_path.to_string_lossy(),
-                                            "-o",
-                                            "StrictHostKeyChecking=accept-new",
-                                            "-p",
-                                            &target.port,
-                                            &format!("root@{}", target.host),
-                                        ])
-                                        .status();
+                                    eprintln!(
+                                        "\n  SSH -> root@{}:{} (key: {})\n  Ctrl+D or 'exit' to return.\n",
+                                        target.host, target.port, target.ssh_key_path.display(),
+                                    );
+
+                                    if !target.ssh_key_path.exists() {
+                                        eprintln!("  ERROR: key not found at {}\n", target.ssh_key_path.display());
+                                    } else {
+                                        let status = std::process::Command::new("ssh")
+                                            .arg("-i").arg(&target.ssh_key_path)
+                                            .arg("-p").arg(&target.port)
+                                            .arg("-o").arg("StrictHostKeyChecking=accept-new")
+                                            .arg("-o").arg("UserKnownHostsFile=/dev/null")
+                                            .arg("-o").arg("ConnectTimeout=10")
+                                            .arg("-o").arg("ServerAliveInterval=15")
+                                            .arg(format!("root@{}", target.host))
+                                            .stdin(std::process::Stdio::inherit())
+                                            .stdout(std::process::Stdio::inherit())
+                                            .stderr(std::process::Stdio::inherit())
+                                            .status();
+
+                                        match &status {
+                                            Ok(s) if !s.success() => eprintln!("\n  SSH exited: {}", s),
+                                            Err(e) => eprintln!("\n  SSH failed: {}", e),
+                                            _ => {}
+                                        }
+                                    }
 
                                     enable_raw_mode()?;
                                     execute!(stdout(), EnterAlternateScreen)?;
                                     terminal = ratatui::Terminal::new(
                                         CrosstermBackend::new(stdout()),
                                     )?;
+                                    event_stream = EventStream::new();
                                 }
                             }
                         }
@@ -808,47 +903,66 @@ async fn log_viewer_loop(
                                 app.scroll_offsets[app.active_tab] = max;
                             }
                         }
-                        // s -> SSH into active service
+                        // Alt+s -> SSH into active service
                         KeyEvent { code: KeyCode::Char('s'), modifiers, .. }
-                            if !modifiers.contains(KeyModifiers::CONTROL) =>
+                            if modifiers.contains(KeyModifiers::ALT) =>
                         {
-                            if !ssh_targets.is_empty() {
-                                let active_label = &app.log_buffers[app.active_tab].label;
+                            if !ssh_targets.is_empty() && !app.log_buffers.is_empty() {
+                                let active_label = app.log_buffers[app.active_tab].label.clone();
                                 let target = ssh_targets
                                     .iter()
-                                    .find(|t| &t.label == active_label)
+                                    .find(|t| t.label == active_label)
                                     .or_else(|| ssh_targets.first());
 
-                                if let Some(target) = target {
-                                    // Exit TUI temporarily
+                                if let Some(target) = target.cloned() {
+                                    // Drop terminal cleanly before touching stdout
+                                    *terminal = None;
                                     execute!(stdout(), LeaveAlternateScreen)?;
                                     disable_raw_mode()?;
+                                    use std::io::Write;
+                                    io::stdout().flush().ok();
 
-                                    tracing::info!(
-                                        "SSH into {} ({}:{})...",
-                                        target.label,
-                                        target.host,
-                                        target.port
+                                    eprintln!(
+                                        "\n  SSH -> root@{}:{} (key: {})\n  Ctrl+D or 'exit' to return.\n",
+                                        target.host, target.port, target.ssh_key_path.display(),
                                     );
 
-                                    let _ = std::process::Command::new("ssh")
-                                        .args([
-                                            "-i",
-                                            &target.ssh_key_path.to_string_lossy(),
-                                            "-o",
-                                            "StrictHostKeyChecking=accept-new",
-                                            "-p",
-                                            &target.port,
-                                            &format!("root@{}", target.host),
-                                        ])
-                                        .status();
+                                    if !target.ssh_key_path.exists() {
+                                        eprintln!("  ERROR: key not found at {}\n", target.ssh_key_path.display());
+                                    } else {
+                                        let status = std::process::Command::new("ssh")
+                                            .arg("-i").arg(&target.ssh_key_path)
+                                            .arg("-p").arg(&target.port)
+                                            .arg("-o").arg("StrictHostKeyChecking=accept-new")
+                                            .arg("-o").arg("UserKnownHostsFile=/dev/null")
+                                            .arg("-o").arg("ConnectTimeout=10")
+                                            .arg("-o").arg("ServerAliveInterval=15")
+                                            .arg(format!("root@{}", target.host))
+                                            .stdin(std::process::Stdio::inherit())
+                                            .stdout(std::process::Stdio::inherit())
+                                            .stderr(std::process::Stdio::inherit())
+                                            .status();
 
-                                    // Restore TUI
+                                        match &status {
+                                            Ok(s) if !s.success() => eprintln!("\n  SSH exited: {}", s),
+                                            Err(e) => eprintln!("\n  SSH failed: {}", e),
+                                            _ => {}
+                                        }
+                                    }
+
+                                    // Restore TUI with fresh terminal + event stream
                                     enable_raw_mode()?;
                                     execute!(stdout(), EnterAlternateScreen)?;
                                     *terminal = Some(ratatui::Terminal::new(
                                         CrosstermBackend::new(stdout()),
                                     )?);
+                                    *event_stream = EventStream::new();
+                                } else {
+                                    let available: Vec<&str> = ssh_targets.iter().map(|t| t.label.as_str()).collect();
+                                    app.log_buffers[app.active_tab].push(format!(
+                                        "[ssh] No target for '{}'. Available: {:?}",
+                                        active_label, available,
+                                    ));
                                 }
                             }
                         }

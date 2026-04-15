@@ -1,0 +1,55 @@
+# tz-heuristics.toml — Heuristics for TensorZero function spec generation
+# Used by scripts/docs/gen-tz.py to categorize, tag, and template functions.
+
+# ─── Category keyword lists ──────────────────────────────────────────────────
+# Command names matching any keyword are tagged with that category.
+[categories]
+deploy = ["deploy", "sdl", "bootstrap", "manifest"]
+network = ["dns", "firewall", "vpn", "relayer", "node"]
+storage = ["s3", "snapshot", "refresh"]
+security = ["encrypt", "grant", "tls", "cert"]
+query = ["endpoints", "providers", "registry", "sites"]
+management = ["manage", "init", "list", "status", "sync"]
+testing = ["test", "check", "probe"]
+
+# ─── Secrets detection ───────────────────────────────────────────────────────
+[secrets]
+patterns = ["key", "secret", "token", "password", "mnemonic", "seed"]
+action = "redact"  # mark matching args as writeOnly in JSON schema
+
+# ─── Template defaults ───────────────────────────────────────────────────────
+[templates]
+system_prefix = "You are an infrastructure automation assistant."
+user_format = "Execute: {{function_name}}({{args | tojson}})"
+
+# Category-specific system prompt overrides
+[templates.category_prompts]
+deploy = "You are an infrastructure automation assistant specializing in Akash Network deployments."
+network = "You are a network operations assistant managing DNS, firewall, and connectivity."
+storage = "You are a storage and data management assistant handling S3, snapshots, and node state."
+security = "You are a security operations assistant managing encryption, certificates, and access control."
+query = "You are an infrastructure query assistant retrieving endpoint and registry information."
+management = "You are a deployment management assistant handling lifecycle operations."
+testing = "You are an infrastructure testing assistant verifying connectivity and health."
+
+# ─── Model routing defaults ──────────────────────────────────────────────────
+[model]
+name = "default"
+routing = ["default"]
+
+# ─── Per-target configuration ────────────────────────────────────────────────
+[targets.oline]
+bin_name = "oline"
+cli_ref = "docs/cli-reference.md"
+tools_json = ".team/tools/oline_tools.json"
+output_dir = "recipes/tensorzero"
+
+[targets.ergors]
+bin_name = "ergors"
+cli_ref_cmd = "ssh -p 21212 returniflost@192.168.1.104 'source ~/.cargo/env && cd ~/CW-AGENT/e2e-improvements && cargo run --package ergors -- --help'"
+output_dir = "recipes/tensorzero-ergors"
+
+[targets.qmd]
+bin_name = "qmd"
+cli_ref_cmd = "ssh -p 21212 returniflost@192.168.1.104 'source ~/.nvm/nvm.sh && qmd --help'"
+output_dir = "recipes/tensorzero-qmd"

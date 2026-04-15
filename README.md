@@ -4,13 +4,59 @@ Automated deployment orchestrator for Terp Network sentry node arrays on [Akash 
 
 Deploys a full validator protection stack — snapshot node, seed node, MinIO snapshot storage, left/right tackle sentries, and left/right forward (public RPC/API/gRPC) nodes — all coordinated by a single `oline deploy` command.
 
+
+## Topology
+
+```mermaid
+graph LR
+    Network[(Public Network)] <--> S1
+    Network <--> Sd1
+    Network <--> LF
+    Network <--> RF
+
+    subgraph "Phase A: Special Teams"
+        S1[Snapshot]
+        Sd1[Seed]
+        M[MinIO/IPFS]
+    end
+
+    S1 -->|Persistent Peer| LT
+    S1 -->|Persistent Peer| RT
+    S1 -->|Persistent Peer| LF
+    S1 -->|Persistent Peer| RF
+    Sd1 -->|Seeds| LF
+    Sd1 -->|Seeds| RF
+
+    subgraph "Phase C: Forwards"
+        LF[Left Forward]
+        RF[Right Forward]
+    end
+
+    LF -->|Private + Unconditional| LT
+    LF -->|Private + Unconditional| RT
+    RF -->|Private + Unconditional| LT
+    RF -->|Private + Unconditional| RT
+
+    subgraph "Phase B: Tackles"
+        LT[Left Tackle]
+        RT[Right Tackle]
+    end
+
+    LT -->|Private Peer| Validator[Validator]
+    RT -->|Private Peer| Validator
+
+    classDef validator fill:#2e7d32,stroke:#1b5e20;
+    classDef snapshot fill:#b4582c,stroke:#1e88e5;
+    classDef tackle fill:#2c50b4,stroke:#e65100;
+    classDef forward fill:#862cb4,stroke:#43a047;
+    class Validator validator;
+    class S1,Sd1,M snapshot;
+    class LT,RT tackle;
+    class LF,RF forward;
 ```
-[Snapshot]  ──persistent_peer──►  [Left Tackle]  ──private──►  [Validator]
-    │                              [Right Tackle] ──private──►
-    │         ──persistent_peer──►  [Left Forward]  (public RPC/API/gRPC)
-[Seed]       ──seeds────────────►  [Right Forward] (public RPC/API/gRPC)
-[MinIO/IPFS] ──snapshot archive
-```
+
+<!-- todo: topology for pfsense tunnel -->
+<!-- todo: topology for head/tailscale -->
 
 ## Get Started
 

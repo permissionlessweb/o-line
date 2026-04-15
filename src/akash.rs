@@ -109,15 +109,26 @@ pub fn build_accept_items(vars: &HashMap<String, String>, suffix: &str) -> Strin
 
 /// Build unsuffixed refresh vars for a node (used by `verify_files_and_signal_start`
 /// to patch `/tmp/oline-env.sh`).
+///
+/// Maps suffixed FD vars (e.g. `RPC_D_SNAP`) to the unsuffixed names that
+/// `REFRESH_VARS` in crypto.rs expects (e.g. `RPC_DOMAIN`, `API_D`, `P2P_P`).
+///
+/// Note: RPC uses `RPC_DOMAIN` (not `RPC_D`) because `config-node-endpoints.sh`
+/// and `oline-entrypoint.sh` read `$RPC_DOMAIN` inside the container.
 pub fn node_refresh_vars(
     sdl_vars: &HashMap<String, String>,
     suffix: &str,
 ) -> HashMap<String, String> {
     let mut out = sdl_vars.clone();
     for field in ["RPC", "API", "GRPC", "P2P"] {
-        for role in ["DOMAIN", "PORT"] {
+        for role in ["D", "P"] {
             let src = format!("{}_{}_{}", field, role, suffix);
-            let dst = format!("{}_{}", field, role);
+            // RPC domain is RPC_DOMAIN in containers (not RPC_D)
+            let dst = if field == "RPC" && role == "D" {
+                "RPC_DOMAIN".to_string()
+            } else {
+                format!("{}_{}", field, role)
+            };
             if let Some(v) = sdl_vars.get(&src) {
                 out.insert(dst, v.clone());
             }
@@ -211,7 +222,7 @@ pub async fn build_phase_a_vars(
     // ── Accept lists (must be after domain vars from to_sdl_vars()) ───────────
     vars.insert(
         "SNAPSHOT_80_ACCEPTS".into(),
-        build_accept_items(&vars, "SNAPSHOT"),
+        build_accept_items(&vars, "SNAP"),
     );
     vars.insert("SEED_80_ACCEPTS".into(), build_accept_items(&vars, "SEED"));
     // MinIO download domain accept — filter empty so SDL never gets `- null`.
@@ -301,8 +312,8 @@ pub fn build_phase_b_vars(
     }
 
     // ── Accept lists ─────────────────────────────────────────────────────────
-    vars.insert("LT_80_ACCEPTS".into(), build_accept_items(&vars, "TACKLE_L"));
-    vars.insert("RT_80_ACCEPTS".into(), build_accept_items(&vars, "TACKLE_R"));
+    vars.insert("LT_80_ACCEPTS".into(), build_accept_items(&vars, "TL"));
+    vars.insert("RT_80_ACCEPTS".into(), build_accept_items(&vars, "TR"));
 
     vars
 }
@@ -387,11 +398,11 @@ pub fn build_phase_c_vars(
     // ── Accept lists ─────────────────────────────────────────────────────────
     vars.insert(
         "LF_80_ACCEPTS".into(),
-        build_accept_items(&vars, "FORWARD_L"),
+        build_accept_items(&vars, "FL"),
     );
     vars.insert(
         "RF_80_ACCEPTS".into(),
-        build_accept_items(&vars, "FORWARD_R"),
+        build_accept_items(&vars, "FR"),
     );
 
     vars

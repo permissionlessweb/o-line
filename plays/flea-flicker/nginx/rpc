@@ -14,7 +14,7 @@
     # return HTTP 400 when it receives cleartext from the provider.
     server {
         listen 80;
-        server_name ${RPC_DOMAIN};
+        server_name ${RPC_D};
 
         # WebSocket (/websocket endpoint)
         location /websocket {

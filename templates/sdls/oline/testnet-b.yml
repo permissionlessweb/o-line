@@ -57,20 +57,20 @@ ${LT_80_ACCEPTS}
   ${RT_SVC}:
     image: ${OMNIBUS_IMAGE}
     expose:
-      - port: ${P2P_P_TACKLE_R}
-        as: ${P2P_P_TACKLE_R}
+      - port: ${P2P_P_TR}
+        as: ${P2P_P_TR}
         to:
           - global: true
-      - port: ${RPC_P_TACKLE_R}
-        as: ${RPC_P_TACKLE_R}
+      - port: ${RPC_P_TR}
+        as: ${RPC_P_TR}
         to:
           - global: true
-      - port: ${API_P_TACKLE_R}
-        as: ${API_P_TACKLE_R}
+      - port: ${API_P_TR}
+        as: ${API_P_TR}
         to:
           - global: true
-      - port: ${GRPC_P_TACKLE_R}
-        as: ${GRPC_P_TACKLE_R}
+      - port: ${GRPC_P_TR}
+        as: ${GRPC_P_TR}
         to:
           - global: true
       - port: 80
@@ -99,12 +99,12 @@ ${RT_80_ACCEPTS}
       - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${TERPD_P2P_UNCONDITIONAL_PEER_IDS}
       - TERPD_P2P_PERSISTENT_PEERS=${TERPD_P2P_PERSISTENT_PEERS}
       - RPC_DOMAIN=${RPC_D_TR}
-      - RPC_P=${RPC_P_TACKLE_R}
+      - RPC_P=${RPC_P_TR}
       - API_D=${API_D_TR}
-      - API_P=${API_P_TACKLE_R}
-      - P2P_D=${P2P_D_TACKLE_R}
-      - P2P_P=${P2P_P_TACKLE_R}
-      - GRPC_P=${GRPC_P_TACKLE_R}
+      - API_P=${API_P_TR}
+      - P2P_D=${P2P_D_TR}
+      - P2P_P=${P2P_P_TR}
+      - GRPC_P=${GRPC_P_TR}
       - GRPC_D=${GRPC_D_TR}
       - SSH_PUBKEY=${SSH_PUBKEY}
 profiles:

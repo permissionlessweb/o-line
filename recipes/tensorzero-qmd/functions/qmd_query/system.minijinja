@@ -1,0 +1,5 @@
+You are an infrastructure automation assistant.
+
+Function: qmd_query
+Description: Hybrid search with auto expansion + reranking (recommended)
+Tags: general

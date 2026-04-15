@@ -288,7 +288,7 @@ async fn test_oline_ssh_plumbing() {
         ("RPC_DOMAIN", "rpc.snapshot.test"),
         ("RPC_P", "26657"),
     ]);
-    let snap_refresh = node_refresh_vars(&snap_vars, "SNAPSHOT");
+    let snap_refresh = node_refresh_vars(&snap_vars, "SNAP");
 
     verify_files_and_signal_start(
         "snapshot",
@@ -400,7 +400,7 @@ async fn test_oline_ssh_plumbing() {
         ("TERPD_P2P_PERSISTENT_PEERS", "abc123@snapshot:26656"),
     ]);
 
-    let lt_refresh = node_refresh_vars(&tackle_vars, "TACKLE_L");
+    let lt_refresh = node_refresh_vars(&tackle_vars, "TL");
     verify_files_and_signal_start(
         "left-tackle",
         &lt_eps,
@@ -411,7 +411,7 @@ async fn test_oline_ssh_plumbing() {
     .await
     .expect("signal failed for left-tackle");
 
-    let rt_refresh = node_refresh_vars(&tackle_vars, "TACKLE_R");
+    let rt_refresh = node_refresh_vars(&tackle_vars, "TR");
     verify_files_and_signal_start(
         "right-tackle",
         &rt_eps,
@@ -475,7 +475,7 @@ async fn test_oline_ssh_plumbing() {
         ),
     ]);
 
-    let lf_refresh = node_refresh_vars(&forward_vars, "FORWARD_L");
+    let lf_refresh = node_refresh_vars(&forward_vars, "FL");
     verify_files_and_signal_start(
         "left-forward",
         &lf_eps,
@@ -486,7 +486,7 @@ async fn test_oline_ssh_plumbing() {
     .await
     .expect("signal failed for left-forward");
 
-    let rf_refresh = node_refresh_vars(&forward_vars, "FORWARD_R");
+    let rf_refresh = node_refresh_vars(&forward_vars, "FR");
     verify_files_and_signal_start(
         "right-forward",
         &rf_eps,
@@ -516,7 +516,7 @@ async fn test_oline_ssh_plumbing() {
         ("RPC_DOMAIN", "rpc2.snapshot.test"),
         ("CHAIN_ID", "ssh-test-2"),
     ]);
-    let extra_refresh = node_refresh_vars(&extra_vars, "SNAPSHOT");
+    let extra_refresh = node_refresh_vars(&extra_vars, "SNAP");
 
     verify_files_and_signal_start("snapshot-re", &snap_eps, &ssh_key_path, &[], &extra_refresh)
         .await

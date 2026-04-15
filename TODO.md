@@ -9,9 +9,7 @@
 - single e2e test:
   - extend testnet workflow with terp websites to:
   - deploy local-akash in parallel with local terp
-  - bootstrap oline for local terp on local-akash
   - deploy static website to local minio-ipfs on akash network
-  - wire in dao interface scripts to deploy dao-contracts
   - bootstrap multiple local ibc chains for ibc testing (terp-core)
   - automate testing html js & wasm-bindgen logic in compiled static websites
     - test passkey was binary use locally via automated scripting and confirmation of use in html website

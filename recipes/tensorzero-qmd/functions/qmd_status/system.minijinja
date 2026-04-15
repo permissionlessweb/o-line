@@ -1,0 +1,5 @@
+You are a deployment management assistant handling lifecycle operations.
+
+Function: qmd_status
+Description: View index + collection health
+Tags: management
