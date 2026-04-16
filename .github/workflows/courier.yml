@@ -1,0 +1,120 @@
+name: Courier
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'plays/courier/**'
+      - '.github/workflows/courier.yml'
+    tags:
+      - 'courier-v*'
+  pull_request:
+    paths:
+      - 'plays/courier/**'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag (e.g. v0.1.0)'
+        required: false
+      push:
+        description: 'Push to registries'
+        type: boolean
+        default: false
+
+concurrency:
+  group: courier-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GHCR_IMAGE: ghcr.io/permissionlessweb/oline-courier
+  DH_IMAGE: docker.io/permissionlessweb/oline-courier
+
+jobs:
+  # ── Unit + Integration tests ───────────────────────────────────────────────
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Unit tests
+        run: cargo test -p oline-courier --lib
+
+      - name: Build binary
+        run: cargo build -p oline-courier
+
+      - name: Integration tests
+        run: cargo test -p oline-courier --test courier_integration -- --nocapture --test-threads=1
+
+  # ── Docker build (always) + push (on tag or manual) ────────────────────────
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Determine tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          elif [[ "${{ github.ref }}" == refs/tags/courier-v* ]]; then
+            TAG="${{ github.ref_name }}"
+            TAG="${TAG#courier-}"   # strip "courier-" prefix → "v0.1.0"
+          else
+            TAG="dev-$(echo ${{ github.sha }} | cut -c1-7)"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          # Push if: tag event, or manual with push=true
+          SHOULD_PUSH="false"
+          if [[ "${{ github.ref }}" == refs/tags/courier-v* ]]; then
+            SHOULD_PUSH="true"
+          fi
+          if [[ "${{ github.event.inputs.push }}" == "true" ]]; then
+            SHOULD_PUSH="true"
+          fi
+          echo "push=$SHOULD_PUSH" >> $GITHUB_OUTPUT
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: plays/courier
+          platforms: linux/amd64,linux/arm64
+          push: ${{ steps.tag.outputs.push }}
+          tags: |
+            ${{ env.GHCR_IMAGE }}:${{ steps.tag.outputs.tag }}
+            ${{ env.GHCR_IMAGE }}:latest
+            ${{ env.DH_IMAGE }}:${{ steps.tag.outputs.tag }}
+            ${{ env.DH_IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify image
+        if: steps.tag.outputs.push == 'true'
+        run: |
+          echo "Verifying push..."
+          docker manifest inspect ${{ env.GHCR_IMAGE }}:${{ steps.tag.outputs.tag }}

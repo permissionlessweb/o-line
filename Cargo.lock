@@ -5,6 +5,7 @@ version = 4
 [[package]]
 name = "abstract-cw-multi-test"
 version = "3.0.0-rc"
+source = "git+https://github.com/permissionlessweb/cw-multi-test-fork?branch=zk-mvp#11e8d92b06e65735e8fbf099cb2833fa4edf95f1"
 dependencies = [
  "bech32 0.11.1",
  "cosmwasm-schema",
@@ -1350,6 +1351,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 [[package]]
 name = "cosmos-sdk-proto"
 version = "0.28.0"
+source = "git+https://github.com/permissionlessweb/cosmos-rust?branch=zk-mvp#9bf9f43ac7a304af337a2a1cfdaa227318a71d35"
 dependencies = [
  "bytes",
  "http-body-util",
@@ -1362,6 +1364,7 @@ dependencies = [
 [[package]]
 name = "cosmrs"
 version = "0.23.0"
+source = "git+https://github.com/permissionlessweb/cosmos-rust?branch=zk-mvp#9bf9f43ac7a304af337a2a1cfdaa227318a71d35"
 dependencies = [
  "bip32",
  "cosmos-sdk-proto",
@@ -1382,10 +1385,12 @@ dependencies = [
 [[package]]
 name = "cosmwasm-core"
 version = "3.0.3-dev"
+source = "git+https://github.com/permissionlessweb/cosmwasm?branch=zk-mvp#86da124a189c30f984ac69c385f8182fe8845ead"
 
 [[package]]
 name = "cosmwasm-crypto"
 version = "3.0.3-dev"
+source = "git+https://github.com/permissionlessweb/cosmwasm?branch=zk-mvp#86da124a189c30f984ac69c385f8182fe8845ead"
 dependencies = [
  "ark-bls12-381",
  "ark-ec",
@@ -1409,6 +1414,7 @@ dependencies = [
 [[package]]
 name = "cosmwasm-derive"
 version = "3.0.3-dev"
+source = "git+https://github.com/permissionlessweb/cosmwasm?branch=zk-mvp#86da124a189c30f984ac69c385f8182fe8845ead"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1418,6 +1424,7 @@ dependencies = [
 [[package]]
 name = "cosmwasm-schema"
 version = "3.0.3-dev"
+source = "git+https://github.com/permissionlessweb/cosmwasm?branch=zk-mvp#86da124a189c30f984ac69c385f8182fe8845ead"
 dependencies = [
  "cosmwasm-schema-derive",
  "cw-schema",
@@ -1430,6 +1437,7 @@ dependencies = [
 [[package]]
 name = "cosmwasm-schema-derive"
 version = "3.0.3-dev"
+source = "git+https://github.com/permissionlessweb/cosmwasm?branch=zk-mvp#86da124a189c30f984ac69c385f8182fe8845ead"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1439,6 +1447,7 @@ dependencies = [
 [[package]]
 name = "cosmwasm-std"
 version = "3.0.3-dev"
+source = "git+https://github.com/permissionlessweb/cosmwasm?branch=zk-mvp#86da124a189c30f984ac69c385f8182fe8845ead"
 dependencies = [
  "base64 0.22.1",
  "bech32 0.11.1",
@@ -1609,6 +1618,7 @@ dependencies = [
 [[package]]
 name = "cw-controllers"
 version = "3.0.0"
+source = "git+https://github.com/permissionlessweb/cw-minus?branch=zk-mvp#52cbb1e627673152d4f83efe3c773904aa3468ab"
 dependencies = [
  "cosmwasm-schema",
  "cosmwasm-std",
@@ -1758,6 +1768,7 @@ dependencies = [
 [[package]]
 name = "cw-schema"
 version = "3.0.3-dev"
+source = "git+https://github.com/permissionlessweb/cosmwasm?branch=zk-mvp#86da124a189c30f984ac69c385f8182fe8845ead"
 dependencies = [
  "cw-schema-derive",
  "indexmap 2.13.1",
@@ -1771,6 +1782,7 @@ dependencies = [
 [[package]]
 name = "cw-schema-derive"
 version = "3.0.3-dev"
+source = "git+https://github.com/permissionlessweb/cosmwasm?branch=zk-mvp#86da124a189c30f984ac69c385f8182fe8845ead"
 dependencies = [
  "heck",
  "itertools 0.13.0",
@@ -1783,6 +1795,7 @@ dependencies = [
 [[package]]
 name = "cw-storage-plus"
 version = "3.0.1"
+source = "git+https://github.com/permissionlessweb/cw-storage-plus?branch=zk-mvp#8b4b6b7a0b70ef083b73095565d72d6207f520f0"
 dependencies = [
  "cosmwasm-std",
  "schemars 0.8.22",
@@ -1792,6 +1805,7 @@ dependencies = [
 [[package]]
 name = "cw-utils"
 version = "3.0.0"
+source = "git+https://github.com/permissionlessweb/cw-minus?branch=zk-mvp#52cbb1e627673152d4f83efe3c773904aa3468ab"
 dependencies = [
  "cosmwasm-schema",
  "cosmwasm-std",
@@ -1803,6 +1817,7 @@ dependencies = [
 [[package]]
 name = "cw2"
 version = "3.0.0"
+source = "git+https://github.com/permissionlessweb/cw-minus?branch=zk-mvp#52cbb1e627673152d4f83efe3c773904aa3468ab"
 dependencies = [
  "cosmwasm-schema",
  "cosmwasm-std",
@@ -1816,6 +1831,7 @@ dependencies = [
 [[package]]
 name = "cw20"
 version = "3.0.0"
+source = "git+https://github.com/permissionlessweb/cw-plus?branch=zk-mvp#5a42dd392e8bba1b7cb44842fbbb6e9dc666bde0"
 dependencies = [
  "cosmwasm-schema",
  "cosmwasm-std",
@@ -1827,6 +1843,7 @@ dependencies = [
 [[package]]
 name = "cw20-ics20"
 version = "3.0.0"
+source = "git+https://github.com/permissionlessweb/cw-plus?branch=zk-mvp#5a42dd392e8bba1b7cb44842fbbb6e9dc666bde0"
 dependencies = [
  "cosmwasm-schema",
  "cosmwasm-std",
@@ -2910,6 +2927,7 @@ dependencies = [
 [[package]]
 name = "ibc-proto"
 version = "0.52.0"
+source = "git+https://github.com/permissionlessweb/ibc-proto-rs?branch=zk-mvp#dbef678730b1c920515c3728addcffc657c94b3d"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -2927,6 +2945,7 @@ dependencies = [
 [[package]]
 name = "ics23"
 version = "0.12.0"
+source = "git+https://github.com/permissionlessweb/ics23?branch=zk-mvp#383c266b855d0047c3235869a910a32908615237"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2939,44 +2958,6 @@ dependencies = [
 [[package]]
 name = "ict-rs"
 version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "bech32 0.11.1",
- "bip32",
- "bip39",
- "bollard",
- "cosmrs",
- "cw-orch-core",
- "futures",
- "hex",
- "ict-rs-derive",
- "k256",
- "log",
- "prost",
- "rand 0.8.5",
- "ripemd",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "sha3",
- "tendermint",
- "tendermint-rpc",
- "thiserror 2.0.18",
- "tokio",
- "toml",
- "tracing",
-]
-
-[[package]]
-name = "ict-rs-derive"
-version = "0.1.0"
-dependencies = [
- "heck",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
 
 [[package]]
 name = "icu_collections"
@@ -3154,6 +3135,7 @@ dependencies = [
 [[package]]
 name = "informalsystems-pbjson"
 version = "0.7.0"
+source = "git+https://github.com/permissionlessweb/pbjson?branch=zk-mvp#f0bed854689caaedaad09c3c6342260025f5cc82"
 dependencies = [
  "base64 0.21.7",
  "serde",
@@ -6074,6 +6056,7 @@ dependencies = [
 [[package]]
 name = "tendermint"
 version = "0.40.4"
+source = "git+https://github.com/permissionlessweb/tendermint-rs?branch=zk-mvp#2d1e8ff25ec07e4badb732818c0bd7ff8526b511"
 dependencies = [
  "bytes",
  "digest 0.10.7",
@@ -6102,6 +6085,7 @@ dependencies = [
 [[package]]
 name = "tendermint-config"
 version = "0.40.4"
+source = "git+https://github.com/permissionlessweb/tendermint-rs?branch=zk-mvp#2d1e8ff25ec07e4badb732818c0bd7ff8526b511"
 dependencies = [
  "flex-error",
  "serde",
@@ -6114,6 +6098,7 @@ dependencies = [
 [[package]]
 name = "tendermint-proto"
 version = "0.40.4"
+source = "git+https://github.com/permissionlessweb/tendermint-rs?branch=zk-mvp#2d1e8ff25ec07e4badb732818c0bd7ff8526b511"
 dependencies = [
  "bytes",
  "flex-error",
@@ -6127,6 +6112,7 @@ dependencies = [
 [[package]]
 name = "tendermint-rpc"
 version = "0.40.4"
+source = "git+https://github.com/permissionlessweb/tendermint-rs?branch=zk-mvp#2d1e8ff25ec07e4badb732818c0bd7ff8526b511"
 dependencies = [
  "async-trait",
  "bytes",

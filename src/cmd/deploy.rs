@@ -235,7 +235,7 @@ pub async fn cmd_manage_deployments() -> Result<(), Box<dyn Error>> {
 
             // Load saved config for RPC/gRPC endpoints
             let (rpc, grpc) = if has_saved_config() {
-                let pw = rpassword::prompt_password("Enter config password: ")?;
+                let pw = get_password("Enter config password: ")?;
                 if let Some(cfg) = load_config(&pw) {
                     (
                         cfg.val("OLINE_RPC_ENDPOINT"),
@@ -325,10 +325,15 @@ async fn cmd_manage_sync() -> Result<(), Box<dyn Error>> {
     let (mnemonic, password) = unlock_mnemonic()?;
 
     // Load saved config for endpoints
-    let stdin = io::stdin();
-    let mut lines = stdin.lock().lines();
-    let config = collect_config(&password, mnemonic.clone(), &mut lines).await?;
-    drop(lines);
+    let config = if std::env::var("OLINE_NON_INTERACTIVE").is_ok() {
+        build_config_from_env(mnemonic.clone())
+    } else {
+        let stdin = io::stdin();
+        let mut lines = stdin.lock().lines();
+        let cfg = collect_config(&password, mnemonic.clone(), &mut lines).await?;
+        drop(lines);
+        cfg
+    };
 
     let _rpc = config.val("OLINE_RPC_ENDPOINT");
     let grpc = normalize_grpc_endpoint(&config.val("OLINE_GRPC_ENDPOINT"));
@@ -517,7 +522,11 @@ async fn cmd_manage_prune_keys() -> Result<(), Box<dyn Error>> {
     }
 
     // Also prune matching NodeStore entries (best-effort)
-    let pw = rpassword::prompt_password("Node store password (Enter to skip): ")?;
+    let pw = if std::env::var("OLINE_NON_INTERACTIVE").is_ok() {
+        std::env::var("OLINE_PASSWORD").unwrap_or_default()
+    } else {
+        rpassword::prompt_password("Node store password (Enter to skip): ")?
+    };
     if !pw.is_empty() {
         let node_store = NodeStore::open(NodeStore::default_path(), &pw);
         let mut pruned = 0usize;

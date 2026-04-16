@@ -91,8 +91,17 @@ pub fn read_secret_input(prompt: &str, default: Option<&str>) -> Result<String, 
 pub fn prompt_s3_creds(
     lines: &mut io::Lines<impl io::BufRead>,
 ) -> Result<(String, String, String, String), Box<dyn Error>> {
-    let s3_key = read_secret_input("S3 access key", None)?;
-    let s3_secret = read_secret_input("S3 secret key", None)?;
+    let non_interactive = std::env::var("OLINE_NON_INTERACTIVE").is_ok();
+    let s3_key = if non_interactive {
+        std::env::var("OLINE_S3_ACCESS_KEY").unwrap_or_default()
+    } else {
+        read_secret_input("S3 access key", None)?
+    };
+    let s3_secret = if non_interactive {
+        std::env::var("OLINE_S3_SECRET_KEY").unwrap_or_default()
+    } else {
+        read_secret_input("S3 secret key", None)?
+    };
     let s3_host = read_input(lines, "S3 host", Some("https://s3.filebase.com"))?;
     let snapshot_path = read_input(
         lines,
@@ -113,9 +122,23 @@ pub fn urlencoded(s: &str) -> String {
         .collect()
 }
 
+/// Get password from `OLINE_PASSWORD` env var, or prompt interactively.
+/// In non-interactive mode, returns `OLINE_PASSWORD` or errors.
+pub fn get_password(prompt: &str) -> Result<String, Box<dyn Error>> {
+    if let Ok(pw) = std::env::var("OLINE_PASSWORD") {
+        if !pw.is_empty() {
+            return Ok(pw);
+        }
+    }
+    if std::env::var("OLINE_NON_INTERACTIVE").is_ok() {
+        return Err("OLINE_NON_INTERACTIVE requires OLINE_PASSWORD to be set".into());
+    }
+    Ok(rpassword::prompt_password(prompt)?)
+}
+
 pub fn unlock_mnemonic() -> Result<(String, String), Box<dyn Error>> {
     let blob = read_encrypted_mnemonic_from_env()?;
-    let password = rpassword::prompt_password("Enter password: ")?;
+    let password = get_password("Enter password: ")?;
     let mnemonic = decrypt_mnemonic(&blob, &password)?;
     tracing::info!("Mnemonic decrypted successfully.\n");
     Ok((mnemonic, password))

@@ -1,0 +1,84 @@
+# ── Courier (standalone recipes, run from plays/courier/) ──────────────────────
+
+courier_version  := "v0.1.0"
+ghcr_image       := "ghcr.io/permissionlessweb/oline-courier"
+dh_image         := "docker.io/permissionlessweb/oline-courier"
+
+# ── Build ─────────────────────────────────────────────────────────────────────
+
+check:
+    cargo check -p oline-courier
+
+build:
+    cargo build -p oline-courier
+
+release:
+    cargo build -p oline-courier --release
+
+# ── Test ──────────────────────────────────────────────────────────────────────
+
+unit:
+    cargo test -p oline-courier --bin courier
+
+integration: build
+    cargo test -p oline-courier --test courier_integration -- --nocapture --test-threads=1
+
+test: unit integration
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+
+docker-build:
+    docker build -t oline-courier:local .
+
+docker-smoke: docker-build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Starting courier in Docker..."
+    CID=$(docker run -d --rm \
+        -p 8080:8080 \
+        -e CHAIN_JSON_URL=https://raw.githubusercontent.com/cosmos/chain-registry/master/cosmoshub/chain.json \
+        -e COURIER_EXPECTED_PEERS=0 \
+        -e COURIER_SHUTDOWN_TIMEOUT=30 \
+        oline-courier:local)
+    echo "Container: $CID"
+    echo "Waiting for /ready..."
+    for i in $(seq 1 30); do
+        if curl -sf http://127.0.0.1:8080/ready >/dev/null 2>&1; then
+            echo "  /ready → 200 ✓"
+            break
+        fi
+        sleep 1
+    done
+    echo "Fetching /manifest..."
+    curl -s http://127.0.0.1:8080/manifest | jq .
+    echo "Fetching /status..."
+    curl -s http://127.0.0.1:8080/status | jq .
+    echo "Stopping..."
+    docker stop "$CID" >/dev/null 2>&1 || true
+    echo "Docker smoke test passed ✓"
+
+# ── Publish ───────────────────────────────────────────────────────────────────
+
+publish tag=courier_version:
+    docker buildx build \
+        --platform linux/amd64,linux/arm64 \
+        --tag {{ghcr_image}}:{{tag}} \
+        --tag {{dh_image}}:{{tag}} \
+        --push \
+        .
+
+publish-latest tag=courier_version:
+    docker buildx build \
+        --platform linux/amd64,linux/arm64 \
+        --tag {{ghcr_image}}:{{tag}} \
+        --tag {{ghcr_image}}:latest \
+        --tag {{dh_image}}:{{tag}} \
+        --tag {{dh_image}}:latest \
+        --push \
+        .
+
+lint:
+    cargo clippy -p oline-courier -- -D warnings
+
+fmt:
+    cargo fmt -p oline-courier

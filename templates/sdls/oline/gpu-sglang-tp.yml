@@ -1,0 +1,98 @@
+---
+# GPU SGLang Tensor Parallel — Akash SDL
+# Multi-GPU inference with tensor parallelism for large models (70B+).
+# Requires multiple GPUs on the same provider node.
+#
+# Model size → GPU requirements:
+#   - 8B models:   1x RTX 4090 (24GB) or 1x A100-40GB
+#   - 70B models:  2x A100-80GB or 4x A100-40GB (TP=2 or TP=4)
+#   - 405B models: 8x H100-80GB (TP=8)
+#
+# Usage:
+#   oline gpu deploy --template sglang-tp --model meta-llama/Llama-3.1-70B-Instruct \
+#     --gpu a100-80gb --gpu-count 2 --tp 2 --domain llm-smart.terp.network
+version: "2.0"
+
+services:
+  ${LLM_SVC}:
+    image: lmsysorg/sglang:latest
+    expose:
+      # OpenAI-compatible API (TLS via Akash ingress)
+      - port: 80
+        as: 80
+        to:
+          - global: true
+        accept:
+${LLM_80_ACCEPTS}
+    env:
+      - HF_TOKEN=${HF_TOKEN}
+      - HF_HOME=/models
+      - SGLANG_API_KEY=${LLM_API_KEY}
+      # NCCL settings for multi-GPU
+      - NCCL_DEBUG=WARN
+      - NCCL_IB_DISABLE=1
+    command:
+      - python3
+      - -m
+      - sglang.launch_server
+      - --model-path
+      - ${LLM_MODEL}
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "80"
+      - --tp
+      - "${LLM_TP_SIZE}"
+      - --mem-fraction-static
+      - "0.90"
+      - --chunked-prefill-size
+      - "16384"
+      - --enable-torch-compile
+      - --trust-remote-code
+      - --quantization
+      - "${LLM_QUANTIZATION}"
+    params:
+      storage:
+        models:
+          mount: /models
+          readOnly: false
+
+profiles:
+  compute:
+    ${LLM_SVC}:
+      resources:
+        cpu:
+          units: 32
+        memory:
+          size: ${LLM_MEMORY}
+        gpu:
+          units: ${LLM_GPU_COUNT}
+          attributes:
+            vendor:
+              nvidia:
+                - model: ${LLM_GPU_MODEL}
+        storage:
+          - size: 50Gi
+          - name: models
+            size: ${LLM_MODEL_STORAGE}
+            attributes:
+              persistent: true
+              class: beta3
+
+  placement:
+    dcloud:
+      pricing:
+        ${LLM_SVC}:
+          denom: uakt
+          amount: ${LLM_PRICE}
+      signedBy:
+        anyOf:
+          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
+      attributes:
+        host: akash
+
+deployment:
+  ${LLM_SVC}:
+    dcloud:
+      profile: ${LLM_SVC}
+      count: 1

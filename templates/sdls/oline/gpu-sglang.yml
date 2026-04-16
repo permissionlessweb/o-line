@@ -1,0 +1,98 @@
+---
+# GPU SGLang — Akash SDL
+# High-performance LLM inference with SGLang runtime.
+# OpenAI-compatible API at /v1/chat/completions
+#
+# SGLang provides:
+# - RadixAttention for prefix caching
+# - Continuous batching with chunked prefill
+# - Tensor parallelism for multi-GPU
+# - gRPC support for high throughput
+#
+# Usage:
+#   oline gpu deploy --model meta-llama/Llama-3.1-70B-Instruct --gpu a100 --domain llm.terp.network
+version: "2.0"
+
+services:
+  ${LLM_SVC}:
+    image: lmsysorg/sglang:latest
+    expose:
+      # OpenAI-compatible API (TLS via Akash ingress)
+      - port: 80
+        as: 80
+        to:
+          - global: true
+        accept:
+${LLM_80_ACCEPTS}
+      # Health check endpoint (internal)
+      - port: 30000
+        as: 30000
+        to:
+          - global: true
+    env:
+      - HF_TOKEN=${HF_TOKEN}
+      - HF_HOME=/models
+      - SGLANG_API_KEY=${LLM_API_KEY}
+    command:
+      - python3
+      - -m
+      - sglang.launch_server
+      - --model-path
+      - ${LLM_MODEL}
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "80"
+      - --tp
+      - "${LLM_TP_SIZE}"
+      - --mem-fraction-static
+      - "0.88"
+      - --chunked-prefill-size
+      - "8192"
+      - --enable-torch-compile
+      - --trust-remote-code
+    params:
+      storage:
+        models:
+          mount: /models
+          readOnly: false
+
+profiles:
+  compute:
+    ${LLM_SVC}:
+      resources:
+        cpu:
+          units: 16
+        memory:
+          size: ${LLM_MEMORY}
+        gpu:
+          units: ${LLM_GPU_COUNT}
+          attributes:
+            vendor:
+              nvidia:
+                - model: ${LLM_GPU_MODEL}
+        storage:
+          - size: 20Gi
+          - name: models
+            size: ${LLM_MODEL_STORAGE}
+            attributes:
+              persistent: true
+              class: beta3
+
+  placement:
+    dcloud:
+      pricing:
+        ${LLM_SVC}:
+          denom: uakt
+          amount: ${LLM_PRICE}
+      signedBy:
+        anyOf:
+          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
+      attributes:
+        host: akash
+
+deployment:
+  ${LLM_SVC}:
+    dcloud:
+      profile: ${LLM_SVC}
+      count: 1

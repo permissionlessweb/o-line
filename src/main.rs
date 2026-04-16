@@ -97,12 +97,21 @@ async fn cmd_deploy(raw: bool, parallel: bool) -> Result<(), Box<dyn Error>> {
     let non_interactive = std::env::var("OLINE_NON_INTERACTIVE").is_ok();
 
     let (mnemonic, password) = if non_interactive {
-        let m = std::env::var("OLINE_MNEMONIC")
+        let p = std::env::var("OLINE_PASSWORD").unwrap_or_else(|_| "oline-test".to_string());
+        let m = if let Some(raw) = std::env::var("OLINE_MNEMONIC")
             .ok()
             .filter(|s| !s.trim().is_empty())
-            .ok_or("OLINE_NON_INTERACTIVE requires OLINE_MNEMONIC to be set")?;
-        let p = std::env::var("OLINE_PASSWORD").unwrap_or_else(|_| "oline-test".to_string());
-        (m.trim().to_string(), p)
+        {
+            raw.trim().to_string()
+        } else {
+            // Fall back to encrypted mnemonic + OLINE_PASSWORD
+            use o_line_sdl::crypto::decrypt_mnemonic;
+            let blob = read_encrypted_mnemonic_from_env()
+                .map_err(|_| "OLINE_NON_INTERACTIVE requires OLINE_MNEMONIC or OLINE_ENCRYPTED_MNEMONIC")?;
+            decrypt_mnemonic(&blob, &p)
+                .map_err(|e| format!("Failed to decrypt mnemonic: {}. Check OLINE_PASSWORD.", e))?
+        };
+        (m, p)
     } else if raw {
         let m = rpassword::prompt_password("Enter mnemonic: ")?;
         if m.trim().is_empty() {
