@@ -10,6 +10,7 @@ pub mod deployer;
 pub mod dns;
 pub mod error;
 pub mod firewall;
+pub mod keys;
 #[cfg(feature = "interface")]
 pub mod interface;
 pub mod nodes;
@@ -30,7 +31,7 @@ pub use cmd::{
         cmd_bootstrap_private,cmd_manage,cmd_manage_deployments,BootstrapArgs,DeployArgs,
         EncryptArgs,ManageArgs,ManageSubcommand,
     },
-    dns::{cmd_dns_update,DnsArgs},
+    dns::{cmd_dns,DnsArgs},
     endpoints::{cmd_endpoints,EndpointsArgs},
     firewall::{cmd_firewall,FirewallArgs},
     init::{cmd_init,InitArgs},

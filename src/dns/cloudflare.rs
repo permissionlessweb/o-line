@@ -602,3 +602,97 @@ pub async fn cloudflare_update_p2p_domains(
         }
     }
 }
+
+// ── List / Delete helpers (non-interactive CLI) ───────────────────────────────
+
+/// List all DNS records in a zone, optionally filtered by name.
+/// Returns a vec of (id, type, name, content, proxied, ttl) tuples as strings.
+pub async fn cloudflare_list_records(
+    cf_token: &str,
+    zone_id: &str,
+    filter_name: Option<&str>,
+) -> Result<Vec<(String, String, String, String, bool, u32)>, Box<dyn Error>> {
+    let credentials = Credentials::UserAuthToken {
+        token: cf_token.to_string(),
+    };
+    let client = CfClient::new(
+        credentials,
+        CfClientConfig::default(),
+        CfEnvironment::Production,
+    )
+    .map_err(|e| format!("Failed to create Cloudflare client: {}", e))?;
+
+    let list_resp = client
+        .request(&ListDnsRecords {
+            zone_identifier: zone_id,
+            params: ListDnsRecordsParams {
+                name: filter_name.map(|s| s.to_string()),
+                record_type: None,
+                ..Default::default()
+            },
+        })
+        .await
+        .map_err(|e| format!("Cloudflare list DNS records failed: {:?}", e))?;
+
+    let mut results = Vec::new();
+    for rec in &list_resp.result {
+        let (rtype, content) = match &rec.content {
+            DnsContent::A { content } => ("A".to_string(), content.to_string()),
+            DnsContent::CNAME { content } => ("CNAME".to_string(), content.clone()),
+            DnsContent::TXT { content } => ("TXT".to_string(), content.clone()),
+            other => (format!("{:?}", other), format!("{:?}", other)),
+        };
+        results.push((
+            rec.id.clone(),
+            rtype,
+            rec.name.clone(),
+            content,
+            rec.proxied,
+            rec.ttl,
+        ));
+    }
+    Ok(results)
+}
+
+/// Delete a DNS record by its record ID.
+pub async fn cloudflare_delete_by_id(
+    cf_token: &str,
+    zone_id: &str,
+    record_id: &str,
+) -> Result<(), Box<dyn Error>> {
+    let credentials = Credentials::UserAuthToken {
+        token: cf_token.to_string(),
+    };
+    let client = CfClient::new(
+        credentials,
+        CfClientConfig::default(),
+        CfEnvironment::Production,
+    )
+    .map_err(|e| format!("Failed to create Cloudflare client: {}", e))?;
+
+    client
+        .request(&DeleteDnsRecord {
+            zone_identifier: zone_id,
+            identifier: record_id,
+        })
+        .await
+        .map_err(|e| format!("Cloudflare delete record failed: {:?}", e))?;
+
+    Ok(())
+}
+
+/// Delete all DNS records matching a given name (and optionally type).
+/// Returns the count of records deleted.
+pub async fn cloudflare_delete_by_name(
+    cf_token: &str,
+    zone_id: &str,
+    name: &str,
+) -> Result<usize, Box<dyn Error>> {
+    let records = cloudflare_list_records(cf_token, zone_id, Some(name)).await?;
+    let count = records.len();
+    for (id, rtype, rname, _, _, _) in &records {
+        tracing::info!("  Deleting {} {} (id: {})", rtype, rname, id);
+        cloudflare_delete_by_id(cf_token, zone_id, id).await?;
+    }
+    Ok(count)
+}

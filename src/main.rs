@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use o_line_sdl::{
     self,
     cli::*,
-    cmd_bootstrap_private, cmd_dns_update, cmd_endpoints, cmd_firewall, cmd_generate_sdl,
+    cmd_bootstrap_private, cmd_dns, cmd_endpoints, cmd_firewall, cmd_generate_sdl,
     cmd_init, cmd_manage, cmd_node, cmd_providers, cmd_refresh,
     cmd_registry, cmd_relayer, cmd_sites, cmd_test_grpc, cmd_test_s3, cmd_testnet_deploy, cmd_vpn,
     config::{build_config_from_env, collect_config, *},
@@ -16,6 +16,7 @@ use o_line_sdl::{
     ManageArgs, NodeArgs, ProvidersArgs, RefreshArgs, RegistryArgs, RelayerArgs, SdlArgs,
     SitesArgs, TestGrpcArgs, TestS3Args, TestnetDeployArgs, VpnArgs,
 };
+use o_line_sdl::cmd::console::{ConsoleArgs, cmd_console};
 use std::{
     error::Error,
     io::{self, BufRead},
@@ -80,6 +81,141 @@ enum Commands {
     /// Bootstrap a fresh testnet on Akash with validator, faucet, and full sentry array
     #[command(name = "testnet-deploy")]
     TestnetDeploy(TestnetDeployArgs),
+    /// Interact with Akash Console API (deployments, providers, leases, etc.)
+    Console(ConsoleArgs),
+}
+
+// ── Subcommand: deploy --sdl <path> (step 1: create deployment + list bids) ──
+async fn cmd_deploy_sdl(sdl_path: &str) -> Result<(), Box<dyn Error>> {
+    use o_line_sdl::config::substitute_template_raw;
+
+    let (deployer, rendered, vars, label) = init_sdl_deploy(sdl_path).await?;
+
+    let (state, bids) = deployer
+        .deploy_phase_until_bids(&rendered, &vars, &label)
+        .await
+        .map_err(|e| format!("Deployment failed: {}", e))?;
+
+    let dseq = state.dseq.unwrap_or(0);
+
+    // Print bids as structured output for LLM/script consumption
+    println!("DSEQ={}", dseq);
+    println!("BIDS={}", bids.len());
+    for (i, bid) in bids.iter().enumerate() {
+        let price_akt = bid.price as f64 / 1_000_000.0;
+        // Query provider info for context
+        let info = deployer.client.query_provider_info(&bid.provider).await.ok().flatten();
+        let host = info.as_ref().map(|i| i.host_uri.as_str()).unwrap_or("unknown");
+        let email = info.as_ref().map(|i| i.email.as_str()).unwrap_or("");
+        let website = info.as_ref().map(|i| i.website.as_str()).unwrap_or("");
+
+        println!("BID[{}] provider={} price={} price_akt={:.6} host={} email={} website={}",
+            i, bid.provider, bid.price, price_akt, host, email, website);
+    }
+    println!();
+    println!("To select a provider, run:");
+    println!("  oline deploy --sdl {} --select {} <PROVIDER_ADDRESS>", sdl_path, dseq);
+
+    Ok(())
+}
+
+// ── Subcommand: deploy --sdl <path> --select <dseq> <provider> (step 2: complete) ──
+async fn cmd_deploy_sdl_select(sdl_path: &str, dseq: u64, provider: &str) -> Result<(), Box<dyn Error>> {
+    use o_line_sdl::config::substitute_template_raw;
+    use akash_deploy_rs::{DeploymentState, DeploymentWorkflow, Step};
+
+    let (deployer, rendered, vars, label) = init_sdl_deploy(sdl_path).await?;
+
+    // Rebuild state with the existing dseq and SDL
+    let rendered_sdl = substitute_template_raw(&rendered, &vars)
+        .map_err(|e| format!("SDL substitution failed: {}", e))?;
+
+    let mut state = DeploymentState::new(&label, deployer.client.address())
+        .with_sdl(&rendered_sdl)
+        .with_label(&label);
+    state.dseq = Some(dseq);
+
+    // Add synthetic bid so select_provider validation passes
+    state.bids.push(akash_deploy_rs::Bid {
+        provider: provider.to_string(),
+        price: 0,
+        price_denom: String::new(),
+        resources: akash_deploy_rs::Resources {
+            cpu_millicores: 0,
+            memory_bytes: 0,
+            storage_bytes: 0,
+            gpu_count: 0,
+        },
+    });
+
+    // Select the provider
+    DeploymentWorkflow::<akash_deploy_rs::AkashClient>::select_provider(&mut state, provider)?;
+
+    // Complete the deployment (lease + manifest + endpoints)
+    let endpoints = deployer
+        .deploy_phase_complete(&mut state, &label)
+        .await
+        .map_err(|e| format!("Deployment failed: {}", e))?;
+
+    println!("DSEQ={}", dseq);
+    println!("PROVIDER={}", provider);
+    for ep in &endpoints {
+        println!("ENDPOINT={} port={} internal_port={} service={}", ep.uri, ep.port, ep.internal_port, ep.service);
+    }
+    println!("DEPLOY_COMPLETE=true");
+
+    Ok(())
+}
+
+/// Shared init for both deploy --sdl steps: load env, render SDL, create deployer.
+async fn init_sdl_deploy(sdl_path: &str) -> Result<(OLineDeployer, String, std::collections::HashMap<String, String>, String), Box<dyn Error>> {
+    use o_line_sdl::config::substitute_template_raw;
+
+    tracing::info!("=== Deploy SDL: {} ===", sdl_path);
+
+    let raw_sdl = std::fs::read_to_string(sdl_path)
+        .map_err(|e| format!("Cannot read SDL {}: {}", sdl_path, e))?;
+
+    load_dotenv("OLINE_ENCRYPTED_MNEMONIC");
+
+    let vars: std::collections::HashMap<String, String> = o_line_sdl::FIELD_DESCRIPTORS
+        .iter()
+        .map(|fd| (fd.ev.to_string(), std::env::var(fd.ev).unwrap_or_default()))
+        .chain(std::env::vars())
+        .collect();
+
+    let rendered = substitute_template_raw(&raw_sdl, &vars)
+        .map_err(|e| format!("SDL template substitution failed: {}", e))?;
+
+    tracing::info!("  Rendered SDL ({} bytes)", rendered.len());
+
+    let non_interactive = std::env::var("OLINE_NON_INTERACTIVE").is_ok();
+    let mnemonic = if non_interactive {
+        let p = std::env::var("OLINE_PASSWORD").unwrap_or_else(|_| "oline-test".to_string());
+        if let Some(raw) = std::env::var("OLINE_MNEMONIC").ok().filter(|s| !s.trim().is_empty()) {
+            raw.trim().to_string()
+        } else {
+            use o_line_sdl::crypto::decrypt_mnemonic;
+            let blob = read_encrypted_mnemonic_from_env()
+                .map_err(|_| "OLINE_NON_INTERACTIVE requires OLINE_MNEMONIC or OLINE_ENCRYPTED_MNEMONIC")?;
+            decrypt_mnemonic(&blob, &p)
+                .map_err(|e| format!("Failed to decrypt mnemonic: {}", e))?
+        }
+    } else {
+        unlock_mnemonic()?.0
+    };
+
+    let config = build_config_from_env(mnemonic);
+    let password = std::env::var("OLINE_PASSWORD").unwrap_or_default();
+    let deployer = OLineDeployer::new(config, password).await?;
+
+    let label = std::path::Path::new(sdl_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("custom-sdl")
+        .to_string();
+
+    Ok((deployer, rendered, vars, label))
 }
 
 // ── Subcommand: deploy ──
@@ -304,7 +440,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
             if a.print_examples_if_requested() {
                 return Ok(());
             }
-            cmd_deploy(a.raw, !a.sequential).await
+            if let Some(ref sdl_path) = a.sdl {
+                if let Some(ref select_args) = a.select {
+                    let dseq: u64 = select_args[0].parse()
+                        .map_err(|_| format!("Invalid DSEQ: {}", select_args[0]))?;
+                    let provider = &select_args[1];
+                    cmd_deploy_sdl_select(sdl_path, dseq, provider).await
+                } else {
+                    cmd_deploy_sdl(sdl_path).await
+                }
+            } else {
+                cmd_deploy(a.raw, !a.sequential).await
+            }
         }
         Commands::Sdl(a) => {
             if a.print_examples_if_requested() {
@@ -340,7 +487,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             if a.print_examples_if_requested() {
                 return Ok(());
             }
-            cmd_dns_update().await
+            cmd_dns(&a).await
         }
         Commands::Bootstrap(a) => {
             if a.print_examples_if_requested() {
@@ -400,6 +547,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
             cmd_testnet_deploy(&a).await
         }
+        Commands::Console(a) => cmd_console(a).await,
     }
 }
 
