@@ -67,11 +67,12 @@ pub static FIELD_DESCRIPTORS: LazyLock<Vec<config::Fd>> = LazyLock::new(|| {
 });
 
 pub const DEFAULT_ND: &[config::Fd] = define_fields![
-    "OMNIBUS_IMAGE","Omnibus Image","ghcr.io/akash-network/cosmos-omnibus:v1.2.38-generic",false,
+    "OMNIBUS_IMAGE","Node container image","ghcr.io/terpnetwork/terp-core:v5.1.1-oline",false,
     "SDL_DIR","SDL Templates folder","templates/sdls/oline",false,
     "OLINE_BINARY","Cosmos daemon binary name","terpd",false,
     "OLINE_CHAIN_ID","Chain ID","morocco-1",false,
     "OLINE_CHAIN_JSON","Chain JSON URL","",false,
+    "GENESIS_URL","Genesis JSON download URL (overrides chain preset)","",false,
     "OLINE_ADDRBOOK_URL","Address book URL","https://anode.team/Terp/main/addrbook.json",false,
     "OLINE_RPC_ENDPOINT","RPC endpoint","https://rpc-akash.ecostake.com:443",false,
     "OLINE_GRPC_ENDPOINT","gRPC endpoint","https://akash.lavenderfive.com:443",false,

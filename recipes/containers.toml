@@ -13,6 +13,15 @@ mainnet     = "ghcr.io/akash-network/cosmos-omnibus:v1.2.38-generic"
 # pin a specific chain build if available:
 # terp    = "ghcr.io/permissionlessweb/cosmos-omnibus:v1.2.38-terpd"
 
+
+[terp_core]
+description = "terp-core with built-in terpd bootstrap — native Terp Network deployment"
+local       = "terp-core:local"
+mainnet     = "ghcr.io/terpnetwork/terp-core:v5.1.1-oline"
+testnet     = "ghcr.io/terpnetwork/terp-core:v5.1.1-oline"
+hub_mainnet = "terpnetwork/terp-core:v5.1.1-oline"
+hub_testnet = "terpnetwork/terp-core:v5.1.1-oline"
+
 [minio_ipfs]
 description = "MinIO + IPFS combined gateway — snapshot storage + pinning"
 local       = "minio-ipfs:local"

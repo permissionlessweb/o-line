@@ -630,6 +630,7 @@ pub async fn verify_files_and_signal_start(
         "GRPC_P",
         "P2P_D",
         "P2P_P",
+        "P2P_EXT_PORT",
         "P2P_PEX",
         "P2P_ADDR_BOOK_STRICT",
         "STATESYNC_ENABLE",

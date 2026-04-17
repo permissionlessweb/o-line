@@ -9,8 +9,7 @@
 # DNS for ${GRPC_D} must be a grey-cloud (unproxied) A record → provider IP.
 
 server {
-    listen      9091 ssl;
-    http2       on;
+    listen      9091 ssl http2;
     server_name ${GRPC_D};
 
     ssl_certificate     ${TLS_CERT};

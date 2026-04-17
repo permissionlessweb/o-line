@@ -64,10 +64,16 @@ if [ -n "${P2P_D}" ]; then
     log "Waiting for P2P DNS (${P2P_D}) to resolve — attempt ${_try}/18..."
     sleep 10
   done
+  # Use the actual Akash NodePort (P2P_EXT_PORT) if available, otherwise fall
+  # back to P2P_P (SDL internal port). Akash may assign a random NodePort that
+  # differs from the SDL port — we must advertise the correct external port so
+  # remote peers can connect.
+  _ext_port="${P2P_EXT_PORT:-$P2P_P}"
+
   if [ -n "$_ext_ip" ]; then
-    log "Setting external_address = tcp://${_ext_ip}:${P2P_P} (resolved from ${P2P_D})"
+    log "Setting external_address = tcp://${_ext_ip}:${_ext_port} (resolved from ${P2P_D}, NodePort=${_ext_port})"
     sed -i \
-        -e "/^\[p2p\]$/,/^\[/ s|^external_address *=.*|external_address = \"tcp://${_ext_ip}:${P2P_P}\"|" \
+        -e "/^\[p2p\]$/,/^\[/ s|^external_address *=.*|external_address = \"tcp://${_ext_ip}:${_ext_port}\"|" \
         "${PROJECT_ROOT}/config/config.toml"
   else
     log "WARNING: Could not resolve ${P2P_D} after 3 min — external_address not set. Statesync chunk serving may fail."

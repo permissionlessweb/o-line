@@ -137,6 +137,33 @@ pub fn node_refresh_vars(
     out
 }
 
+/// Inject the Akash-assigned external NodePort for P2P into refresh vars.
+///
+/// Akash maps SDL ports to random NodePorts (e.g. internal 26656 → external 32202).
+/// `config-node-endpoints.sh` uses `P2P_EXT_PORT` for `external_address` so remote
+/// peers connect on the correct port. Without this, the node would advertise the
+/// internal port (26656) which may not be reachable from outside.
+pub fn inject_p2p_nodeport(
+    vars: &mut HashMap<String, String>,
+    endpoints: &[akash_deploy_rs::ServiceEndpoint],
+    service: &str,
+) {
+    let p2p_port: u16 = vars
+        .get("P2P_P")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(26656);
+    if let Some(ep) = endpoints
+        .iter()
+        .find(|e| e.service == service && e.internal_port == p2p_port)
+    {
+        vars.insert("P2P_EXT_PORT".to_string(), ep.port.to_string());
+        tracing::debug!(
+            "  [p2p] {} NodePort: internal {} → external {}",
+            service, p2p_port, ep.port,
+        );
+    }
+}
+
 // ── Phase variable builders ───────────────────────────────────────────────────
 
 /// Phase A: Kickoff Special Teams (snapshot node + seed node + MinIO).

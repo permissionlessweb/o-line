@@ -110,6 +110,27 @@ if [ -z "${OLINE_LOCAL_ENTRYPOINT:-}" ] && [ -f /tmp/oline-entrypoint-local.sh ]
   exec bash /tmp/oline-entrypoint-local.sh "$@"
 fi
 
+# -- Patch: write Alpine 3.17-compatible grpc nginx template --
+# Alpine 3.17 nginx does not support standalone "http2 on;" directive --
+# HTTP/2 must be on the listen line: "listen ... ssl http2;"
+mkdir -p /tmp/nginx
+cat > /tmp/nginx/grpc << 'GRPC_TMPL'
+server {
+    listen      9091 ssl http2;
+    server_name ${GRPC_D};
+
+    ssl_certificate     ${TLS_CERT};
+    ssl_certificate_key ${TLS_KEY};
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    location / {
+        grpc_pass            grpc://127.0.0.1:${GRPC_P};
+        grpc_set_header Host $host;
+    }
+}
+GRPC_TMPL
+
 if [ -f /tmp/tls-setup.sh ]; then
   echo "Running TLS setup (pre-uploaded)..."
   sh /tmp/tls-setup.sh
@@ -125,6 +146,140 @@ elif [ -n "$TLS_CONFIG_URL" ]; then
   echo "=== nginx started ==="
 fi
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+# ── Detect native mode ─────────────────────────────────────────────────────
+# If terpd binary is pre-installed AND has the bootstrap subcommand, use the
+# native terp-core bootstrap path. Otherwise fall through to omnibus setup.
+OLINE_NODE_MODE="${OLINE_NODE_MODE:-omnibus}"
+if command -v terpd >/dev/null 2>&1 && terpd bootstrap --help >/dev/null 2>&1; then
+  OLINE_NODE_MODE="native"
+  echo "[oline] Native mode detected — using terpd bootstrap"
+fi
+
+if [ "$OLINE_NODE_MODE" = "native" ]; then
+  # Default PROJECT_ROOT for terpd (used by config-node-endpoints.sh)
+  export PROJECT_ROOT="${PROJECT_ROOT:-/terpd/.terpd}"
+
+  # ── Build terpd bootstrap args from SDL environment ──
+  BOOTSTRAP_ARGS=""
+
+  # Network preset or explicit chain-id
+  case "${CHAIN_ID:-morocco-1}" in
+    morocco-1) BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --network morocco-1" ;;
+    90u-4)     BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --network 90u-4" ;;
+    *)         BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --chain-id ${CHAIN_ID}" ;;
+  esac
+
+  # Sync mode
+  if [ -n "$STATESYNC_RPC_SERVERS" ]; then
+    BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --sync-mode statesync"
+    BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --statesync-rpcs $STATESYNC_RPC_SERVERS"
+  elif [ -n "$SNAPSHOT_URL" ]; then
+    BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --sync-mode snapshot --snapshot-url $SNAPSHOT_URL"
+  fi
+
+  # Moniker
+  [ -n "$MONIKER" ] && BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --moniker $MONIKER"
+
+  # Peers
+  _peers="${TERPD_P2P_PERSISTENT_PEERS:-$P2P_PERSISTENT_PEERS}"
+  [ -n "$_peers" ] && BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --bootstrap-peers $_peers"
+  _seeds="${P2P_SEEDS:-}"
+  [ -n "$_seeds" ] && BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --bootstrap-seeds $_seeds"
+
+  # Public mode for sentry nodes (PEX enabled, accept inbound)
+  [ "${TERPD_P2P_PEX:-true}" = "true" ] && BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --public"
+
+  # Pruning
+  [ -n "$PRUNING" ] && BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --pruning $PRUNING"
+
+  # Genesis override
+  [ -n "$GENESIS_URL" ] && BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --genesis-url $GENESIS_URL"
+
+  echo "[oline] terpd bootstrap $BOOTSTRAP_ARGS"
+
+  # ── SFTP snapshot delivery (Phase B/C) ──────────────────────────────────
+  if [ "${SNAPSHOT_MODE:-remote}" = "sftp" ]; then
+    SNAPSHOT_SFTP_PATH="${SNAPSHOT_SFTP_PATH:-/tmp/snapshot.tar.lz4}"
+    SNAPSHOT_SFTP_WAIT="${SNAPSHOT_SFTP_WAIT:-3600}"
+    echo "=== [snapshot] SFTP mode — waiting for ${SNAPSHOT_SFTP_PATH} ==="
+    _waited=0
+    while [ ! -f "$SNAPSHOT_SFTP_PATH" ]; do
+      [ "$_waited" -ge "$SNAPSHOT_SFTP_WAIT" ] && { echo "ERROR: SFTP timeout"; exit 1; }
+      sleep 10; _waited=$((_waited + 10))
+      [ $((_waited % 60)) -eq 0 ] && echo "  [snapshot] Still waiting... (${_waited}s elapsed)"
+    done
+    echo "=== [snapshot] File received. Extracting ==="
+    mkdir -p /root/.terpd/data
+    cd /root/.terpd
+    case "${SNAPSHOT_SFTP_PATH}" in
+      *.tar.lz4) lz4 -d "$SNAPSHOT_SFTP_PATH" | tar xf - ;;
+      *.tar.zst) zstd -cd "$SNAPSHOT_SFTP_PATH" | tar xf - ;;
+      *.tar.gz)  tar xzf "$SNAPSHOT_SFTP_PATH" ;;
+      *)         tar xf  "$SNAPSHOT_SFTP_PATH" ;;
+    esac
+    rm -f "$SNAPSHOT_SFTP_PATH"
+    echo "=== [snapshot] SFTP snapshot installed ==="
+  fi
+
+  # ── Snapshot export node: setup-only, then wrap with snapshot.sh ──
+  if [ -n "$SNAPSHOT_PATH" ]; then
+    terpd bootstrap --setup-only $BOOTSTRAP_ARGS >>/proc/1/fd/1 2>&1
+    # Use pre-uploaded snapshot.sh if available, otherwise try download
+    if [ -f /tmp/snapshot.sh ]; then
+      cp /tmp/snapshot.sh /usr/local/bin/snapshot.sh
+      chmod +x /usr/local/bin/snapshot.sh
+      echo "[oline] Using pre-uploaded snapshot.sh"
+    elif [ -n "$SNAPSHOT_SCRIPT_URL" ]; then
+      curl -fsSL "$SNAPSHOT_SCRIPT_URL" -o /usr/local/bin/snapshot.sh 2>/dev/null &&\
+        chmod +x /usr/local/bin/snapshot.sh || true
+    fi
+    NODE_SCRIPT=/tmp/node-config.sh
+    if [ ! -f "$NODE_SCRIPT" ]; then
+      NODE_CONFIG_SCRIPT="${NODE_CONFIG_SCRIPT:-https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/master/plays/audible/config-node-endpoints.sh}"
+      curl -fsSL "${NODE_CONFIG_SCRIPT}" -o "$NODE_SCRIPT" 2>/dev/null || true
+    fi
+    [ -f "$NODE_SCRIPT" ] && { sh "$NODE_SCRIPT" 2>&1 || echo "[oline] config-node-endpoints non-fatal"; }
+    if [ -x /usr/local/bin/snapshot.sh ]; then
+      echo "=== Launching: snapshot.sh terpd start ==="
+      exec snapshot.sh "terpd start" >>/proc/1/fd/1 2>&1
+    else
+      echo "[oline] snapshot.sh not available -- starting terpd directly"
+      exec terpd start >>/proc/1/fd/1 2>&1
+    fi
+  fi
+
+  # ── Non-snapshot node: setup-only, patch endpoints, then start ──
+  terpd bootstrap --setup-only $BOOTSTRAP_ARGS >>/proc/1/fd/1 2>&1
+  NODE_SCRIPT=/tmp/node-config.sh
+  if [ ! -f "$NODE_SCRIPT" ]; then
+    NODE_CONFIG_SCRIPT="${NODE_CONFIG_SCRIPT:-https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/master/plays/audible/config-node-endpoints.sh}"
+    curl -fsSL "${NODE_CONFIG_SCRIPT}" -o "$NODE_SCRIPT" 2>/dev/null || true
+  fi
+  [ -f "$NODE_SCRIPT" ] && { sh "$NODE_SCRIPT" 2>&1 || echo "[oline] config-node-endpoints non-fatal"; }
+
+  # Final peer patch
+  if [ -f "${PROJECT_ROOT:-/root/.terpd}/config/config.toml" ]; then
+    _peer_patch() {
+      local _key="$1" _val="$2"
+      if [ -n "$_val" ] && [ "$_val" != "0" ]; then
+        sed -i "/^\[p2p\]$/,/^\[/ s|^${_key} *=.*|${_key} = \"${_val}\"|" \
+            "${PROJECT_ROOT:-/root/.terpd}/config/config.toml"
+      fi
+    }
+    _peer_patch "persistent_peers"    "${TERPD_P2P_PERSISTENT_PEERS:-}"
+    _peer_patch "private_peer_ids"    "${TERPD_P2P_PRIVATE_PEER_IDS:-}"
+    unset -f _peer_patch
+  fi
+
+  [ -n "$TLS_CONFIG_URL" ] && { nginx -s reload 2>/dev/null || nginx; }
+
+  echo "=== Launching: terpd start ==="
+  exec terpd start >>/proc/1/fd/1 2>&1
+fi
+
+# ── Omnibus path (existing code continues below unchanged) ──
 
 echo "=== Cosmos node setup starting ==="
 

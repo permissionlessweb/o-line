@@ -80,6 +80,14 @@ pub enum ManageSubcommand {
         #[arg(long)]
         session: Option<String>,
     },
+    /// Close one or more active deployments by DSEQ
+    Close {
+        /// One or more DSEQs to close (space-separated)
+        dseqs: Vec<u64>,
+        /// Close ALL active deployments for this account
+        #[arg(long)]
+        all: bool,
+    },
     /// Return remaining funds from HD child accounts back to master.
     ///
     /// Queries each child's on-chain balance, subtracts gas reserve,
@@ -161,139 +169,167 @@ impl Default for BootstrapArgs {
     }
 }
 
-// ── Subcommand: manage ──
+// ── Subcommand: manage (default — list active only) ──
 pub async fn cmd_manage_deployments() -> Result<(), Box<dyn Error>> {
-    tracing::info!("=== Manage Deployments ===\n");
-    let mut store = FileDeploymentStore::new_default().await?;
-    let records = store.list().await?;
-    if records.is_empty() {
-        tracing::info!("  No deployments found.");
+    use akash_deploy_rs::gen::akash::deployment::v1beta4::{
+        query_client::QueryClient as DeployQueryClient, DeploymentFilters, QueryDeploymentsRequest,
+    };
+
+    tracing::info!("=== Active Deployments ===\n");
+
+    let (mnemonic, password) = unlock_mnemonic()?;
+    let config = build_config_from_env(mnemonic.clone());
+    let grpc = normalize_grpc_endpoint(&config.val("OLINE_GRPC_ENDPOINT"));
+    let owner = crate::accounts::child_address_str(&mnemonic, 0, "akash")
+        .map_err(|e| format!("Failed to derive address: {}", e))?;
+
+    // Query on-chain active deployments
+    let mut deploy_client = DeployQueryClient::connect(grpc)
+        .await
+        .map_err(|e| format!("Failed to connect gRPC: {}", e))?;
+
+    let resp = deploy_client
+        .deployments(QueryDeploymentsRequest {
+            filters: Some(DeploymentFilters {
+                owner: owner.clone(),
+                dseq: 0,
+                state: "active".to_string(),
+            }),
+            pagination: None,
+        })
+        .await
+        .map_err(|e| format!("Deployment query failed: {}", e))?;
+
+    let on_chain: Vec<u64> = resp
+        .into_inner()
+        .deployments
+        .iter()
+        .filter_map(|d| {
+            d.deployment
+                .as_ref()
+                .and_then(|dep| dep.id.as_ref())
+                .map(|id| id.dseq)
+        })
+        .collect();
+
+    if on_chain.is_empty() {
+        tracing::info!("  No active deployments for {}.", owner);
         return Ok(());
     }
 
-    tracing::info!(
-        "  {:<6} {:<20} {:<18} {:<20} {:<20}",
-        "DSEQ",
-        "Label",
-        "Step",
-        "Provider",
-        "Created"
-    );
-    tracing::info!("  {:-<90}", "");
+    // Cross-reference with local store
+    let store = FileDeploymentStore::new_default().await?;
+    let records = store.list().await?;
 
-    for r in &records {
-        let provider = r
-            .selected_provider
-            .as_deref()
+    tracing::info!("  Owner: {}\n", owner);
+    tracing::info!(
+        "  {:<10} {:<22} {:<20} {:<20}",
+        "DSEQ", "Label", "Provider", "Created"
+    );
+    tracing::info!("  {:-<75}", "");
+
+    for dseq in &on_chain {
+        let record = records.iter().find(|r| r.dseq == *dseq);
+        let label = record.map(|r| r.label.as_str()).unwrap_or("(untracked)");
+        let provider = record
+            .and_then(|r| r.selected_provider.as_deref())
             .map(|p| {
                 if p.len() > 18 {
-                    format!("{}..{}", &p[..8], &p[p.len() - 4..])
+                    format!("{}..{}", &p[..8], &p[p.len()-4..])
                 } else {
                     p.to_string()
                 }
             })
             .unwrap_or_else(|| "-".into());
-
-        let created = chrono_format_timestamp(r.created_at);
+        let created = record
+            .map(|r| chrono_format_timestamp(r.created_at))
+            .unwrap_or_else(|| "-".into());
 
         tracing::info!(
-            "  {:<6} {:<20} {:<18} {:<20} {:<20}",
-            r.dseq,
-            truncate(&r.label, 20),
-            r.step.name(),
-            provider,
-            created,
+            "  {:<10} {:<22} {:<20} {:<20}",
+            dseq, truncate(label, 22), provider, created,
         );
     }
 
-    let mut lines = io::stdin().lock().lines();
-    let dseq_str = read_input(&mut lines, "Enter DSEQ to manage (or 'q' to quit)", None)?;
-    if dseq_str == "q" || dseq_str.is_empty() {
+    tracing::info!("\n  {} active deployment(s).  Close with: oline manage close <DSEQ...> or --all", on_chain.len());
+
+    Ok(())
+}
+
+// ── manage close ────────────────────────────────────────────────────────────
+
+async fn cmd_manage_close(dseqs: &[u64], all: bool) -> Result<(), Box<dyn Error>> {
+    use akash_deploy_rs::gen::akash::deployment::v1beta4::{
+        query_client::QueryClient as DeployQueryClient, DeploymentFilters, QueryDeploymentsRequest,
+    };
+
+    let (mnemonic, _password) = unlock_mnemonic()?;
+    let config = build_config_from_env(mnemonic.clone());
+    let rpc = config.val("OLINE_RPC_ENDPOINT");
+    let grpc = normalize_grpc_endpoint(&config.val("OLINE_GRPC_ENDPOINT"));
+
+    let client = AkashClient::new_from_mnemonic(&mnemonic, &rpc, &grpc).await?;
+    let signer = KeySigner::new_mnemonic_str(&mnemonic, None)
+        .map_err(|e| format!("Failed to create signer: {}", e))?;
+
+    let targets: Vec<u64> = if all {
+        // Query all active deployments for this account
+        let mut deploy_client = DeployQueryClient::connect(grpc.clone())
+            .await
+            .map_err(|e| format!("Failed to connect gRPC: {}", e))?;
+
+        let resp = deploy_client
+            .deployments(QueryDeploymentsRequest {
+                filters: Some(DeploymentFilters {
+                    owner: client.address(),
+                    dseq: 0,
+                    state: "active".to_string(),
+                }),
+                pagination: None,
+            })
+            .await
+            .map_err(|e| format!("Deployment query failed: {}", e))?;
+
+        resp.into_inner()
+            .deployments
+            .iter()
+            .filter_map(|d| {
+                d.deployment
+                    .as_ref()
+                    .and_then(|dep| dep.id.as_ref())
+                    .map(|id| id.dseq)
+            })
+            .collect()
+    } else {
+        dseqs.to_vec()
+    };
+
+    if targets.is_empty() {
+        tracing::info!("No deployments to close.");
         return Ok(());
     }
 
-    let dseq: u64 = dseq_str.parse().map_err(|_| "Invalid DSEQ number")?;
-    let record = records.iter().find(|r| r.dseq == dseq);
+    tracing::info!("=== Closing {} deployment(s) ===\n", targets.len());
 
-    if record.is_none() {
-        tracing::info!("  No record found for DSEQ {}", dseq);
-        return Ok(());
-    }
+    let mut store = FileDeploymentStore::new_default().await?;
 
-    tracing::info!("\n  Actions:");
-    tracing::info!("    1. Close deployment");
-    tracing::info!("    2. View record (JSON)");
-    tracing::info!("    3. Update SDL (not yet implemented)");
-    match read_input(&mut lines, "Select action", None)?.as_str() {
-        "1" => {
-            if !prompt_continue(&mut lines, &format!("Close deployment DSEQ {}?", dseq))? {
-                tracing::info!("  Cancelled.");
-                return Ok(());
+    for dseq in &targets {
+        tracing::info!("  Closing DSEQ {}...", dseq);
+        match client
+            .broadcast_close_deployment(&signer, &client.address(), *dseq)
+            .await
+        {
+            Ok(result) => {
+                tracing::info!("    Closed. TX: {}", result.hash);
+                let _ = store.delete(*dseq).await;
             }
-
-            let (mnemonic, _password) = unlock_mnemonic()?;
-
-            // Load saved config for RPC/gRPC endpoints
-            let (rpc, grpc) = if has_saved_config() {
-                let pw = get_password("Enter config password: ")?;
-                if let Some(cfg) = load_config(&pw) {
-                    (
-                        cfg.val("OLINE_RPC_ENDPOINT"),
-                        cfg.val("OLINE_GRPC_ENDPOINT"),
-                    )
-                } else {
-                    let rpc = read_input(
-                        &mut lines,
-                        "RPC endpoint",
-                        Some("https://rpc.akashnet.net:443"),
-                    )?;
-                    let grpc = read_input(
-                        &mut lines,
-                        "gRPC endpoint",
-                        Some("https://grpc.akashnet.net:443"),
-                    )?;
-                    (rpc, grpc)
-                }
-            } else {
-                let rpc = read_input(
-                    &mut lines,
-                    "RPC endpoint",
-                    Some("https://rpc.akashnet.net:443"),
-                )?;
-                let grpc = read_input(
-                    &mut lines,
-                    "gRPC endpoint",
-                    Some("https://grpc.akashnet.net:443"),
-                )?;
-                (rpc, grpc)
-            };
-
-            let client = AkashClient::new_from_mnemonic(&mnemonic, &rpc, &grpc).await?;
-            let signer = KeySigner::new_mnemonic_str(&mnemonic, None)
-                .map_err(|e| format!("Failed to create signer: {}", e))?;
-
-            tracing::info!("  Closing deployment DSEQ {}...", dseq);
-            let result = client
-                .broadcast_close_deployment(&signer, &client.address(), dseq)
-                .await?;
-
-            tracing::info!("  Closed! TX hash: {}", result.hash);
-
-            store.delete(dseq).await?;
-            tracing::info!("  Record removed from store.");
-        }
-        "2" => {
-            let json = serde_json::to_string_pretty(record.unwrap())?;
-            tracing::info!("\n{}", json);
-        }
-        "3" => {
-            tracing::info!("  Update SDL is not yet implemented.");
-        }
-        _ => {
-            tracing::info!("  Unknown action.");
+            Err(e) => {
+                tracing::error!("    Failed: {}", e);
+            }
         }
     }
 
+    tracing::info!("\n  Done. {} deployment(s) closed.", targets.len());
     Ok(())
 }
 
@@ -309,6 +345,9 @@ pub async fn cmd_manage(args: &ManageArgs) -> Result<(), Box<dyn Error>> {
         }
         Some(ManageSubcommand::Tui { session }) => cmd_manage_tui(session.as_deref()).await,
         Some(ManageSubcommand::Status { session }) => cmd_manage_status(session.as_deref()).await,
+        Some(ManageSubcommand::Close { dseqs, all }) => {
+            cmd_manage_close(dseqs, *all).await
+        }
         Some(ManageSubcommand::Drain {
             session,
             gas_reserve,
@@ -344,7 +383,7 @@ async fn cmd_manage_sync() -> Result<(), Box<dyn Error>> {
     tracing::info!("  gRPC:   {}", grpc);
 
     // Query on-chain active deployments via gRPC
-    use akash_deploy_rs::gen::akash::deployment::v1beta5::{
+    use akash_deploy_rs::gen::akash::deployment::v1beta4::{
         query_client::QueryClient as DeployQueryClient, DeploymentFilters, QueryDeploymentsRequest,
     };
 
@@ -922,7 +961,7 @@ async fn cmd_manage_tui(session_id: Option<&str>) -> Result<(), Box<dyn Error>> 
 
 async fn cmd_manage_status(session_id: Option<&str>) -> Result<(), Box<dyn Error>> {
     use crate::sessions::OLineSessionStore;
-    use akash_deploy_rs::gen::akash::deployment::v1beta5::{
+    use akash_deploy_rs::gen::akash::deployment::v1beta4::{
         query_client::QueryClient as DeployQueryClient, DeploymentFilters, QueryDeploymentsRequest,
     };
 

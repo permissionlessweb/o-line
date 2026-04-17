@@ -26,7 +26,7 @@ vars = [
   ["OLINE_CHAIN_ID",       "config", true,     "morocco-1"],
   ["OLINE_CHAIN_JSON",     "config", false,    ""],
   ["OLINE_ADDRBOOK_URL",   "config", false,    "https://anode.team/Terp/main/addrbook.json"],
-  ["OLINE_ENTRYPOINT_URL", "config", true,     "https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/feat/mvp/plays/audible/oline-entrypoint.sh"],
+  ["OLINE_ENTRYPOINT_URL", "config", true,     "https://raw.githubusercontent.com/permissionlessweb/o-line/feat/oline-staging/plays/audible/oline-entrypoint.sh"],
   ["OLINE_PERSISTENT_PEERS","config",false,    "5bf887027701d3b8c4d95c0ba898cc8bf6d166ff@188.165.194.110:26676,..."],
   ["OLINE_VALIDATOR_PEER_ID","config",true,    ""],
   ["OLINE_SYNC_METHOD",    "config", false,    "statesync"],  # "statesync" | "snapshot"

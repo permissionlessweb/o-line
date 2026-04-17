@@ -1,12 +1,12 @@
 use crate::{
-    akash::{build_phase_a_vars, endpoint_hostname, node_refresh_vars},
+    akash::{build_phase_a_vars, endpoint_hostname, inject_p2p_nodeport, node_refresh_vars},
     cli::prompt_continue,
     crypto::{
         push_pre_start_files, push_scripts_sftp, verify_files_and_signal_start, FileSource,
         PreStartFile,
     },
     deployer::OLineDeployer,
-    dns::cloudflare::cloudflare_update_accept_domains,
+    dns::cloudflare::{cloudflare_update_accept_domains, cloudflare_update_p2p_domains},
     nodes::register_phase_nodes,
     workflow::step::{DeployPhase, NodeTarget, OLineStep, PeerTarget},
     workflow::{OLineWorkflow, StepResult},
@@ -300,15 +300,28 @@ pub async fn update_dns(w: &mut OLineWorkflow) -> Result<StepResult, DeployError
     let cf_token = w.ctx.deployer.config.val("OLINE_CF_API_TOKEN");
     let cf_zone = w.ctx.deployer.config.val("OLINE_CF_ZONE_ID");
     if !cf_token.is_empty() && !cf_zone.is_empty() {
+        let eps = w.ctx.endpoints(DeployPhase::SpecialTeams).to_vec();
+
+        // HTTP/HTTPS accept domains (proxied through Cloudflare)
         tracing::info!("  Updating Cloudflare DNS for accept domains...");
         let sdl = w
             .ctx
             .state(DeployPhase::SpecialTeams)
             .and_then(|s| s.sdl_content.clone());
         if let Some(sdl) = sdl {
-            let eps = w.ctx.endpoints(DeployPhase::SpecialTeams).to_vec();
             cloudflare_update_accept_domains(&sdl, &eps, &cf_token, &cf_zone).await;
         }
+
+        // P2P domains: DNS-only A records (NOT proxied — raw TCP for CometBFT P2P)
+        let vars = &w.ctx.a_vars;
+        let get = |k: &str| vars.get(k).map(|s| s.as_str()).unwrap_or("");
+        let snap_p2p: u16 = get("P2P_P_SNAP").parse().unwrap_or(26656);
+        let seed_p2p: u16 = get("P2P_P_SEED").parse().unwrap_or(26656);
+        let p2p_entries = [
+            (get("P2P_D_SNAP"), snap_p2p, "oline-a-snapshot"),
+            (get("P2P_D_SEED"), seed_p2p, "oline-a-seed"),
+        ];
+        cloudflare_update_p2p_domains(&p2p_entries, &eps, &cf_token, &cf_zone).await;
     } else {
         tracing::info!(
             "  Note: Cloudflare DNS not configured — update CNAMEs for accept domains manually."
@@ -371,7 +384,8 @@ pub async fn signal_snapshot_start(w: &mut OLineWorkflow) -> Result<StepResult, 
         let remote_paths: Vec<String> = w.ctx.pre_start_files.iter()
             .map(|f| f.remote_path.clone())
             .collect();
-        let snapshot_refresh = node_refresh_vars(&w.ctx.a_vars, "SNAP");
+        let mut snapshot_refresh = node_refresh_vars(&w.ctx.a_vars, "SNAP");
+        inject_p2p_nodeport(&mut snapshot_refresh, &snapshot_eps, "oline-a-snapshot");
         verify_files_and_signal_start(
             "phase-a-snapshot",
             &snapshot_eps,
@@ -508,6 +522,7 @@ pub async fn signal_seed_start(w: &mut OLineWorkflow) -> Result<StepResult, Depl
     if !seed_eps.is_empty() {
         let snapshot_peer = w.ctx.peer(PeerTarget::Snapshot).to_string();
         let mut seed_refresh = node_refresh_vars(&w.ctx.a_vars, "SEED");
+        inject_p2p_nodeport(&mut seed_refresh, &seed_eps, "oline-a-seed");
         if !snapshot_peer.is_empty() {
             // Private peer: don't gossip this ID to the network.
             seed_refresh.insert("TERPD_P2P_PRIVATE_PEER_IDS".into(), snapshot_peer.clone());

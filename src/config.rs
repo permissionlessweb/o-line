@@ -153,7 +153,8 @@ macro_rules! define_fields {
     };
 }
 pub fn load_dotenv(env_key: &str) {
-    let env_path = Path::new(".env");
+    let env_file = std::env::var("OLINE_ENV_FILE").unwrap_or_else(|_| ".env".into());
+    let env_path = Path::new(&env_file);
     if let Ok(contents) = fs::read_to_string(env_path) {
         for line in contents.lines() {
             let line = line.trim();
@@ -219,9 +220,10 @@ pub fn default_val_opt(env_key: &str, saved: Option<&str>) -> Option<String> {
 }
 
 pub fn read_encrypted_mnemonic_from_env() -> Result<String, Box<dyn Error>> {
-    let env_path = Path::new(".env");
+    let env_file = std::env::var("OLINE_ENV_FILE").unwrap_or_else(|_| ".env".into());
+    let env_path = Path::new(&env_file);
     if !env_path.exists() {
-        return Err("No .env file found. Run `oline encrypt` first to store your mnemonic.".into());
+        return Err(format!("No {} file found. Run `oline encrypt` first to store your mnemonic.", env_file).into());
     }
     let env_key =
         std::env::var("OLINE_ENV_KEY_NAME").unwrap_or_else(|_| "OLINE_ENCRYPTED_MNEMONIC".into());

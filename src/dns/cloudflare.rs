@@ -274,11 +274,16 @@ pub async fn resolve_to_ipv4(hostname: &str) -> Option<std::net::Ipv4Addr> {
 /// Upsert a Cloudflare DNS A record: `name` → `ip`.
 /// Lists ALL record types for `name` so stale CNAMEs are replaced rather than
 /// causing a 400 conflict error.
+///
+/// `proxied` controls whether traffic is routed through Cloudflare's proxy:
+/// - `true`  → HTTP/HTTPS traffic (Cloudflare terminates TLS, provides CDN/WAF)
+/// - `false` → DNS-only (raw TCP passthrough, required for P2P/non-HTTP protocols)
 pub async fn cloudflare_upsert_a(
     cf_token: &str,
     zone_id: &str,
     name: &str,
     ip: std::net::Ipv4Addr,
+    proxied: bool,
 ) -> Result<(), Box<dyn Error>> {
     let credentials = Credentials::UserAuthToken {
         token: cf_token.to_string(),
@@ -315,12 +320,12 @@ pub async fn cloudflare_upsert_a(
                             name,
                             content: DnsContent::A { content: ip },
                             ttl: Some(60),
-                            proxied: Some(true),
+                            proxied: Some(proxied),
                         },
                     })
                     .await
                     .map_err(|e| format!("Cloudflare A record update failed: {:?}", e))?;
-                tracing::info!("    Updated A {} → {}", name, ip);
+                tracing::info!("    Updated A {} → {}{}", name, ip, if proxied { "" } else { " (DNS-only)" });
             }
             _ => {
                 // Wrong type (e.g. stale CNAME) — delete then create A record.
@@ -339,13 +344,13 @@ pub async fn cloudflare_upsert_a(
                             name,
                             content: DnsContent::A { content: ip },
                             ttl: Some(60),
-                            proxied: Some(true),
+                            proxied: Some(proxied),
                             priority: None,
                         },
                     })
                     .await
                     .map_err(|e| format!("Cloudflare A record create failed: {:?}", e))?;
-                tracing::info!("    Created A {} → {} (replaced old record)", name, ip);
+                tracing::info!("    Created A {} → {}{}", name, ip, if proxied { "" } else { " (DNS-only)" });
             }
         }
     } else {
@@ -356,13 +361,13 @@ pub async fn cloudflare_upsert_a(
                     name,
                     content: DnsContent::A { content: ip },
                     ttl: Some(60),
-                    proxied: Some(true),
+                    proxied: Some(proxied),
                     priority: None,
                 },
             })
             .await
             .map_err(|e| format!("Cloudflare A record create failed: {:?}", e))?;
-        tracing::info!("    Created A {} → {}", name, ip);
+        tracing::info!("    Created A {} → {}{}", name, ip, if proxied { "" } else { " (DNS-only)" });
     }
 
     Ok(())
@@ -516,7 +521,7 @@ pub async fn cloudflare_update_accept_domains(
                 }
 
                 for domain in &accept_domains {
-                    match cloudflare_upsert_a(cf_token, zone_id, domain, ip).await {
+                    match cloudflare_upsert_a(cf_token, zone_id, domain, ip, true).await {
                         Ok(_) => {
                             tracing::info!("  Cloudflare A configured: {} → {}", domain, ip)
                         }
@@ -528,6 +533,72 @@ pub async fn cloudflare_update_accept_domains(
                     }
                 }
             }
+        }
+    }
+}
+
+/// Register DNS-only A records for P2P domains.
+///
+/// P2P traffic is raw TCP using CometBFT's secret connection handshake — NOT HTTP.
+/// Cloudflare proxy MUST be disabled (`proxied: false`) because:
+/// 1. CF only proxies HTTP/HTTPS; raw TCP connections get terminated with EOF
+/// 2. CometBFT's P2P handshake interprets CF's TLS termination as "auth failure"
+/// 3. DNS must resolve to the provider's real IP, not CF's anycast IP
+///
+/// Each entry is `(domain, internal_port, service_name)`. The function finds the
+/// matching `ServiceEndpoint` for each service, resolves the provider hostname to
+/// IPv4, and creates (or updates) a DNS-only A record.
+pub async fn cloudflare_update_p2p_domains(
+    p2p_entries: &[(&str, u16, &str)],
+    endpoints: &[akash_deploy_rs::ServiceEndpoint],
+    cf_token: &str,
+    zone_id: &str,
+) {
+    for &(domain, internal_port, svc_name) in p2p_entries {
+        if domain.is_empty() {
+            continue;
+        }
+
+        // Find the P2P endpoint for this service by matching internal_port.
+        let p2p_ep = endpoints.iter().find(|e| {
+            e.service == svc_name && e.internal_port == internal_port
+        });
+
+        let ep = match p2p_ep {
+            Some(ep) => ep,
+            None => {
+                tracing::info!(
+                    "  [dns] P2P: no endpoint for {} port {} — skipping {}",
+                    svc_name, internal_port, domain,
+                );
+                continue;
+            }
+        };
+
+        let provider_host = endpoint_hostname(&ep.uri);
+        let ip = match resolve_to_ipv4(provider_host).await {
+            Some(ip) => ip,
+            None => {
+                tracing::info!(
+                    "  [dns] P2P: cannot resolve {} — skipping {}",
+                    provider_host, domain,
+                );
+                continue;
+            }
+        };
+
+        tracing::info!(
+            "  [dns] P2P: {} → {} (provider: {}, NodePort: {})",
+            domain, ip, provider_host, ep.port,
+        );
+
+        match cloudflare_upsert_a(cf_token, zone_id, domain, ip, false).await {
+            Ok(_) => tracing::info!(
+                "  [dns] P2P A record: {} → {} (DNS-only, not proxied)", domain, ip,
+            ),
+            Err(e) => tracing::info!(
+                "  Warning: P2P DNS failed for {}: {}", domain, e,
+            ),
         }
     }
 }

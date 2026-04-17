@@ -14,7 +14,7 @@ use crate::{
     accounts::{child_address, derive_child_signer},
     akash::{
         build_phase_a_vars, build_phase_b_vars, build_phase_c_vars, build_phase_rly_vars,
-        endpoint_hostname, fetch_statesync_trust_params, node_refresh_vars,
+        endpoint_hostname, fetch_statesync_trust_params, inject_p2p_nodeport, node_refresh_vars,
     },
     cli::prompt_continue,
     crypto::{
@@ -22,7 +22,7 @@ use crate::{
         PreStartFile,
     },
     deployer::OLineDeployer,
-    dns::cloudflare::cloudflare_update_accept_domains,
+    dns::cloudflare::{cloudflare_update_accept_domains, cloudflare_update_p2p_domains},
     nodes::register_phase_nodes,
     providers::TrustedProviderStore,
     sessions::{AccountEntry, DeploymentEntry, FundingMethod},
@@ -109,8 +109,7 @@ pub async fn fund_child_accounts(w: &mut OLineWorkflow) -> Result<StepResult, De
                 .unwrap_or(0);
 
             if act_balance < total_act_needed {
-                // BME module requires a minimum mint of 10 ACT (10_000_000 uact).
-                const MIN_MINT_UACT: u128 = 10_000_000;
+                const MIN_MINT_UACT: u128 = 25_000_000; // 25 ACT minimum mint
                 let shortfall = (total_act_needed - act_balance).max(MIN_MINT_UACT);
                 tracing::info!(
                     "  Master needs {} uact, has {} — minting {} uakt → uact",
@@ -570,7 +569,7 @@ pub async fn deploy_all_units(
             .unwrap_or(0);
 
         if act_balance < total_act_needed {
-            const MIN_MINT_UAKT: u128 = 10_000_000; // BME minimum mint = 10 ACT
+            const MIN_MINT_UAKT: u128 = 25_000_000; // BME minimum mint = 25 ACT
             let shortfall = (total_act_needed - act_balance).max(MIN_MINT_UAKT);
             tracing::info!(
                 total_act_needed,
@@ -1595,6 +1594,7 @@ pub async fn deploy_all_units(
     let cf_token = w.ctx.deployer.config.val("OLINE_CF_API_TOKEN");
     let cf_zone = w.ctx.deployer.config.val("OLINE_CF_ZONE_ID");
     if !cf_token.is_empty() && !cf_zone.is_empty() {
+        // HTTP/HTTPS accept domains (proxied through Cloudflare)
         macro_rules! dns_phase {
             ($phase:expr) => {{
                 let sdl_opt = w.ctx.state($phase).and_then(|s| s.sdl_content.clone());
@@ -1610,6 +1610,57 @@ pub async fn deploy_all_units(
         dns_phase!(DeployPhase::Tackles);
         dns_phase!(DeployPhase::Forwards);
         dns_phase!(DeployPhase::Relayer);
+
+        // P2P domains: DNS-only A records (NOT proxied — raw TCP for CometBFT P2P)
+        {
+            let cfg = &w.ctx.deployer.config;
+            let val = |k: &str| {
+                let v = cfg.val(k);
+                if v.is_empty() { String::new() } else { v }
+            };
+
+            // Phase A: Snapshot + Seed
+            let a_eps = w.ctx.endpoints(DeployPhase::SpecialTeams).to_vec();
+            if !a_eps.is_empty() {
+                let snap_p2p: u16 = val("P2P_P_SNAP").parse().unwrap_or(26656);
+                let seed_p2p: u16 = val("P2P_P_SEED").parse().unwrap_or(26656);
+                let d_snap = val("P2P_D_SNAP");
+                let d_seed = val("P2P_D_SEED");
+                let entries = [
+                    (d_snap.as_str(), snap_p2p, "oline-a-snapshot"),
+                    (d_seed.as_str(), seed_p2p, "oline-a-seed"),
+                ];
+                cloudflare_update_p2p_domains(&entries, &a_eps, &cf_token, &cf_zone).await;
+            }
+
+            // Phase B: Tackles
+            let b_eps = w.ctx.endpoints(DeployPhase::Tackles).to_vec();
+            if !b_eps.is_empty() {
+                let tl_p2p: u16 = val("P2P_P_TL").parse().unwrap_or(26656);
+                let tr_p2p: u16 = val("P2P_P_TR").parse().unwrap_or(26656);
+                let d_tl = val("P2P_D_TL");
+                let d_tr = val("P2P_D_TR");
+                let entries = [
+                    (d_tl.as_str(), tl_p2p, "oline-b-left-tackle"),
+                    (d_tr.as_str(), tr_p2p, "oline-b-right-tackle"),
+                ];
+                cloudflare_update_p2p_domains(&entries, &b_eps, &cf_token, &cf_zone).await;
+            }
+
+            // Phase C: Forwards
+            let c_eps = w.ctx.endpoints(DeployPhase::Forwards).to_vec();
+            if !c_eps.is_empty() {
+                let fl_p2p: u16 = val("P2P_P_FL").parse().unwrap_or(26656);
+                let fr_p2p: u16 = val("P2P_P_FR").parse().unwrap_or(26656);
+                let d_fl = val("P2P_D_FL");
+                let d_fr = val("P2P_D_FR");
+                let entries = [
+                    (d_fl.as_str(), fl_p2p, "oline-c-left-forward"),
+                    (d_fr.as_str(), fr_p2p, "oline-c-right-forward"),
+                ];
+                cloudflare_update_p2p_domains(&entries, &c_eps, &cf_token, &cf_zone).await;
+            }
+        }
     }
 
     // ── 12. Immediate SSH init — push scripts to all nodes; signal Phase A ────
@@ -1669,7 +1720,8 @@ pub async fn deploy_all_units(
                     }
                 };
                 if pushed {
-                    let snap_refresh = node_refresh_vars(&w.ctx.a_vars, "SNAP");
+                    let mut snap_refresh = node_refresh_vars(&w.ctx.a_vars, "SNAP");
+                    inject_p2p_nodeport(&mut snap_refresh, &snapshot_eps, "oline-a-snapshot");
                     match verify_files_and_signal_start(
                         "init-snapshot",
                         &snapshot_eps,
@@ -1707,7 +1759,8 @@ pub async fn deploy_all_units(
                     Some(&nginx_path),
                 )
                 .await;
-                let seed_refresh = node_refresh_vars(&w.ctx.a_vars, "SEED");
+                let mut seed_refresh = node_refresh_vars(&w.ctx.a_vars, "SEED");
+                inject_p2p_nodeport(&mut seed_refresh, &seed_eps, "oline-a-seed");
                 let _ = verify_files_and_signal_start(
                     "init-seed",
                     &seed_eps,
@@ -1839,7 +1892,7 @@ pub async fn update_all_dns(w: &mut OLineWorkflow) -> Result<StepResult, DeployE
 
     tracing::info!("  Updating Cloudflare DNS for all phases...");
 
-    // DNS for each phase that has a live deployment.
+    // HTTP/HTTPS accept domains (proxied through Cloudflare)
     for phase in [
         DeployPhase::SpecialTeams,
         DeployPhase::Tackles,
@@ -1853,6 +1906,54 @@ pub async fn update_all_dns(w: &mut OLineWorkflow) -> Result<StepResult, DeployE
                     cloudflare_update_accept_domains(sdl, &eps, &cf_token, &cf_zone).await;
                 }
             }
+        }
+    }
+
+    // P2P domains: DNS-only A records (NOT proxied — raw TCP for CometBFT P2P)
+    {
+        let cfg = &w.ctx.deployer.config;
+        let val = |k: &str| {
+            let v = cfg.val(k);
+            if v.is_empty() { String::new() } else { v }
+        };
+
+        let a_eps = w.ctx.endpoints(DeployPhase::SpecialTeams).to_vec();
+        if !a_eps.is_empty() {
+            let snap_p2p: u16 = val("P2P_P_SNAP").parse().unwrap_or(26656);
+            let seed_p2p: u16 = val("P2P_P_SEED").parse().unwrap_or(26656);
+            let d_snap = val("P2P_D_SNAP");
+            let d_seed = val("P2P_D_SEED");
+            let entries = [
+                (d_snap.as_str(), snap_p2p, "oline-a-snapshot"),
+                (d_seed.as_str(), seed_p2p, "oline-a-seed"),
+            ];
+            cloudflare_update_p2p_domains(&entries, &a_eps, &cf_token, &cf_zone).await;
+        }
+
+        let b_eps = w.ctx.endpoints(DeployPhase::Tackles).to_vec();
+        if !b_eps.is_empty() {
+            let tl_p2p: u16 = val("P2P_P_TL").parse().unwrap_or(26656);
+            let tr_p2p: u16 = val("P2P_P_TR").parse().unwrap_or(26656);
+            let d_tl = val("P2P_D_TL");
+            let d_tr = val("P2P_D_TR");
+            let entries = [
+                (d_tl.as_str(), tl_p2p, "oline-b-left-tackle"),
+                (d_tr.as_str(), tr_p2p, "oline-b-right-tackle"),
+            ];
+            cloudflare_update_p2p_domains(&entries, &b_eps, &cf_token, &cf_zone).await;
+        }
+
+        let c_eps = w.ctx.endpoints(DeployPhase::Forwards).to_vec();
+        if !c_eps.is_empty() {
+            let fl_p2p: u16 = val("P2P_P_FL").parse().unwrap_or(26656);
+            let fr_p2p: u16 = val("P2P_P_FR").parse().unwrap_or(26656);
+            let d_fl = val("P2P_D_FL");
+            let d_fr = val("P2P_D_FR");
+            let entries = [
+                (d_fl.as_str(), fl_p2p, "oline-c-left-forward"),
+                (d_fr.as_str(), fr_p2p, "oline-c-right-forward"),
+            ];
+            cloudflare_update_p2p_domains(&entries, &c_eps, &cf_token, &cf_zone).await;
         }
     }
 
@@ -1939,7 +2040,8 @@ pub async fn wait_snapshot_ready(
                 .iter()
                 .map(|f| f.remote_path.clone())
                 .collect();
-            let snap_refresh = node_refresh_vars(&w.ctx.a_vars, "SNAP");
+            let mut snap_refresh = node_refresh_vars(&w.ctx.a_vars, "SNAP");
+            inject_p2p_nodeport(&mut snap_refresh, &snapshot_eps, "oline-a-snapshot");
             verify_files_and_signal_start(
                 "parallel-snapshot",
                 &snapshot_eps,
@@ -1968,7 +2070,8 @@ pub async fn wait_snapshot_ready(
                 Some(&nginx_path),
             )
             .await;
-            let seed_refresh = node_refresh_vars(&w.ctx.a_vars, "SEED");
+            let mut seed_refresh = node_refresh_vars(&w.ctx.a_vars, "SEED");
+            inject_p2p_nodeport(&mut seed_refresh, &seed_eps, "oline-a-seed");
             let _ = verify_files_and_signal_start(
                 "parallel-seed",
                 &seed_eps,
@@ -2225,7 +2328,8 @@ pub async fn signal_all_nodes(w: &mut OLineWorkflow) -> Result<StepResult, Deplo
             None,
         )
         .await;
-        let lt_refresh = node_refresh_vars(&b_vars, "TL");
+        let mut lt_refresh = node_refresh_vars(&b_vars, "TL");
+        inject_p2p_nodeport(&mut lt_refresh, &lt_eps, "oline-b-left-tackle");
         let _ = verify_files_and_signal_start(
             "parallel-left-tackle",
             &lt_eps,
@@ -2249,7 +2353,8 @@ pub async fn signal_all_nodes(w: &mut OLineWorkflow) -> Result<StepResult, Deplo
             None,
         )
         .await;
-        let rt_refresh = node_refresh_vars(&b_vars, "TR");
+        let mut rt_refresh = node_refresh_vars(&b_vars, "TR");
+        inject_p2p_nodeport(&mut rt_refresh, &rt_eps, "oline-b-right-tackle");
         let _ = verify_files_and_signal_start(
             "parallel-right-tackle",
             &rt_eps,
@@ -2336,7 +2441,8 @@ pub async fn inject_peers(w: &mut OLineWorkflow) -> Result<StepResult, DeployErr
             None,
         )
         .await;
-        let lf_refresh = node_refresh_vars(&c_vars, "FL");
+        let mut lf_refresh = node_refresh_vars(&c_vars, "FL");
+        inject_p2p_nodeport(&mut lf_refresh, &lf_eps, "oline-c-left-forward");
         let _ = verify_files_and_signal_start(
             "parallel-left-forward",
             &lf_eps,
@@ -2359,7 +2465,8 @@ pub async fn inject_peers(w: &mut OLineWorkflow) -> Result<StepResult, DeployErr
             None,
         )
         .await;
-        let rf_refresh = node_refresh_vars(&c_vars, "FR");
+        let mut rf_refresh = node_refresh_vars(&c_vars, "FR");
+        inject_p2p_nodeport(&mut rf_refresh, &rf_eps, "oline-c-right-forward");
         let _ = verify_files_and_signal_start(
             "parallel-right-forward",
             &rf_eps,
