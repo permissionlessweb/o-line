@@ -33,6 +33,17 @@ with_examples! {
         /// Use sequential deployment (legacy, one phase at a time).
         #[arg(long, conflicts_with = "parallel")]
         pub sequential: bool,
+        /// Deploy a raw SDL file directly (bypasses phase templates).
+        /// The file is read, variables from .env are substituted, and
+        /// it is deployed as a single deployment to any available provider.
+        /// Without --select, creates deployment and prints bids then exits.
+        /// With --select, completes the deployment with the chosen provider.
+        #[arg(long, value_name = "PATH")]
+        pub sdl: Option<String>,
+        /// Select a provider for an existing deployment (step 2 of --sdl flow).
+        /// Usage: oline deploy --sdl <path> --select <DSEQ> <PROVIDER_ADDRESS>
+        #[arg(long, value_name = "DSEQ", num_args = 2, value_names = ["DSEQ", "PROVIDER"])]
+        pub select: Option<Vec<String>>,
     }
     => "../../docs/examples/deploy.md"
 }
@@ -818,8 +829,9 @@ async fn cmd_manage_logs(
     service: Option<&str>,
     tail: u64,
 ) -> Result<(), Box<dyn Error>> {
+    use akash_deploy_rs::logs::ws::WsLogStream;
+    use akash_deploy_rs::{LogStreamConfig, ProviderAuth};
     use futures_util::StreamExt;
-    use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 
     // 1. Load deployment record
     let store = FileDeploymentStore::new_default().await?;
@@ -855,45 +867,40 @@ async fn cmd_manage_logs(
         .await
         .map_err(|e| format!("JWT generation failed: {e}"))?;
 
-    // 4. Build WebSocket URL
-    let host = provider.host_uri.trim_end_matches('/');
-    let mut url = format!(
-        "{}/lease/{}/{}/{}/logs?follow=true&tail={}",
-        host.replace("https://", "wss://"),
-        lease.dseq,
-        lease.gseq,
-        lease.oseq,
-        tail,
-    );
+    // 4. Build log stream config
+    let mut config = LogStreamConfig::new()
+        .with_follow(true)
+        .with_tail(tail);
     if let Some(svc) = service {
-        url.push_str(&format!("&service={svc}"));
+        config = config.with_service(svc);
     }
+
+    let auth = ProviderAuth::Jwt { token: jwt };
+
     tracing::info!(
         "streaming logs from {} (dseq={})",
         provider.display_name(),
         dseq
     );
 
-    // 5. Connect with JWT auth header
-    let mut req = url.into_client_request()?;
-    req.headers_mut().insert(
-        "Authorization",
-        format!("Bearer {jwt}").parse()?,
-    );
-    let (ws, _) = tokio_tungstenite::connect_async(req).await?;
+    // 5. Connect and stream via akash-deploy-rs
+    let mut stream = WsLogStream::connect(
+        &provider.host_uri,
+        &lease,
+        &auth,
+        &config,
+    ).await.map_err(|e| format!("log stream failed: {e}"))?;
 
     // 6. Stream logs until Ctrl+C
-    let (_, mut read) = ws.split();
     let ctrl_c = tokio::signal::ctrl_c();
     tokio::pin!(ctrl_c);
 
     loop {
         tokio::select! {
-            msg = read.next() => match msg {
-                Some(Ok(Message::Text(line))) => print!("{line}"),
-                Some(Ok(Message::Close(_))) | None => break,
-                Some(Err(e)) => { eprintln!("ws error: {e}"); break; }
-                _ => {}
+            line = stream.next() => match line {
+                Some(Ok(log_line)) => print!("{log_line}"),
+                Some(Err(e)) => { eprintln!("log stream error: {e}"); break; }
+                None => break,
             },
             _ = &mut ctrl_c => {
                 eprintln!("\ninterrupted");

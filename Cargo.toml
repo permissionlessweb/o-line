@@ -20,7 +20,7 @@ interface = ["dep:cw-orch"]
 [dependencies]
 aes-gcm = "0.10"
 #akash-deploy-rs = { git = "https://github.com/permissionlessweb/akash-deploy-rs", branch = "feat/client-improvement", features = ["default-client", "sdl-templates", "file-storage"] }
-akash-deploy-rs = { path = "../akash-deploy-rs", features = ["default-client", "sdl-templates", "file-storage"] }
+akash-deploy-rs = { path = "../akash-deploy-rs", features = ["default-client", "sdl-templates", "file-storage", "log-streaming"] }
 argon2 = "0.5"
 axum = "0.7"
 base64 = "0.22"
