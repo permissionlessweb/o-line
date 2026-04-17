@@ -12,6 +12,30 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 # then invoke this script again with OLINE_PHASE=start to run the cosmos setup.
 # No wait loops — SSH access is the synchronization point.
 if [ "${OLINE_PHASE:-bootstrap}" = "bootstrap" ]; then
+  # ── Fast-path restart: skip bootstrap if marker exists ──
+  _MARKER="${PROJECT_ROOT:-/root/.terpd}/.oline_bootstrapped"
+  if [ -f "$_MARKER" ] && [ "${OLINE_FORCE_BOOTSTRAP:-}" != "1" ]; then
+    echo "[oline] Bootstrap marker found at $_MARKER — skipping to node start."
+    # Ensure SSH is available for debugging
+    if [ -n "${SSH_PUBKEY:-}" ]; then
+      mkdir -p /root/.ssh
+      echo "$SSH_PUBKEY" >> /root/.ssh/authorized_keys
+      chmod 600 /root/.ssh/authorized_keys
+    fi
+    _SSHD=$(command -v sshd 2>/dev/null || { [ -x /usr/sbin/sshd ] && echo /usr/sbin/sshd; } || true)
+    if [ -n "$_SSHD" ]; then
+      ssh-keygen -A 2>/dev/null || true
+      mkdir -p /run/sshd 2>/dev/null || true
+      sed -i "s/#PermitRootLogin.*/PermitRootLogin yes/" /etc/ssh/sshd_config 2>/dev/null || true
+      $_SSHD 2>/dev/null || true
+      echo "[oline] sshd started (restart fast-path)"
+    fi
+    # Jump directly to the start phase
+    OLINE_PHASE=start
+  fi
+fi
+
+if [ "${OLINE_PHASE:-bootstrap}" = "bootstrap" ]; then
   # fail fast before doing any slow work
   if [[ "$SNAPSHOT_RETAIN" != "0" ]] && ! date -d "-$SNAPSHOT_RETAIN" >/dev/null 2>&1; then
     echo "ERROR: Invalid SNAPSHOT_RETAIN value '$SNAPSHOT_RETAIN'. Expected format: '<N> minutes|hours|days|weeks|months'"
@@ -954,6 +978,11 @@ fi
 
 echo "=== Cosmos node setup complete ==="
 
+# Write bootstrap marker so restarts skip init/download
+BOOTSTRAP_MARKER="${PROJECT_ROOT:-.terpd}/.oline_bootstrapped"
+touch "$BOOTSTRAP_MARKER"
+echo "[oline] Bootstrap marker written: $BOOTSTRAP_MARKER"
+
 # ── Final guaranteed peer patch ───────────────────────────────────────────────
 # Belt-and-suspenders: apply p2p peer settings directly to config.toml right
 # before launch. Runs after terpd init so config.toml is guaranteed to exist.
@@ -981,10 +1010,19 @@ if [ -n "$TLS_CONFIG_URL" ]; then
 fi
 
 echo "=== Launching: $START_CMD ==="
-# Route node output to container PID 1 stdout (Akash log stream) so logs are
-# visible via `akash provider lease-logs` without consuming disk storage.
-if [ -n "$SNAPSHOT_PATH" ]; then
-  exec snapshot.sh "$START_CMD" >>/proc/1/fd/1 2>&1
-else
-  exec $START_CMD >>/proc/1/fd/1 2>&1
-fi
+# ── Supervisor loop ───────────────────────────────────────────────────────────
+# Run the node under a restart loop instead of exec-ing it as PID 1.
+# This keeps the shell alive so:
+#   - SSH stays accessible for debugging
+#   - Container does not restart on node crash (preserves persistent storage state)
+#   - Bootstrap phase is not re-executed on restart
+while true; do
+  echo "[supervisor] Starting: $START_CMD"
+  if [ -n "$SNAPSHOT_PATH" ]; then
+    snapshot.sh "$START_CMD" >>/proc/1/fd/1 2>&1 || true
+  else
+    $START_CMD >>/proc/1/fd/1 2>&1 || true
+  fi
+  echo "[supervisor] Process exited ($?), restarting in 5s..."
+  sleep 5
+done
