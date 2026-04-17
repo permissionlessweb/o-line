@@ -195,12 +195,12 @@ if [ "$OLINE_NODE_MODE" = "native" ]; then
     *)         BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --chain-id ${CHAIN_ID}" ;;
   esac
 
-  # Sync mode
-  if [ -n "$STATESYNC_RPC_SERVERS" ]; then
+  # Sync mode — snapshot takes priority over statesync
+  if [ -n "$SNAPSHOT_URL" ]; then
+    BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --sync-mode snapshot --snapshot-url $SNAPSHOT_URL"
+  elif [ -n "$STATESYNC_RPC_SERVERS" ]; then
     BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --sync-mode statesync"
     BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --statesync-rpcs $STATESYNC_RPC_SERVERS"
-  elif [ -n "$SNAPSHOT_URL" ]; then
-    BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --sync-mode snapshot --snapshot-url $SNAPSHOT_URL"
   fi
 
   # Moniker
