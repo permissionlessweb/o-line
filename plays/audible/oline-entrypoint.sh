@@ -195,12 +195,17 @@ if [ "$OLINE_NODE_MODE" = "native" ]; then
     *)         BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --chain-id ${CHAIN_ID}" ;;
   esac
 
-  # Sync mode — snapshot takes priority over statesync
-  if [ -n "$SNAPSHOT_URL" ]; then
-    BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --sync-mode snapshot --snapshot-url $SNAPSHOT_URL"
-  elif [ -n "$STATESYNC_RPC_SERVERS" ]; then
+  # Sync mode — driven by OLINE_SYNC_METHOD (default: snapshot)
+  # When snapshot: always pass --sync-mode snapshot (even without URL — SFTP delivers data)
+  # When statesync: pass --sync-mode statesync + RPC servers
+  _sync="${OLINE_SYNC_METHOD:-snapshot}"
+  if [ "$_sync" = "statesync" ] && [ -n "$STATESYNC_RPC_SERVERS" ]; then
     BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --sync-mode statesync"
     BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --statesync-rpcs $STATESYNC_RPC_SERVERS"
+  else
+    # Snapshot mode (default) — always set sync-mode to prevent terpd preset from using statesync
+    BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --sync-mode snapshot"
+    [ -n "$SNAPSHOT_URL" ] && BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --snapshot-url $SNAPSHOT_URL"
   fi
 
   # Moniker
