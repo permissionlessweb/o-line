@@ -8,18 +8,12 @@ use std::{
 use crate::{
     config::{days_to_date, read_encrypted_mnemonic_from_env},
     crypto::decrypt_mnemonic,
-    FIELD_DESCRIPTORS,
+    toml_config::{TomlConfig, CONFIG_FIELDS},
 };
 
 // ── Secret redaction ──
 pub fn redact_if_secret(env_var: &str, value: &str) -> String {
-    let is_secret = FIELD_DESCRIPTORS
-        .iter()
-        .find(|fd| fd.ev == env_var)
-        .map(|fd| fd.s)
-        .unwrap_or(false);
-
-    if is_secret {
+    if TomlConfig::is_secret_env(env_var) {
         if value.len() <= 4 {
             "****".to_string()
         } else {
@@ -52,7 +46,6 @@ pub fn read_input(
     default: Option<&str>,
 ) -> Result<String, io::Error> {
     if let Some(def) = default {
-        // Show default as a dim placeholder on the input line
         tracing::info!("  {}", prompt);
         print!("  \x1b[2m{}\x1b[0m > ", def);
     } else {
@@ -72,7 +65,6 @@ pub fn read_input(
 /// Like `read_input` but hides the typed value (for secrets).
 pub fn read_secret_input(prompt: &str, default: Option<&str>) -> Result<String, Box<dyn Error>> {
     let display = if let Some(def) = default {
-        // Show prompt, then placeholder hint (rpassword hides typed input)
         tracing::info!("  {}", prompt);
         format!("  \x1b[2m{}\x1b[0m > ", def)
     } else {
@@ -123,7 +115,6 @@ pub fn urlencoded(s: &str) -> String {
 }
 
 /// Get password from `OLINE_PASSWORD` env var, or prompt interactively.
-/// In non-interactive mode, returns `OLINE_PASSWORD` or errors.
 pub fn get_password(prompt: &str) -> Result<String, Box<dyn Error>> {
     if let Ok(pw) = std::env::var("OLINE_PASSWORD") {
         if !pw.is_empty() {
@@ -144,14 +135,13 @@ pub fn unlock_mnemonic() -> Result<(String, String), Box<dyn Error>> {
     Ok((mnemonic, password))
 }
 
-/// Print all FIELD_DESCRIPTORS as a numbered table grouped by category.
+/// Print config fields as a numbered table.
 /// Secrets show "****" if set, "(not set)" if empty.
-/// Non-secret empty fields show "(not set)".
 pub fn print_config_table(resolved: &[String]) {
     tracing::info!("\n  Configuration (current values):");
     tracing::info!("  {:-<72}", "");
-    for (i, fd) in FIELD_DESCRIPTORS.iter().enumerate() {
-        let cell = if fd.s {
+    for (i, field) in CONFIG_FIELDS.iter().enumerate() {
+        let cell = if field.is_secret {
             if resolved[i].is_empty() {
                 "(not set)".to_string()
             } else {
@@ -167,7 +157,7 @@ pub fn print_config_table(resolved: &[String]) {
                 v.clone()
             }
         };
-        tracing::info!("  {:3}.  {:<35}  {}", i + 1, fd.ev, cell);
+        tracing::info!("  {:3}.  {:<35}  {}", i + 1, field.path, cell);
     }
     tracing::info!("\n  {:-<72}", "");
 }
@@ -183,7 +173,6 @@ pub fn parse_override_numbers(input: &str, max: usize) -> std::collections::Hash
 }
 
 /// Prompt the user for which fields to override (by number).
-/// Returns an empty set if OLINE_NON_INTERACTIVE is set (accept all defaults).
 pub fn read_override_selection(
     lines: &mut io::Lines<impl io::BufRead>,
 ) -> Result<std::collections::HashSet<usize>, io::Error> {
@@ -197,7 +186,7 @@ pub fn read_override_selection(
     if input.is_empty() {
         return Ok(std::collections::HashSet::new());
     }
-    Ok(parse_override_numbers(&input, FIELD_DESCRIPTORS.len()))
+    Ok(parse_override_numbers(&input, CONFIG_FIELDS.len()))
 }
 
 pub fn truncate(s: &str, max: usize) -> String {
@@ -211,15 +200,11 @@ pub fn chrono_format_timestamp(ts: u64) -> String {
     if ts == 0 {
         return "-".to_string();
     }
-    // Simple UTC timestamp formatting without chrono dependency
     let secs = ts;
     let days = secs / 86400;
     let rem = secs % 86400;
     let hours = rem / 3600;
     let mins = (rem % 3600) / 60;
-
-    // Rough date from epoch (good enough for display)
-    // 1970-01-01 + days
     let (year, month, day) = days_to_date(days);
     format!(
         "{:04}-{:02}-{:02} {:02}:{:02}Z",

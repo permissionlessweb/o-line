@@ -178,9 +178,11 @@ async fn init_sdl_deploy(sdl_path: &str) -> Result<(OLineDeployer, String, std::
 
     load_dotenv("OLINE_ENCRYPTED_MNEMONIC");
 
-    let vars: std::collections::HashMap<String, String> = o_line_sdl::FIELD_DESCRIPTORS
-        .iter()
-        .map(|fd| (fd.ev.to_string(), std::env::var(fd.ev).unwrap_or_default()))
+    // Build vars from TOML config + env vars
+    let config_for_vars = build_config_from_env(String::new());
+    let vars: std::collections::HashMap<String, String> = config_for_vars
+        .to_sdl_vars()
+        .into_iter()
         .chain(std::env::vars())
         .collect();
 
@@ -219,7 +221,7 @@ async fn init_sdl_deploy(sdl_path: &str) -> Result<(OLineDeployer, String, std::
 }
 
 // ── Subcommand: deploy ──
-async fn cmd_deploy(raw: bool, parallel: bool) -> Result<(), Box<dyn Error>> {
+async fn cmd_deploy(raw: bool, parallel: bool, provider_selections: Option<std::collections::HashMap<String, String>>) -> Result<(), Box<dyn Error>> {
     tracing::info!("=== Welcome to O-Line Deployer ===\n");
     if parallel {
         tracing::info!("  Strategy: parallel (all phases deployed before snapshot sync wait)");
@@ -230,7 +232,9 @@ async fn cmd_deploy(raw: bool, parallel: bool) -> Result<(), Box<dyn Error>> {
     // Non-interactive mode: read mnemonic + password from env vars (no TTY needed).
     // Set OLINE_NON_INTERACTIVE=1 + OLINE_MNEMONIC=<words> + OLINE_PASSWORD=<pw> to
     // run oline deploy fully unattended (CI / local integration tests).
-    let non_interactive = std::env::var("OLINE_NON_INTERACTIVE").is_ok();
+    // Also forced when --select is used (two-step flow).
+    let non_interactive = provider_selections.is_some()
+        || std::env::var("OLINE_NON_INTERACTIVE").is_ok();
 
     let (mnemonic, password) = if non_interactive {
         let p = std::env::var("OLINE_PASSWORD").unwrap_or_else(|_| "oline-test".to_string());
@@ -301,6 +305,11 @@ async fn cmd_deploy(raw: bool, parallel: bool) -> Result<(), Box<dyn Error>> {
         let session_store = OLineSessionStore::new();
         let mut workflow =
             OLineWorkflow::new_with_session(deployer, OLineStep::FundChildAccounts, session, session_store);
+
+        // Set pre-selected providers for two-step flow (--select a=<addr> ...)
+        if let Some(ref sels) = provider_selections {
+            workflow.ctx.provider_selections = sels.clone();
+        }
 
         if non_interactive {
             // Non-interactive: run entire workflow headless, no TUI.
@@ -450,7 +459,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     cmd_deploy_sdl(sdl_path).await
                 }
             } else {
-                cmd_deploy(a.raw, !a.sequential).await
+                // Parse --select for parallel mode: a=<provider> b=<provider> ...
+                let provider_selections = if let Some(ref select_args) = a.select {
+                    let mut map = std::collections::HashMap::new();
+                    for arg in select_args {
+                        if let Some((phase, provider)) = arg.split_once('=') {
+                            let key = phase.to_lowercase();
+                            if !["a", "b", "c", "e"].contains(&key.as_str()) {
+                                return Err(format!(
+                                    "Invalid phase key '{}'. Use a, b, c, or e.", key
+                                ).into());
+                            }
+                            map.insert(key, provider.to_string());
+                        } else {
+                            return Err(format!(
+                                "Invalid --select format '{}'. Use phase=provider (e.g. a=akash1...)", arg
+                            ).into());
+                        }
+                    }
+                    Some(map)
+                } else {
+                    None
+                };
+                cmd_deploy(a.raw, !a.sequential, provider_selections).await
             }
         }
         Commands::Sdl(a) => {
@@ -551,24 +582,4 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 }
 
-#[test]
-fn test_field_descriptors() {
-    for fd in o_line_sdl::FIELD_DESCRIPTORS.iter() {
-        println!("{:#?}", fd);
-        let mut cfg = OLineConfig::default();
-        let resolved = std::env::var(fd.ev)
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| fd.d.to_string());
 
-        let value = if fd.d == "" && resolved.is_empty() {
-            "".to_string()
-        } else if fd.s && !resolved.is_empty() {
-            resolved
-        } else {
-            "".to_string()
-        };
-
-        cfg.set(fd.ev, value);
-    }
-}

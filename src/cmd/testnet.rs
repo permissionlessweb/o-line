@@ -331,11 +331,11 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
     };
 
     // Inject explicit snapshot URL so sentries don't rely on chain-registry resolution.
-    // OLINE_SNAP_FULL_URL → SNAPSHOT_URL (operator override, survives OFFLINE mode).
-    let snapshot_full_url = var("OLINE_SNAP_FULL_URL").unwrap_or_default();
+    // OLINE_SNAPSHOT_URL → SNAPSHOT_URL (operator override, survives OFFLINE mode).
+    let snapshot_full_url = var("OLINE_SNAPSHOT_URL").unwrap_or_default();
     if !snapshot_full_url.is_empty() {
         a_vars.insert("SNAPSHOT_URL".into(), snapshot_full_url.clone());
-        a_vars.insert("OLINE_SNAP_FULL_URL".into(), snapshot_full_url);
+        a_vars.insert("OLINE_SNAPSHOT_URL".into(), snapshot_full_url);
         tracing::info!("  Snapshot URL: {}", a_vars["SNAPSHOT_URL"]);
     }
 

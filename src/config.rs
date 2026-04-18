@@ -13,33 +13,18 @@ use std::{
 use crate::{
     cli::{print_config_table, prompt_continue, read_input, read_override_selection, read_secret_input},
     crypto::{decrypt_mnemonic, encrypt_mnemonic},
-    FIELD_DESCRIPTORS,
+    toml_config::{TomlConfig, CONFIG_FIELDS},
 };
 
-// ── Field descriptors — the single source of truth for collection logic ───────
-/// ev = env_var (also used as the config storage key)\
-/// p = prompt\
-/// d = default; empty string "" for optional fields\
-/// s = secret
-// ── OLineConfig & OLineDeployer ──
-#[derive(Clone, Debug)]
-pub struct Fd {
-    /// ev = env_var (also the config key)
-    pub ev: &'static str,
-    /// p = prompt
-    pub p: &'static str,
-    /// d = default; empty string "" for optional fields
-    pub d: &'static str,
-    /// s = secret
-    pub s: bool,
-}
-
-// ── OLineConfig & OLineDeployer ──
+// ── OLineConfig ──
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct OLineConfig {
     pub mnemonic: String, // kept typed — always required
     #[serde(flatten)]
     pub fields: HashMap<String, ConfigValue>,
+    /// When loaded from TOML, holds the parsed config for subdomain derivation etc.
+    #[serde(skip)]
+    pub toml_source: Option<TomlConfig>,
 }
 
 impl OLineConfig {
@@ -68,18 +53,30 @@ impl OLineConfig {
         self.fields.insert(key.into(), value.into());
     }
 
-    /// Return a `HashMap<fd.ev, resolved_value>` for every field descriptor.
-    ///
-    /// This is the base variable map for SDL template substitution.
-    /// SDL templates should use `${fd.ev}` as placeholder names.
-    /// Computed/runtime variables (SSH keypairs, S3 creds, peer IDs, accept
-    /// lists, etc.) must be inserted by the caller after this call.
-    pub fn to_sdl_vars(&self) -> std::collections::HashMap<String, String> {
-        let mut vars = std::collections::HashMap::new();
-        for fd in crate::FIELD_DESCRIPTORS.iter() {
-            vars.insert(fd.ev.to_string(), self.val(fd.ev));
+    /// Return a `HashMap<key, value>` for SDL template substitution.
+    pub fn to_sdl_vars(&self) -> HashMap<String, String> {
+        if let Some(ref toml) = self.toml_source {
+            return toml.to_sdl_vars();
         }
-        vars
+        // Fallback: dump all text fields
+        self.fields
+            .iter()
+            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+            .collect()
+    }
+
+    /// Build from a TomlConfig, populating the fields HashMap from SDL vars.
+    pub fn from_toml(toml: &TomlConfig, mnemonic: String) -> Self {
+        let sdl_vars = toml.to_sdl_vars();
+        let mut cfg = OLineConfig {
+            mnemonic,
+            toml_source: Some(toml.clone()),
+            ..Default::default()
+        };
+        for (k, v) in &sdl_vars {
+            cfg.set(k.clone(), v.clone());
+        }
+        cfg
     }
 }
 
@@ -132,26 +129,6 @@ impl From<Vec<String>> for ConfigValue {
     }
 }
 
-#[macro_export]
-macro_rules! define_fields {
-    (
-        $(
-            $ev:literal, $p:literal, $d:literal, $s:literal
-        ),*
-        $(,)?
-    ) => {
-        &[
-            $(
-                crate::config::Fd {
-                    ev: $ev,
-                    p:  $p,
-                    d:  $d,
-                    s:  $s,
-                }
-            ),*
-        ]
-    };
-}
 pub fn load_dotenv(env_key: &str) {
     let env_file = std::env::var("OLINE_ENV_FILE").unwrap_or_else(|_| ".env".into());
     let env_path = Path::new(&env_file);
@@ -175,48 +152,6 @@ pub fn load_dotenv(env_key: &str) {
             }
         }
     }
-}
-
-/// Resolve a field value with priority: **env var > override > FD default**.
-///
-/// This is the canonical resolution function used everywhere a field is loaded
-/// from descriptors — templates, `--load-config`, interactive prompts, and
-/// `collect_config`. Env vars always win.
-pub fn resolve_fd_value(fd: &Fd, override_val: Option<&str>) -> String {
-    // If the env var is set (even to ""), the user's intent is to use that value
-    // and override any saved config. Only fall through to saved/default when the
-    // env var is truly absent (Err from std::env::var).
-    match std::env::var(fd.ev) {
-        Ok(v) if !v.is_empty() => v,
-        Ok(_empty) => {
-            // Env var explicitly set to "" — use FD default, skip saved config.
-            fd.d.to_string()
-        }
-        Err(_) => {
-            // Env var not set — fall through to saved config > FD default.
-            override_val
-                .filter(|v| !v.is_empty())
-                .unwrap_or(fd.d)
-                .to_string()
-        }
-    }
-}
-
-/// Resolve a default value with priority: env var > saved config > hardcoded default.
-pub fn default_val(env_key: &str, saved: Option<&str>, hardcoded: &str) -> String {
-    match std::env::var(env_key) {
-        Ok(v) if !v.is_empty() => v,
-        Ok(_empty) => hardcoded.to_string(),
-        Err(_) => saved.unwrap_or(hardcoded).to_string(),
-    }
-}
-
-/// Like `default_val` but for optional values (no hardcoded fallback).
-pub fn default_val_opt(env_key: &str, saved: Option<&str>) -> Option<String> {
-    std::env::var(env_key)
-        .ok()
-        .filter(|v| !v.is_empty())
-        .or_else(|| saved.map(String::from))
 }
 
 pub fn read_encrypted_mnemonic_from_env() -> Result<String, Box<dyn Error>> {
@@ -314,23 +249,27 @@ pub fn config_path() -> PathBuf {
         .join("config.enc")
 }
 
-/// Build an `OLineConfig` entirely from environment variables and FD defaults.
+/// Build an `OLineConfig` from TOML config file + env var overrides.
 ///
-/// Used for non-interactive / CI invocations (`OLINE_NON_INTERACTIVE=1`) where
-/// no human is present to answer config prompts.  Every field is resolved via
-/// `resolve_fd_value`, so setting the corresponding env var (e.g. `OMNIBUS_IMAGE`,
-/// `OLINE_RPC_ENDPOINT`, …) controls the value; unset fields fall back to their
-/// hardcoded FD defaults.
+/// Loads `config.toml` if present, otherwise uses struct defaults.
+/// All fields are overridable via deterministic env vars: `OLINE_<PATH>`.
 pub fn build_config_from_env(mnemonic: String) -> OLineConfig {
-    let mut cfg = OLineConfig {
-        mnemonic,
-        ..Default::default()
+    let toml_cfg = if Path::new("config.toml").exists() {
+        match TomlConfig::load("config.toml") {
+            Ok(t) => {
+                tracing::info!("  Loaded config.toml");
+                t
+            }
+            Err(e) => {
+                tracing::warn!("  Failed to parse config.toml: {} — using defaults + env", e);
+                TomlConfig::from_defaults()
+            }
+        }
+    } else {
+        TomlConfig::from_defaults()
     };
-    for fd in FIELD_DESCRIPTORS.iter() {
-        let value = resolve_fd_value(fd, None);
-        cfg.set(fd.ev, value);
-    }
-    cfg
+
+    OLineConfig::from_toml(&toml_cfg, mnemonic)
 }
 
 pub fn save_config(c: &OLineConfig, pw: &str) -> Result<(), Box<dyn Error>> {
@@ -351,90 +290,70 @@ pub fn has_saved_config() -> bool {
     config_path().exists()
 }
 
-/// Collect deployment config interactively.
-///
-/// By default, builds from env vars + FD defaults only (fresh every time).
-/// Pass `saved_config_path` to load a previously saved session config as baseline.
+/// Collect deployment config interactively using TOML config fields.
 pub async fn collect_config(
     password: &str,
     mnemonic: String,
     lines: &mut io::Lines<impl io::BufRead>,
 ) -> Result<OLineConfig, Box<dyn Error>> {
-    collect_config_inner(password, mnemonic, lines, None).await
-}
+    // Load TOML config as baseline
+    let mut toml_cfg = if Path::new("config.toml").exists() {
+        match TomlConfig::load("config.toml") {
+            Ok(t) => {
+                tracing::info!("  Loaded config.toml");
+                t
+            }
+            Err(e) => {
+                tracing::warn!("  Failed to parse config.toml: {}", e);
+                TomlConfig::from_defaults()
+            }
+        }
+    } else {
+        TomlConfig::from_defaults()
+    };
 
-/// Like `collect_config`, but loads a saved config file as baseline.
-/// Values from the saved config fill in where env vars are absent.
-pub async fn collect_config_from_saved(
-    password: &str,
-    mnemonic: String,
-    lines: &mut io::Lines<impl io::BufRead>,
-    saved_config_path: &str,
-) -> Result<OLineConfig, Box<dyn Error>> {
-    collect_config_inner(password, mnemonic, lines, Some(saved_config_path)).await
-}
-
-async fn collect_config_inner(
-    password: &str,
-    mnemonic: String,
-    lines: &mut io::Lines<impl io::BufRead>,
-    saved_config_path: Option<&str>,
-) -> Result<OLineConfig, Box<dyn Error>> {
-    // Only load saved config when explicitly requested via path.
-    let saved = match saved_config_path {
-        Some(path) => {
-            let data = fs::read_to_string(path)
-                .map_err(|e| format!("Failed to read config {}: {}", path, e))?;
-            let decrypted = crate::crypto::decrypt_mnemonic(&data.trim(), password)
-                .map_err(|e| format!("Failed to decrypt config: {}", e))?;
-            match serde_json::from_str::<OLineConfig>(&decrypted) {
-                Ok(cfg) => {
-                    tracing::info!("  Loaded saved config from {}\n", path);
-                    Some(cfg)
-                }
-                Err(e) => {
-                    tracing::warn!("  Failed to parse saved config: {} — using env + defaults.\n", e);
-                    None
+    // Merge saved config values if available
+    if has_saved_config() {
+        tracing::info!("  Found saved config.");
+        if let Some(saved) = load_config(password) {
+            // Apply saved values as fallbacks for empty TOML fields
+            for field in CONFIG_FIELDS {
+                let env_var = crate::toml_config::env_key(field.path);
+                if toml_cfg.get_value(field.path).is_empty() {
+                    if let Some(saved_val) = saved.get_str(&env_var) {
+                        if !saved_val.is_empty() {
+                            toml_cfg.set_value(field.path, saved_val.to_string());
+                        }
+                    }
                 }
             }
         }
-        None => None,
-    };
-
-    // Resolve all values: env var > (optional saved config) > FD default.
-    let resolved_values: Vec<String> = FIELD_DESCRIPTORS
-        .iter()
-        .map(|fd| {
-            let saved_val = saved
-                .as_ref()
-                .and_then(|s| s.get_str(fd.ev));
-            resolve_fd_value(fd, saved_val)
-        })
-        .collect();
-
-    // Show numbered overview; let user pick which fields to override.
-    print_config_table(&resolved_values);
-    let overrides = read_override_selection(lines)?;
-
-    let mut cfg = OLineConfig {
-        mnemonic,
-        ..Default::default()
-    };
-
-    for (i, fd) in FIELD_DESCRIPTORS.iter().enumerate() {
-        let value = if overrides.contains(&i) {
-            if fd.s {
-                read_secret_input(fd.p, Some(&resolved_values[i]))?
-            } else {
-                read_input(lines, fd.p, Some(&resolved_values[i]))?
-            }
-        } else {
-            resolved_values[i].clone()
-        };
-        cfg.set(fd.ev, value);
     }
 
-    // Offer to save updated config.
+    // Resolve current values for display
+    let resolved: Vec<String> = CONFIG_FIELDS
+        .iter()
+        .map(|f| toml_cfg.get_value(f.path))
+        .collect();
+
+    // Show table and let user pick overrides
+    print_config_table(&resolved);
+    let overrides = read_override_selection(lines)?;
+
+    for (i, field) in CONFIG_FIELDS.iter().enumerate() {
+        if overrides.contains(&i) {
+            let value = if field.is_secret {
+                read_secret_input(field.description, Some(&resolved[i]))?
+            } else {
+                read_input(lines, field.description, Some(&resolved[i]))?
+            };
+            toml_cfg.set_value(field.path, value);
+        }
+    }
+
+    let cfg = OLineConfig::from_toml(&toml_cfg, mnemonic);
+
+    // Offer to save
     if prompt_continue(lines, "Save config for next time?")? {
         if let Err(e) = save_config(&cfg, password) {
             tracing::info!("  Warning: failed to save config: {}", e);
@@ -449,7 +368,6 @@ async fn collect_config_inner(
 // ── Portable deployment config ──
 
 /// Peer ID strings used as SDL rendering inputs.
-/// Empty strings mean "not yet deployed / not yet known".
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct PeerInputs {
     pub snapshot: String,
@@ -461,31 +379,36 @@ pub struct PeerInputs {
 
 /// A portable, non-secret snapshot of the deployment configuration.
 ///
-/// Omits the mnemonic and all fields marked secret (`Fd.s = true`).
+/// Omits the mnemonic and all fields marked secret.
 /// Safe to commit alongside SDL files or share with teammates.
-/// Load it with `oline sdl --load-config` to skip interactive prompts.
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct DeployConfig {
-    /// Non-secret config values keyed by env var name.
     pub config: HashMap<String, String>,
-    /// Peer IDs and statesync RPC inputs for SDL rendering.
     pub peers: PeerInputs,
 }
 
 impl DeployConfig {
-    /// Build from an `OLineConfig`, stripping the mnemonic and all secret fields.
-    pub fn from_config(c: &OLineConfig, descriptors: &[Fd], peers: PeerInputs) -> Self {
+    /// Build from an `OLineConfig`, stripping secrets.
+    pub fn from_oline_config(c: &OLineConfig, peers: PeerInputs) -> Self {
         let mut config: HashMap<String, String> = HashMap::new();
-        for fd in descriptors {
-            if fd.s {
+        for field in CONFIG_FIELDS {
+            if field.is_secret {
                 continue;
             }
-            config.insert(fd.ev.to_string(), c.val(fd.ev));
+            let env_var = crate::toml_config::env_key(field.path);
+            config.insert(env_var, c.val(&crate::toml_config::env_key(field.path)));
+        }
+        // Also include SDL var keys from the TOML source for full compat
+        if let Some(ref toml) = c.toml_source {
+            for (k, v) in toml.to_sdl_vars() {
+                if !TomlConfig::is_secret_env(&k) {
+                    config.entry(k).or_insert(v);
+                }
+            }
         }
         Self { config, peers }
     }
 
-    /// Serialize to pretty-printed JSON and write to a file, creating parent dirs as needed.
     pub fn write_to_file(&self, path: &Path) -> Result<(), Box<dyn Error>> {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -499,9 +422,7 @@ impl DeployConfig {
 
 // ── Raw template substitution ──
 
-/// Raw text-based `${VAR}` substitution. Unlike `apply_template` (which is
-/// YAML-aware and only substitutes values), this replaces placeholders
-/// everywhere — including YAML mapping keys like `${SNAPSHOT_SVC}:`.
+/// Raw text-based `${VAR}` substitution.
 pub fn substitute_template_raw(
     template: &str,
     variables: &HashMap<String, String>,
@@ -534,14 +455,8 @@ pub fn substitute_template_raw(
     Ok(result)
 }
 
-/// Inject `credentials:` blocks into rendered SDL for services whose `image:` matches the
-/// registry URL.
-///
-/// Parses the SDL as YAML, walks each service profile, and if its `image` starts with
-/// `registry_host`, inserts a `credentials` mapping with `host`, `username`, `password`.
-/// Re-serializes to YAML.
-///
-/// Called after `substitute_template_raw()` when `OLINE_REGISTRY_URL` is non-empty.
+/// Inject `credentials:` blocks into rendered SDL for services whose `image:` matches
+/// the registry URL.
 pub fn inject_registry_credentials(
     rendered_sdl: &str,
     registry_url: &str,
@@ -550,14 +465,12 @@ pub fn inject_registry_credentials(
 ) -> Result<String, Box<dyn Error>> {
     let mut doc: serde_yaml::Value = serde_yaml::from_str(rendered_sdl)?;
 
-    // Strip scheme for host matching
     let registry_host = registry_url
         .trim_end_matches('/')
         .strip_prefix("https://")
         .or_else(|| registry_url.strip_prefix("http://"))
         .unwrap_or(registry_url);
 
-    // Walk services → each service → image field
     if let Some(services) = doc.get_mut("services") {
         if let Some(services_map) = services.as_mapping_mut() {
             for (_svc_name, svc_val) in services_map.iter_mut() {
@@ -596,7 +509,6 @@ pub fn inject_registry_credentials(
 }
 
 pub fn days_to_date(days: u64) -> (u64, u64, u64) {
-    // Simple Gregorian calendar conversion from days since epoch
     let mut y = 1970;
     let mut remaining = days;
 

@@ -473,21 +473,20 @@ impl OLineDeployer {
             match result {
                 AkashStepResult::Continue => continue,
                 AkashStepResult::NeedsInput(InputRequired::SelectProvider { bids }) => {
-                    // Prefer a trusted provider if one is bidding, else cheapest.
+                    // Require a trusted provider — never auto-select cheapest.
                     let trusted = TrustedProviderStore::open(TrustedProviderStore::default_path());
-                    let choice = trusted.select_from_bids(&bids).unwrap_or_else(|| {
-                        let cheapest = bids
-                            .iter()
-                            .min_by_key(|b| b.price)
-                            .expect("no bids available");
-                        tracing::info!(
-                            "  [{}] no trusted provider bidding — cheapest: {} ({} uakt/block)",
-                            label,
-                            cheapest.provider,
-                            cheapest.price
-                        );
-                        cheapest.provider.clone()
-                    });
+                    let choice = match trusted.select_from_bids(&bids) {
+                        Some(p) => p,
+                        None => {
+                            tracing::warn!(
+                                "  [{}] no trusted provider bidding among {} bid(s) — add trusted providers or use interactive mode",
+                                label, bids.len()
+                            );
+                            return Err(DeployError::InvalidState(
+                                "No trusted provider bidding. Use interactive mode to select a provider and trust it.".into()
+                            ));
+                        }
+                    };
                     DeploymentWorkflow::<AkashClient>::select_provider(&mut state, &choice)?;
                 }
                 AkashStepResult::NeedsInput(InputRequired::ProvideSdl) => {
@@ -543,20 +542,20 @@ impl OLineDeployer {
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
         let trusted_store = TrustedProviderStore::open(TrustedProviderStore::default_path());
 
-        // Non-interactive / CI: prefer trusted provider, fall back to cheapest.
+        // Non-interactive / CI: require a trusted provider — never auto-select cheapest.
         if std::env::var("OLINE_NON_INTERACTIVE").is_ok()
             || std::env::var("OLINE_AUTO_SELECT").is_ok()
         {
-            let provider = trusted_store.select_from_bids(bids).unwrap_or_else(|| {
-                let cheapest = bids.iter().min_by_key(|b| b.price).unwrap();
-                tracing::info!(
-                    "  [auto] no trusted provider bidding — selected cheapest: {} ({} uakt/block)",
-                    cheapest.provider,
-                    cheapest.price
-                );
-                cheapest.provider.clone()
-            });
-            return Ok(provider);
+            match trusted_store.select_from_bids(bids) {
+                Some(provider) => return Ok(provider),
+                None => {
+                    tracing::warn!(
+                        "  No trusted provider bidding among {} bid(s). Run interactively to select and trust a provider.",
+                        bids.len()
+                    );
+                    return Err("No trusted provider bidding. Run interactively to select and trust a provider.".into());
+                }
+            }
         }
 
         tracing::info!("  ═══════════════════════════════════════════════════════════════════════");

@@ -1,3 +1,4 @@
+pub mod console;
 pub mod deploy;
 pub mod dns;
 pub mod endpoints;

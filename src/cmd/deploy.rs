@@ -40,9 +40,15 @@ with_examples! {
         /// With --select, completes the deployment with the chosen provider.
         #[arg(long, value_name = "PATH")]
         pub sdl: Option<String>,
-        /// Select a provider for an existing deployment (step 2 of --sdl flow).
-        /// Usage: oline deploy --sdl <path> --select <DSEQ> <PROVIDER_ADDRESS>
-        #[arg(long, value_name = "DSEQ", num_args = 2, value_names = ["DSEQ", "PROVIDER"])]
+        /// Select provider(s) for an existing deployment (step 2).
+        ///
+        /// For --sdl: --select <DSEQ> <PROVIDER_ADDRESS>
+        /// For --parallel: --select a=<PROVIDER> b=<PROVIDER> c=<PROVIDER> [e=<PROVIDER>]
+        ///
+        /// Phase keys: a (snapshot+seed), b (tackles), c (forwards), e (relayer).
+        /// Only phases that printed NEEDS_SELECTION=true require a selection.
+        /// Trusted/auto-selected phases are kept automatically.
+        #[arg(long, value_name = "SELECTION", num_args = 1.., value_delimiter = ' ')]
         pub select: Option<Vec<String>>,
     }
     => "../../docs/examples/deploy.md"
@@ -734,7 +740,7 @@ pub async fn cmd_bootstrap_private(args: BootstrapArgs) -> Result<(), Box<dyn Er
     let snap_default: String = if let Some(url) = args.snapshot.clone() {
         url
     } else {
-        let full = var("OLINE_SNAP_FULL_URL").unwrap_or_default();
+        let full = var("OLINE_SNAPSHOT_URL").unwrap_or_default();
         let state_url = var("OLINE_SNAP_STATE_URL").unwrap_or_default();
         let base_url = var("OLINE_SNAP_BASE_URL").unwrap_or_default();
         if !full.is_empty() {

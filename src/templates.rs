@@ -1,13 +1,11 @@
 //! Named deployment templates.
 //!
-//! A template provides a named, curated set of field overrides applied on top of
-//! the baseline `FIELD_DESCRIPTORS` defaults.  Running `oline init --template <name>`
-//! is non-interactive: it builds an `OLineConfig` directly from FD defaults + template
-//! overrides and writes `deploy-config.json` without any prompts.
+//! A template provides a named, curated set of config overrides applied on top of
+//! the TOML config defaults.
 
 use crate::{
-    config::{resolve_fd_value, OLineConfig},
-    FIELD_DESCRIPTORS,
+    config::OLineConfig,
+    toml_config::TomlConfig,
 };
 
 // ── Template definition ───────────────────────────────────────────────────────
@@ -15,41 +13,32 @@ use crate::{
 pub struct DeployTemplate {
     pub name: &'static str,
     pub description: &'static str,
-    /// Per-field overrides: `(env_var, value)`.
-    /// Applied on top of `FIELD_DESCRIPTORS` defaults.
+    /// Per-field overrides: `(config_path, value)`.
+    /// Applied on top of TOML config defaults.
     pub overrides: &'static [(&'static str, &'static str)],
 }
 
 impl DeployTemplate {
-    /// Build a fully-populated `OLineConfig` from FIELD_DESCRIPTOR defaults
-    /// plus this template's overrides — no user input required.
-    /// Build a fully-populated `OLineConfig`.
-    ///
-    /// Resolution order (highest → lowest):
-    /// 1. Environment variable (`fd.ev`)
-    /// 2. Template override for this `(category, key)`
-    /// 3. `FIELD_DESCRIPTOR` default (`fd.d`)
+    /// Build a fully-populated `OLineConfig` from TOML defaults + template overrides.
+    /// Env vars still take highest priority.
     pub fn build_config(&self) -> OLineConfig {
-        let mut cfg = OLineConfig::default();
-        for fd in FIELD_DESCRIPTORS.iter() {
-            let template_override = self
-                .overrides
-                .iter()
-                .find(|(ev, _)| *ev == fd.ev)
-                .map(|(_, v)| *v);
-            cfg.set(fd.ev, resolve_fd_value(fd, template_override));
+        let mut toml_cfg = TomlConfig::from_defaults();
+        // Apply template overrides before env resolution
+        for (path, value) in self.overrides {
+            toml_cfg.set_value(path, value.to_string());
         }
-        cfg
+        // Re-apply env overrides (they take priority)
+        toml_cfg.apply_env_overrides();
+        OLineConfig::from_toml(&toml_cfg, String::new())
     }
 }
 
 // ── Built-in templates ────────────────────────────────────────────────────────
 
-/// Terp Network mainnet — all values match the `FIELD_DESCRIPTORS` defaults.
-/// Used as the canonical stable baseline for `oline init --template terp-mainnet`.
+/// Terp Network mainnet — all values match the config defaults.
 const TERP_MAINNET: DeployTemplate = DeployTemplate {
     name: "terp-mainnet",
-    description: "Terp Network mainnet (morocco-1) — all FIELD_DESCRIPTOR defaults",
+    description: "Terp Network mainnet (morocco-1) — default config",
     overrides: &[],
 };
 

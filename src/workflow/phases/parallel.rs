@@ -234,6 +234,15 @@ fn find_bid_for_provider(bids: &[Bid], provider: &str) -> Result<Bid, DeployErro
 /// In interactive mode, the operator sees one prompt per phase in sequence
 /// ("queued"), allowing quick selection before all lease creation proceeds
 /// in parallel.
+/// Result of provider selection for one phase.
+enum ProviderChoice {
+    /// Provider was selected (trusted, pre-selected, or interactive).
+    Selected(String),
+    /// Non-interactive mode, no trusted/pre-selected provider — needs manual selection.
+    /// Contains the phase label for structured output.
+    NeedsSelection,
+}
+
 async fn select_provider_for_phase(
     deployer: &OLineDeployer,
     bids: &[Bid],
@@ -241,36 +250,41 @@ async fn select_provider_for_phase(
     lines: &mut Lines<impl BufRead>,
     trusted_store: &TrustedProviderStore,
     non_interactive: bool,
-) -> Result<String, DeployError> {
-    // Try trusted list first.
+    pre_selected: Option<&str>,
+) -> Result<ProviderChoice, DeployError> {
+    // 1. Check pre-selected provider (from --select flag).
+    if let Some(provider) = pre_selected {
+        // Verify this provider actually bid
+        if bids.iter().any(|b| b.provider == provider) {
+            tracing::info!("  [{}] Using pre-selected provider: {}", label, provider);
+            return Ok(ProviderChoice::Selected(provider.to_string()));
+        } else {
+            return Err(DeployError::InvalidState(
+                format!("[{}] Pre-selected provider {} did not bid on this phase.", label, provider)
+            ));
+        }
+    }
+
+    // 2. Try trusted list.
     if let Some(provider) = trusted_store.select_from_bids(bids) {
-        return Ok(provider);
+        return Ok(ProviderChoice::Selected(provider));
     }
 
-    // No trusted provider bidding.
+    // 3. Non-interactive: signal that this phase needs manual selection.
     if non_interactive {
-        let cheapest = bids
-            .iter()
-            .min_by_key(|b| b.price)
-            .ok_or_else(|| DeployError::InvalidState(format!("[{}] No bids received", label)))?;
-        tracing::info!(
-            "  [{}] No trusted provider — auto-selecting cheapest: {} ({} uakt/block)",
-            label,
-            cheapest.provider,
-            cheapest.price
-        );
-        return Ok(cheapest.provider.clone());
+        return Ok(ProviderChoice::NeedsSelection);
     }
 
-    // Interactive: show prompt.
+    // 4. Interactive: show prompt.
     tracing::info!(
         "  [{}] No trusted provider bidding — select interactively:",
         label
     );
-    deployer
+    let provider = deployer
         .interactive_select_provider(bids, lines)
         .await
-        .map_err(|e| DeployError::InvalidState(format!("Provider selection failed: {}", e)))
+        .map_err(|e| DeployError::InvalidState(format!("Provider selection failed: {}", e)))?;
+    Ok(ProviderChoice::Selected(provider))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -860,19 +874,40 @@ pub async fn deploy_all_units(
         }
     };
 
-    // ── 5. Phase 2: Sequential provider selection (queued prompts) ───────────
+    // ── 5. Phase 2: Provider selection ─────────────────────────────────────────
     //
     // For each phase that received bids:
-    //   1. If a trusted provider is bidding → auto-select it
-    //   2. If non-interactive mode → auto-select cheapest
-    //   3. Otherwise → show interactive prompt (queued: one per phase)
-    //
-    // This ensures the operator sees all provider selection prompts in sequence,
-    // can quickly submit each choice, and all lease creation proceeds in parallel.
-    tracing::info!("  ── Provider selection (queued) ──");
+    //   1. Pre-selected provider (from --select a=<addr> b=<addr>) → use it
+    //   2. Trusted provider bidding → auto-select (cheapest among trusted)
+    //   3. Non-interactive mode, no match → print bids + exit (two-step flow)
+    //   4. Interactive mode → show prompt and let operator choose
+    tracing::info!("  ── Provider selection ──");
     let trusted_store = TrustedProviderStore::open(TrustedProviderStore::default_path());
     let non_interactive = std::env::var("OLINE_NON_INTERACTIVE").is_ok()
         || std::env::var("OLINE_AUTO_SELECT").is_ok();
+    let selections = &w.ctx.provider_selections;
+
+    // Helper: print structured bid output for one phase
+    async fn print_phase_bids(deployer: &OLineDeployer, phase: &str, dseq: u64, bids: &[Bid], auto_selected: Option<&str>) {
+        println!("PHASE_{} DSEQ={} BIDS={}", phase.to_uppercase(), dseq, bids.len());
+        for (i, bid) in bids.iter().enumerate() {
+            let price_akt = bid.price as f64 / 1_000_000.0;
+            let info = deployer.client.query_provider_info(&bid.provider).await.ok().flatten();
+            let host = info.as_ref().map(|i| i.host_uri.as_str()).unwrap_or("unknown");
+            let email = info.as_ref().map(|i| i.email.as_str()).unwrap_or("");
+            let website = info.as_ref().map(|i| i.website.as_str()).unwrap_or("");
+            println!("  BID[{}] provider={} price={} price_akt={:.6} host={} email={} website={}",
+                i, bid.provider, bid.price, price_akt, host, email, website);
+        }
+        if let Some(addr) = auto_selected {
+            println!("  AUTO_SELECTED={} (trusted)", addr);
+        } else {
+            println!("  NEEDS_SELECTION=true");
+        }
+    }
+
+    // Collect choices — track which phases need manual selection
+    let mut needs_selection = false;
 
     // Phase A — required
     let choice_a = select_provider_for_phase(
@@ -882,50 +917,131 @@ pub async fn deploy_all_units(
         lines,
         &trusted_store,
         non_interactive,
+        selections.get("a").map(|s| s.as_str()),
     )
     .await?;
-    DeploymentWorkflow::<AkashClient>::select_provider(&mut state_a, &choice_a)?;
 
     // Phase B
-    if let (Some(ref bids), Some(ref mut state)) = (&bids_b, &mut state_b) {
-        let choice = select_provider_for_phase(
+    let choice_b = if let Some(ref bids) = bids_b {
+        Some(select_provider_for_phase(
             &w.ctx.deployer,
             bids,
             "oline-phase-b",
             lines,
             &trusted_store,
             non_interactive,
+            selections.get("b").map(|s| s.as_str()),
         )
-        .await?;
-        DeploymentWorkflow::<AkashClient>::select_provider(state, &choice)?;
-    }
+        .await?)
+    } else { None };
 
     // Phase C
-    if let (Some(ref bids), Some(ref mut state)) = (&bids_c, &mut state_c) {
-        let choice = select_provider_for_phase(
+    let choice_c = if let Some(ref bids) = bids_c {
+        Some(select_provider_for_phase(
             &w.ctx.deployer,
             bids,
             "oline-phase-c",
             lines,
             &trusted_store,
             non_interactive,
+            selections.get("c").map(|s| s.as_str()),
         )
-        .await?;
-        DeploymentWorkflow::<AkashClient>::select_provider(state, &choice)?;
-    }
+        .await?)
+    } else { None };
 
     // Phase E
-    if let (Some(ref bids), Some(ref mut state)) = (&bids_e, &mut state_e) {
-        let choice = select_provider_for_phase(
+    let choice_e = if let Some(ref bids) = bids_e {
+        Some(select_provider_for_phase(
             &w.ctx.deployer,
             bids,
             "oline-phase-e",
             lines,
             &trusted_store,
             non_interactive,
+            selections.get("e").map(|s| s.as_str()),
         )
-        .await?;
-        DeploymentWorkflow::<AkashClient>::select_provider(state, &choice)?;
+        .await?)
+    } else { None };
+
+    // Check if any phase needs manual selection
+    if matches!(&choice_a, ProviderChoice::NeedsSelection) { needs_selection = true; }
+    if matches!(&choice_b, Some(ProviderChoice::NeedsSelection)) { needs_selection = true; }
+    if matches!(&choice_c, Some(ProviderChoice::NeedsSelection)) { needs_selection = true; }
+    if matches!(&choice_e, Some(ProviderChoice::NeedsSelection)) { needs_selection = true; }
+
+    // If any phase needs selection, print ALL bids and exit with --select instructions.
+    if needs_selection {
+        tracing::info!("  Some phases need manual provider selection. Printing bids...");
+        println!();
+
+        let auto_a = match &choice_a {
+            ProviderChoice::Selected(p) => Some(p.as_str()),
+            _ => None,
+        };
+        print_phase_bids(&w.ctx.deployer, "a", state_a.dseq.unwrap_or(0), &bids_a, auto_a).await;
+
+        if let Some(ref bids) = bids_b {
+            let auto_b = match &choice_b {
+                Some(ProviderChoice::Selected(p)) => Some(p.as_str()),
+                _ => None,
+            };
+            print_phase_bids(&w.ctx.deployer, "b", state_b.as_ref().and_then(|s| s.dseq).unwrap_or(0), bids, auto_b).await;
+        }
+        if let Some(ref bids) = bids_c {
+            let auto_c = match &choice_c {
+                Some(ProviderChoice::Selected(p)) => Some(p.as_str()),
+                _ => None,
+            };
+            print_phase_bids(&w.ctx.deployer, "c", state_c.as_ref().and_then(|s| s.dseq).unwrap_or(0), bids, auto_c).await;
+        }
+        if let Some(ref bids) = bids_e {
+            let auto_e = match &choice_e {
+                Some(ProviderChoice::Selected(p)) => Some(p.as_str()),
+                _ => None,
+            };
+            print_phase_bids(&w.ctx.deployer, "e", state_e.as_ref().and_then(|s| s.dseq).unwrap_or(0), bids, auto_e).await;
+        }
+
+        // Build the --select command
+        let mut select_parts: Vec<String> = Vec::new();
+        if matches!(&choice_a, ProviderChoice::NeedsSelection) {
+            select_parts.push("a=<PROVIDER>".to_string());
+        }
+        if matches!(&choice_b, Some(ProviderChoice::NeedsSelection)) {
+            select_parts.push("b=<PROVIDER>".to_string());
+        }
+        if matches!(&choice_c, Some(ProviderChoice::NeedsSelection)) {
+            select_parts.push("c=<PROVIDER>".to_string());
+        }
+        if matches!(&choice_e, Some(ProviderChoice::NeedsSelection)) {
+            select_parts.push("e=<PROVIDER>".to_string());
+        }
+        println!();
+        println!("To complete deployment, run:");
+        println!("  oline deploy --parallel --select {}", select_parts.join(" "));
+        println!();
+        println!("WAITING_FOR_SELECTION=true");
+
+        // Store DSEQs in session for resumption
+        w.step = OLineStep::Complete;
+        return Ok(StepResult::Continue);
+    }
+
+    // All phases have providers — apply selections
+    match choice_a {
+        ProviderChoice::Selected(ref p) => {
+            DeploymentWorkflow::<AkashClient>::select_provider(&mut state_a, p)?;
+        }
+        _ => unreachable!(),
+    }
+    if let (Some(ProviderChoice::Selected(ref p)), Some(ref mut state)) = (&choice_b, &mut state_b) {
+        DeploymentWorkflow::<AkashClient>::select_provider(state, p)?;
+    }
+    if let (Some(ProviderChoice::Selected(ref p)), Some(ref mut state)) = (&choice_c, &mut state_c) {
+        DeploymentWorkflow::<AkashClient>::select_provider(state, p)?;
+    }
+    if let (Some(ProviderChoice::Selected(ref p)), Some(ref mut state)) = (&choice_e, &mut state_e) {
+        DeploymentWorkflow::<AkashClient>::select_provider(state, p)?;
     }
 
     // ── 6. Batch CreateLease (all phases in one tx) ────────────────────────
@@ -2115,6 +2231,56 @@ pub async fn wait_snapshot_ready(
             "  Waiting up to {}m for snapshot node to sync (catching_up = false)...",
             timeout_secs / 60
         );
+
+        // ── Background log stream: show container output during wait ──
+        // Spawn a task that streams provider container logs so the operator
+        // can see bootstrap progress, snapshot extraction, sync status, etc.
+        // instead of just "Peer ID fetch attempt N/120" polling messages.
+        let log_abort = {
+            use akash_deploy_rs::logs::ws::WsLogStream;
+            use akash_deploy_rs::{LogStreamConfig, ProviderAuth};
+            use futures_util::StreamExt;
+
+            let phase_a_state = w.ctx.state(DeployPhase::SpecialTeams);
+            let provider_addr = phase_a_state.and_then(|s| s.selected_provider.clone());
+            let host_uri = provider_addr.as_ref()
+                .and_then(|addr| w.ctx.provider_hosts.get(addr).cloned());
+            let lease_id = phase_a_state.and_then(|s| s.lease_id.clone());
+
+            if let (Some(host), Some(lease)) = (host_uri, lease_id) {
+                let jwt = w.ctx.deployer.client.generate_jwt(&lease.owner).await.ok();
+                if let Some(jwt) = jwt {
+                    let config = LogStreamConfig::new()
+                        .with_follow(true)
+                        .with_tail(20)
+                        .with_service("oline-a-snapshot");
+                    let auth = ProviderAuth::Jwt { token: jwt };
+                    let handle = tokio::spawn(async move {
+                        match WsLogStream::connect(&host, &lease, &auth, &config).await {
+                            Ok(mut stream) => {
+                                while let Some(line) = stream.next().await {
+                                    match line {
+                                        Ok(msg) => {
+                                            // Prefix with [oline] for clarity
+                                            let trimmed = msg.message.trim();
+                                            if !trimmed.is_empty() {
+                                                tracing::info!("  [oline] {}", trimmed);
+                                            }
+                                        }
+                                        Err(_) => break,
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::debug!("  [log-stream] Could not connect: {}", e);
+                            }
+                        }
+                    });
+                    Some(handle)
+                } else { None }
+            } else { None }
+        };
+
         // Use a generous initial wait since snapshot sync takes ~30 min in production.
         let boot_wait = var("OLINE_RPC_INITIAL_WAIT")
             .ok()
@@ -2132,6 +2298,11 @@ pub async fn wait_snapshot_ready(
             None => {
                 tracing::info!("  Warning: snapshot peer ID not resolved within timeout.");
             }
+        }
+
+        // Stop background log stream
+        if let Some(handle) = log_abort {
+            handle.abort();
         }
     }
 

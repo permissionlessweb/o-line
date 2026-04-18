@@ -114,6 +114,12 @@ pub struct OLineContext {
     // Set to true when Phase A is signaled during deploy_all_units so that
     // wait_snapshot_ready does not re-signal (which would launch a second process).
     pub phase_a_bootstrapped: bool,
+
+    // ── Pre-selected providers (two-step flow) ──────────────────────────────
+    // Maps phase label (e.g. "a", "b", "c", "e") to provider address.
+    // Set by `--select a=<provider> b=<provider> ...` on the CLI.
+    // When populated, provider selection skips bidding and uses these directly.
+    pub provider_selections: HashMap<String, String>,
 }
 
 impl OLineContext {
@@ -145,6 +151,7 @@ impl OLineContext {
             provider_hosts: HashMap::new(),
             units: Vec::new(),
             phase_a_bootstrapped: false,
+            provider_selections: HashMap::new(),
         }
     }
 
@@ -175,6 +182,7 @@ impl OLineContext {
             provider_hosts: HashMap::new(),
             units: Vec::new(),
             phase_a_bootstrapped: false,
+            provider_selections: HashMap::new(),
         }
     }
 

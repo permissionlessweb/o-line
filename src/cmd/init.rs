@@ -1,4 +1,5 @@
-use crate::{cli::*, config::{resolve_fd_value, *}, templates, with_examples, FIELD_DESCRIPTORS};
+use crate::{cli::*, config::*, templates, with_examples};
+use crate::toml_config::{TomlConfig, CONFIG_FIELDS};
 use std::collections::HashSet;
 use std::{
     error::Error,
@@ -14,8 +15,6 @@ with_examples! {
         pub output: String,
 
         /// Use a named template for non-interactive config generation.
-        /// All FIELD_DESCRIPTOR defaults are applied; template overrides are layered on top.
-        /// Run with --list-templates to see available names.
         #[arg(long, short = 't', value_name = "NAME")]
         pub template: Option<String>,
 
@@ -49,7 +48,7 @@ pub async fn cmd_init(args: &InitArgs) -> Result<(), Box<dyn Error>> {
         tracing::info!("  Using template: {} — {}", t.name, t.description);
         let config = t.build_config();
         let peers = PeerInputs::default();
-        let deploy_config = DeployConfig::from_config(&config, &FIELD_DESCRIPTORS, peers);
+        let deploy_config = DeployConfig::from_oline_config(&config, peers);
         deploy_config.write_to_file(Path::new(&args.output))?;
         tracing::info!("\n  Config written to: {}", args.output);
         tracing::info!("  Review and customise, then render SDL with:");
@@ -61,52 +60,53 @@ pub async fn cmd_init(args: &InitArgs) -> Result<(), Box<dyn Error>> {
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines();
 
-    // Try saved config as a starting point.
-    let saved = if has_saved_config() {
+    // Load TOML config as baseline
+    let mut toml_cfg = if std::path::Path::new("config.toml").exists() {
+        TomlConfig::load("config.toml").unwrap_or_else(|_| TomlConfig::from_defaults())
+    } else {
+        TomlConfig::from_defaults()
+    };
+
+    // Merge saved config if available
+    if has_saved_config() {
         tracing::info!("  Found saved config.");
         let password = rpassword::prompt_password(
             "Enter password to decrypt config (or press Enter to skip): ",
         )?;
-        if password.is_empty() {
-            None
-        } else {
-            load_config(&password)
+        if !password.is_empty() {
+            if let Some(saved) = load_config(&password) {
+                for field in CONFIG_FIELDS {
+                    let env_var = crate::toml_config::env_key(field.path);
+                    if toml_cfg.get_value(field.path).is_empty() {
+                        if let Some(v) = saved.get_str(&env_var) {
+                            if !v.is_empty() {
+                                toml_cfg.set_value(field.path, v.to_string());
+                            }
+                        }
+                    }
+                }
+            }
         }
-    } else {
-        None
-    };
+    }
 
-    // Resolve all values: env var > saved config > FD default.
-    let resolved_values: Vec<String> = FIELD_DESCRIPTORS
-        .iter()
-        .map(|fd| {
-            let saved_val = saved
-                .as_ref()
-                .and_then(|s| s.get_str(fd.ev));
-            resolve_fd_value(fd, saved_val)
-        })
-        .collect();
-
-    // Show numbered overview; let user pick which fields to override.
-    print_config_table(&resolved_values);
+    let resolved: Vec<String> = CONFIG_FIELDS.iter().map(|f| toml_cfg.get_value(f.path)).collect();
+    print_config_table(&resolved);
     let overrides: HashSet<usize> = read_override_selection(&mut lines)?;
 
-    let mut cfg = OLineConfig::default();
-    for (i, fd) in FIELD_DESCRIPTORS.iter().enumerate() {
-        let value = if overrides.contains(&i) {
-            if fd.s {
-                read_secret_input(fd.p, Some(&resolved_values[i]))?
+    for (i, field) in CONFIG_FIELDS.iter().enumerate() {
+        if overrides.contains(&i) {
+            let value = if field.is_secret {
+                read_secret_input(field.description, Some(&resolved[i]))?
             } else {
-                read_input(&mut lines, fd.p, Some(&resolved_values[i]))?
-            }
-        } else {
-            resolved_values[i].clone()
-        };
-        cfg.set(fd.ev, value);
+                read_input(&mut lines, field.description, Some(&resolved[i]))?
+            };
+            toml_cfg.set_value(field.path, value);
+        }
     }
-    let config = cfg;
 
-    // Peer inputs — optional, fill in after Phase A completes.
+    let config = OLineConfig::from_toml(&toml_cfg, String::new());
+
+    // Peer inputs
     tracing::info!("\n  Peer IDs (press Enter to leave blank — fill in after Phase A):");
     let snapshot = read_input(&mut lines, "Snapshot peer (id@host:port)", Some(""))?;
     let seed = read_input(&mut lines, "Seed peer (id@host:port)", Some(""))?;
@@ -114,15 +114,8 @@ pub async fn cmd_init(args: &InitArgs) -> Result<(), Box<dyn Error>> {
     let left_tackle = read_input(&mut lines, "Left tackle peer (id@host:port)", Some(""))?;
     let right_tackle = read_input(&mut lines, "Right tackle peer (id@host:port)", Some(""))?;
 
-    let peers = PeerInputs {
-        snapshot,
-        seed,
-        statesync_rpc,
-        left_tackle,
-        right_tackle,
-    };
-
-    let deploy_config = DeployConfig::from_config(&config, &FIELD_DESCRIPTORS, peers);
+    let peers = PeerInputs { snapshot, seed, statesync_rpc, left_tackle, right_tackle };
+    let deploy_config = DeployConfig::from_oline_config(&config, peers);
     deploy_config.write_to_file(Path::new(&args.output))?;
 
     tracing::info!("\n  Config written to: {}", args.output);

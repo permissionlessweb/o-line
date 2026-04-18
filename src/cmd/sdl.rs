@@ -1,4 +1,5 @@
-use crate::{akash::*, cli::*, config::{resolve_fd_value, *}, with_examples, FIELD_DESCRIPTORS};
+use crate::{akash::*, cli::*, config::*, with_examples};
+use crate::toml_config::{TomlConfig, CONFIG_FIELDS};
 
 with_examples! {
     #[derive(clap::Args, Debug, Default)]
@@ -42,38 +43,43 @@ pub async fn cmd_generate_sdl(
     tracing::info!("    all - All phases");
     let phase = read_input(&mut lines, "Phase", Some("all"))?;
 
-    // ── Load config ──────────────────────────────────────────────────────────
+    // ── Load config ──────────────────────────��───────────────────────────────
     let config = if let Some(cfg_path) = load_config_path {
-        // Load from deploy-config.json
         tracing::info!("  Loading config from: {}\n", cfg_path);
         let raw = fs::read_to_string(cfg_path)
             .map_err(|e| format!("Cannot read '{}': {}", cfg_path, e))?;
         let deploy_config: DeployConfig = serde_json::from_str(&raw)
             .map_err(|e| format!("Invalid deploy-config.json: {}", e))?;
-        // Rebuild OLineConfig. Resolution order: env var > JSON value > FD default.
-        // Iterating FDs (not the raw JSON map) ensures every known field is present
-        // and env vars always take the highest precedence.
-        let mut cfg = OLineConfig::default();
-        for fd in FIELD_DESCRIPTORS.iter() {
-            let saved = deploy_config
-                .config
-                .get(fd.ev)
-                .map(String::as_str);
-            cfg.set(fd.ev, resolve_fd_value(fd, saved));
+        // Rebuild OLineConfig from deploy-config values + env overrides
+        let mut toml_cfg = TomlConfig::from_defaults();
+        for field in CONFIG_FIELDS {
+            let env_var = crate::toml_config::env_key(field.path);
+            if let Some(saved) = deploy_config.config.get(&env_var) {
+                if !saved.is_empty() {
+                    toml_cfg.set_value(field.path, saved.clone());
+                }
+            }
         }
+        // Also check legacy key names in the saved config
+        for (key, val) in &deploy_config.config {
+            if !val.is_empty() {
+                // Set as env var so TomlConfig legacy overrides pick it up
+                if std::env::var(key).is_err() {
+                    std::env::set_var(key, val);
+                }
+            }
+        }
+        toml_cfg.apply_env_overrides();
+        let cfg = OLineConfig::from_toml(&toml_cfg, String::new());
         (cfg, Some(deploy_config.peers))
     } else {
-        // Interactive collection (mirroring the old flow)
+        // Interactive collection
         let saved = if has_saved_config() {
             tracing::info!("\n  Found saved config.");
             let password = rpassword::prompt_password(
                 "Enter password to decrypt config (or press Enter to skip): ",
             )?;
-            if password.is_empty() {
-                None
-            } else {
-                load_config(&password)
-            }
+            if password.is_empty() { None } else { load_config(&password) }
         } else {
             None
         };
@@ -83,24 +89,27 @@ pub async fn cmd_generate_sdl(
             saved
         } else {
             tracing::info!("  No saved config loaded. Prompting for values.\n");
-            let mut cfg = OLineConfig::default();
-            for fd in FIELD_DESCRIPTORS.iter() {
-                // env var always wins; fd.d is the fallback default shown in prompt
-                let resolved = resolve_fd_value(fd, None);
-                let value = if fd.s && !resolved.is_empty() {
-                    resolved // carry secrets silently — never re-prompt
+            let mut toml_cfg = if Path::new("config.toml").exists() {
+                TomlConfig::load("config.toml").unwrap_or_else(|_| TomlConfig::from_defaults())
+            } else {
+                TomlConfig::from_defaults()
+            };
+            for field in CONFIG_FIELDS {
+                let resolved = toml_cfg.get_value(field.path);
+                let value = if field.is_secret && !resolved.is_empty() {
+                    resolved
                 } else {
-                    read_input(&mut lines, fd.p, Some(&resolved))?
+                    read_input(&mut lines, field.description, Some(&resolved))?
                 };
-                cfg.set(fd.ev, value);
+                toml_cfg.set_value(field.path, value);
             }
-            cfg
+            OLineConfig::from_toml(&toml_cfg, String::new())
         };
         (cfg, None)
     };
     let (config, preloaded_peers) = config;
 
-    // ── Peer inputs ───────────────────────────────────────────────────────────
+    // ── Peer inputs ───────���───────────────────────────���───────────────────────
     let needs_peers = matches!(phase.as_str(), "b" | "c" | "all");
     let (snapshot_peer, seed_peer) = if needs_peers {
         let default_snap = preloaded_peers.as_ref().map(|p| p.snapshot.as_str()).unwrap_or("<SNAPSHOT_PEER_1>");
@@ -117,11 +126,7 @@ pub async fn cmd_generate_sdl(
 
     let statesync_rpc = if needs_peers {
         let default_rpc = preloaded_peers.as_ref().map(|p| p.statesync_rpc.as_str()).unwrap_or("");
-        read_input(
-            &mut lines,
-            "Statesync RPC servers (e.g. statesync.terp.network:PORT,seed.terp.network:PORT)",
-            Some(default_rpc),
-        )?
+        read_input(&mut lines, "Statesync RPC servers", Some(default_rpc))?
     } else {
         preloaded_peers.as_ref().map(|p| p.statesync_rpc.clone()).unwrap_or_default()
     };
@@ -147,19 +152,16 @@ pub async fn cmd_generate_sdl(
     let sdl_e = config.load_sdl("e.yml")?;
     let sdl_f = config.load_sdl("f.yml")?;
 
-    // render: print to stdout and return the rendered string.
     let render = |label: &str,
                   template: &str,
                   vars: &HashMap<String, String>|
      -> Result<String, Box<dyn Error>> {
-        tracing::info!("\n── {} ──", label);
+        tracing::info!("\n── {} ���─", label);
         let rendered = substitute_template_raw(template, vars)?;
         tracing::info!("{}", rendered);
         Ok(rendered)
     };
 
-    // ── Render phase(s) ───────────────────────────────────────────────────────
-    // Collect (filename, rendered_content) pairs for optional file output.
     let mut rendered_files: Vec<(&str, String)> = Vec::new();
     let secrets = std::env::var("SECRETS_PATH").unwrap_or_else(|_| ".".into());
 
@@ -209,14 +211,12 @@ pub async fn cmd_generate_sdl(
         let dir = Path::new(dir);
         fs::create_dir_all(dir)?;
 
-        // Write SDL files
         for (filename, content) in &rendered_files {
             let dest = dir.join(filename);
             fs::write(&dest, content)?;
             tracing::info!("  Wrote: {}", dest.display());
         }
 
-        // Write deploy-config.json
         let peers = PeerInputs {
             snapshot: snapshot_peer,
             seed: seed_peer,
@@ -224,7 +224,7 @@ pub async fn cmd_generate_sdl(
             left_tackle: left_tackle_peer,
             right_tackle: right_tackle_peer,
         };
-        let deploy_config = DeployConfig::from_config(&config, &FIELD_DESCRIPTORS, peers);
+        let deploy_config = DeployConfig::from_oline_config(&config, peers);
         let config_path = dir.join("deploy-config.json");
         deploy_config.write_to_file(&config_path)?;
         tracing::info!("  Wrote: {}", config_path.display());

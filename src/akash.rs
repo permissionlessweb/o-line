@@ -231,10 +231,14 @@ pub async fn build_phase_a_vars(
             .to_string(),
     );
 
-    // ── Sync method: if statesync, clear snapshot download vars for seed ─────
+    // ── Sync method (unified) ─────────────────────────────────────────────────
+    // OLINE_SYNC_METHOD controls everything. Default: "snapshot".
+    //   snapshot   → SNAPSHOT_URL set, STATESYNC_* cleared
+    //   statesync  → STATESYNC_* set, SNAPSHOT_URL cleared
     let sync_method = config.val("OLINE_SYNC_METHOD");
     if sync_method == "statesync" {
-        vars.insert("OLINE_SNAP_FULL_URL".into(), String::new());
+        // Statesync mode — clear all snapshot vars, set statesync vars
+        vars.insert("OLINE_SNAPSHOT_URL".into(), String::new());
         vars.insert("OLINE_SNAP_STATE_URL".into(), String::new());
         vars.insert("OLINE_SNAP_BASE_URL".into(), String::new());
         vars.insert("SNAPSHOT_JSON".into(), String::new());
@@ -244,6 +248,18 @@ pub async fn build_phase_a_vars(
         vars.insert("STATESYNC_TRUST_HEIGHT".into(), config.val("STATESYNC_TRUST_HEIGHT"));
         vars.insert("STATESYNC_TRUST_HASH".into(), config.val("STATESYNC_TRUST_HASH"));
         vars.insert("STATESYNC_TRUST_PERIOD".into(), config.val("STATESYNC_TRUST_PERIOD"));
+    } else {
+        // Snapshot mode (default) — clear all statesync vars, ensure SNAPSHOT_URL is set
+        vars.insert("STATESYNC_RPC_SERVERS".into(), String::new());
+        vars.insert("STATESYNC_ENABLE".into(), "false".into());
+        vars.insert("STATESYNC_TRUST_HEIGHT".into(), String::new());
+        vars.insert("STATESYNC_TRUST_HASH".into(), String::new());
+        vars.insert("STATESYNC_TRUST_PERIOD".into(), String::new());
+        // Ensure SNAPSHOT_URL is populated (from OLINE_SNAPSHOT_URL or SNAPSHOT_URL env)
+        let snap_url = config.val("OLINE_SNAPSHOT_URL");
+        if !snap_url.is_empty() {
+            vars.insert("SNAPSHOT_URL".into(), snap_url);
+        }
     }
 
     // ── Accept lists (must be after domain vars from to_sdl_vars()) ───────────
@@ -311,7 +327,7 @@ pub fn build_phase_b_vars(
         vars.insert("OLINE_OFFLINE".into(), "0".into());
         vars.insert("SNAPSHOT_MODE".into(), "".into());
         // Clear snapshot download vars — statesync nodes don't need them.
-        vars.insert("OLINE_SNAP_FULL_URL".into(), String::new());
+        vars.insert("OLINE_SNAPSHOT_URL".into(), String::new());
         vars.insert("SNAPSHOT_URL".into(), String::new());
     } else {
         // Snapshot (default): SFTP delivery, no internet
@@ -395,7 +411,7 @@ pub fn build_phase_c_vars(
         vars.insert("OLINE_OFFLINE".into(), "0".into());
         vars.insert("SNAPSHOT_MODE".into(), "".into());
         // Clear snapshot download vars — statesync nodes don't need them.
-        vars.insert("OLINE_SNAP_FULL_URL".into(), String::new());
+        vars.insert("OLINE_SNAPSHOT_URL".into(), String::new());
         vars.insert("SNAPSHOT_URL".into(), String::new());
     } else {
         // Snapshot (default): SFTP delivery, no internet
@@ -555,7 +571,7 @@ pub fn build_phase_f_vars(config: &OLineConfig, statesync_rpc: &str) -> HashMap<
         vars.insert("STATESYNC_TRUST_HASH".into(), config.val("STATESYNC_TRUST_HASH"));
         vars.insert("STATESYNC_TRUST_PERIOD".into(), config.val("STATESYNC_TRUST_PERIOD"));
         // Clear snapshot download vars — statesync nodes don't need them.
-        vars.insert("OLINE_SNAP_FULL_URL".into(), String::new());
+        vars.insert("OLINE_SNAPSHOT_URL".into(), String::new());
         vars.insert("SNAPSHOT_URL".into(), String::new());
         vars.insert("SNAPSHOT_JSON".into(), String::new());
     } else {

@@ -619,7 +619,7 @@ pub async fn verify_files_and_signal_start(
         "OMNIBUS_IMAGE",
         "SNAPSHOT_JSON",
         "SNAPSHOT_URL",
-        "OLINE_SNAP_FULL_URL",
+        "OLINE_SNAPSHOT_URL",
         "TERPD_P2P_PRIVATE_PEER_IDS",
         "TERPD_P2P_PERSISTENT_PEERS",
         "RPC_DOMAIN",
