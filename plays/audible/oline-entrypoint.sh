@@ -234,9 +234,9 @@ if [ "$OLINE_NODE_MODE" = "native" ]; then
       sleep 10; _waited=$((_waited + 10))
       [ $((_waited % 60)) -eq 0 ] && echo "  [snapshot] Still waiting... (${_waited}s elapsed)"
     done
-    echo "=== [snapshot] File received. Extracting ==="
-    mkdir -p /root/.terpd/data
-    cd /root/.terpd
+    echo "=== [snapshot] File received. Extracting to ${PROJECT_ROOT} ==="
+    mkdir -p "${PROJECT_ROOT}/data"
+    cd "${PROJECT_ROOT}" 
     case "${SNAPSHOT_SFTP_PATH}" in
       *.tar.lz4) lz4 -d "$SNAPSHOT_SFTP_PATH" | tar xf - ;;
       *.tar.zst) zstd -cd "$SNAPSHOT_SFTP_PATH" | tar xf - ;;
@@ -245,6 +245,8 @@ if [ "$OLINE_NODE_MODE" = "native" ]; then
     esac
     rm -f "$SNAPSHOT_SFTP_PATH"
     echo "=== [snapshot] SFTP snapshot installed ==="
+    # Data already extracted — strip sync args so bootstrap skips download.
+    BOOTSTRAP_ARGS=$(echo "$BOOTSTRAP_ARGS" | sed 's/--sync-mode [a-z]*//g; s/--snapshot-url [^ ]*//g; s/--statesync-rpcs [^ ]*//g')
   fi
 
   # ── Snapshot export node: setup-only, then wrap with snapshot.sh ──
@@ -397,11 +399,11 @@ if [ "${OLINE_OFFLINE:-0}" = "1" ]; then
 fi
 
 # ── Operator snapshot override ────────────────────────────────────────────────
-# OLINE_SNAP_FULL_URL is an explicit operator-supplied snapshot URL that
+# OLINE_SNAPSHOT_URL is an explicit operator-supplied snapshot URL that
 # takes priority over chain-registry resolution. Survives OFFLINE mode because
 # the operator knows best.
-if [ -n "$OLINE_SNAP_FULL_URL" ] && [ -z "$SNAPSHOT_URL" ]; then
-  export SNAPSHOT_URL="$OLINE_SNAP_FULL_URL"
+if [ -n "$OLINE_SNAPSHOT_URL" ] && [ -z "$SNAPSHOT_URL" ]; then
+  export SNAPSHOT_URL="$OLINE_SNAPSHOT_URL"
 fi
 
 export PROJECT_BIN="${PROJECT_BIN:-$PROJECT}"
