@@ -1,0 +1,170 @@
+---
+version: "2.0"
+services:
+  ${LB_SVC}:
+    image: nginx:alpine
+    command:
+      - sh
+    args:
+      - -c
+      - "while [ ! -f /tmp/lb-init.sh ]; do sleep 2; done; sh /tmp/lb-init.sh"
+    expose:
+      - port: 80
+        as: 80
+        to:
+          - global: true
+        accept:
+${LB_80_ACCEPTS}
+      - port: ${SSH_P}
+        as: ${SSH_P}
+        to:
+          - global: true
+    env:
+      - SSH_PUBKEY=${SSH_PUBKEY}
+      - RPC_DOMAIN=${RPC_D_LB}
+      - API_DOMAIN=${API_D_LB}
+      - GRPC_DOMAIN=${GRPC_D_LB}
+      - UPSTREAM_RPC=${SENTRY_A_SVC}:26657,${SENTRY_B_SVC}:26657
+      - UPSTREAM_API=${SENTRY_A_SVC}:1317,${SENTRY_B_SVC}:1317
+      - UPSTREAM_GRPC=${SENTRY_A_SVC}:9090,${SENTRY_B_SVC}:9090
+  ${SENTRY_A_SVC}:
+    image: ${OMNIBUS_IMAGE}
+    command:
+      - sh
+    args:
+      - -c
+      - curl -fsSL ${OLINE_ENTRYPOINT_URL} -o /tmp/wrapper.sh; bash /tmp/wrapper.sh
+    expose:
+      - port: 26656
+        as: 26656
+        to:
+          - service: ${LB_SVC}
+          - service: ${SENTRY_B_SVC}
+      - port: 26657
+        as: 26657
+        to:
+          - service: ${LB_SVC}
+      - port: 1317
+        as: 1317
+        to:
+          - service: ${LB_SVC}
+      - port: 9090
+        as: 9090
+        to:
+          - service: ${LB_SVC}
+      - port: ${SSH_P}
+        as: ${SSH_P}
+        to:
+          - global: true
+    env:
+      - MONIKER=${SENTRY_A_MONIKER}
+      - PROJECT_BIN=${OLINE_BINARY}
+      - CHAIN_ID=${TESTNET_CHAIN_ID}
+      - GENESIS_URL=${GENESIS_URL}
+      - MINIMUM_GAS_PRICES=0.05uthiol
+      - FASTSYNC_VERSION=v0
+      - PRUNING=nothing
+      - STATESYNC_SNAP_INTERVAL=500
+      - TERPD_P2P_PEX=true
+      - TERPD_P2P_PERSISTENT_PEERS=${VALIDATOR_PEER}
+      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${VALIDATOR_PEER_ID}
+      - TERPD_P2P_PRIVATE_PEER_IDS=${VALIDATOR_PEER_ID}
+      - SSH_PUBKEY=${SSH_PUBKEY}
+  ${SENTRY_B_SVC}:
+    image: ${OMNIBUS_IMAGE}
+    command:
+      - sh
+    args:
+      - -c
+      - curl -fsSL ${OLINE_ENTRYPOINT_URL} -o /tmp/wrapper.sh; bash /tmp/wrapper.sh
+    expose:
+      - port: 26656
+        as: 26656
+        to:
+          - service: ${LB_SVC}
+          - service: ${SENTRY_A_SVC}
+      - port: 26657
+        as: 26657
+        to:
+          - service: ${LB_SVC}
+      - port: 1317
+        as: 1317
+        to:
+          - service: ${LB_SVC}
+      - port: 9090
+        as: 9090
+        to:
+          - service: ${LB_SVC}
+      - port: ${SSH_P}
+        as: ${SSH_P}
+        to:
+          - global: true
+    env:
+      - MONIKER=${SENTRY_B_MONIKER}
+      - PROJECT_BIN=${OLINE_BINARY}
+      - CHAIN_ID=${TESTNET_CHAIN_ID}
+      - GENESIS_URL=${GENESIS_URL}
+      - MINIMUM_GAS_PRICES=0.05uthiol
+      - FASTSYNC_VERSION=v0
+      - PRUNING=default
+      - TERPD_P2P_PEX=true
+      - TERPD_P2P_PERSISTENT_PEERS=${VALIDATOR_PEER}
+      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${VALIDATOR_PEER_ID}
+      - TERPD_P2P_PRIVATE_PEER_IDS=${VALIDATOR_PEER_ID}
+      - SSH_PUBKEY=${SSH_PUBKEY}
+profiles:
+  compute:
+    ${LB_SVC}:
+      resources:
+        cpu:
+          units: 0.5
+        memory:
+          size: 512Mi
+        storage:
+          - size: 1Gi
+    ${SENTRY_A_SVC}:
+      resources:
+        cpu:
+          units: 2
+        memory:
+          size: 8Gi
+        storage:
+          - size: 20Gi
+    ${SENTRY_B_SVC}:
+      resources:
+        cpu:
+          units: 2
+        memory:
+          size: 8Gi
+        storage:
+          - size: 20Gi
+  placement:
+    dcloud:
+      pricing:
+        ${LB_SVC}:
+          denom: uact
+          amount: 500
+        ${SENTRY_A_SVC}:
+          denom: uact
+          amount: 1000
+        ${SENTRY_B_SVC}:
+          denom: uact
+          amount: 1000
+      signedBy:
+        anyOf:
+          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
+      attributes:
+        host: akash
+deployment:
+  ${LB_SVC}:
+    dcloud:
+      profile: ${LB_SVC}
+      count: 1
+  ${SENTRY_A_SVC}:
+    dcloud:
+      profile: ${SENTRY_A_SVC}
+      count: 1
+  ${SENTRY_B_SVC}:
+    dcloud:
+      profile: ${SENTRY_B_SVC}
+      count: 1
