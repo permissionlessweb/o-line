@@ -1,36 +1,28 @@
 //! `oline testnet-deploy` — bootstrap a fresh testnet on Akash Network.
 //!
-//! Deploys a localterp validator + faucet alongside the full o-line sentry array
-//! (snapshot, seed, tackles, forwards) as Akash deployments. The validator's genesis
-//! is fetched via RPC and distributed to all sentries via SFTP. The validator is
-//! configured as a private peer on all sentries (never gossiped).
+//! Deploys an nginx load balancer + 2 sentry nodes as a single Akash
+//! deployment. The LB proxies RPC/API/gRPC to the sentry pool via Akash
+//! inter-service routing. An external validator (or Phase V localterp
+//! validator) provides genesis and P2P peering.
 //!
 //! Architecture:
 //! ```text
-//! Phase A (single Akash deployment):
-//!   [Validator+Faucet (localterp)]  ← never publicly exposed beyond P2P
-//!   [Snapshot node (omnibus)]       ← OLINE_OFFLINE=1, genesis via SFTP
-//!   [Seed node (omnibus)]           ← OLINE_OFFLINE=1, genesis via SFTP
-//!
-//! Phase B (separate Akash deployment):
-//!   [Left Tackle (omnibus)]         ← OLINE_OFFLINE=1, genesis via SFTP
-//!   [Right Tackle (omnibus)]        ← OLINE_OFFLINE=1, genesis via SFTP
-//!
-//! Phase C (separate Akash deployment):
-//!   [Left Forward (omnibus)]        ← OLINE_OFFLINE=1, genesis via SFTP
-//!   [Right Forward (omnibus)]       ← OLINE_OFFLINE=1, genesis via SFTP
+//! Single Akash deployment:
+//!   [nginx LB]         ← port 80 global, routes by Host header
+//!   [Sentry A]         ← internal only (ports exposed to LB service)
+//!   [Sentry B]         ← internal only (ports exposed to LB service)
 //! ```
 //!
-//! All three lease acceptances (MsgCreateLease) are batched into a single
-//! signed transaction. Sentries deploy with empty peer placeholders; real
-//! peer configuration is injected at bootstrap time via SFTP.
+//! Two-pass deployment: Pass 1 creates the deployment and collects bids,
+//! Pass 2 resumes with --provider-a to accept lease + send manifest.
+//! LB init script and sentry scripts are delivered via SFTP at bootstrap.
 
 use crate::{
-    akash::{build_accept_items, endpoint_hostname, node_refresh_vars},
+    akash::endpoint_hostname,
     config::{build_config_from_env, collect_config, OLineConfig},
     crypto::{
-        ensure_ssh_key, generate_credential, push_pre_start_files,
-        push_scripts_sftp, verify_files_and_signal_start, FileSource, PreStartFile,
+        ensure_ssh_key, generate_credential,
+        push_scripts_sftp, verify_files_and_signal_start,
     },
     deployer::OLineDeployer,
     with_examples, MAX_RETRIES,
@@ -395,10 +387,6 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
     }
 
     // ── 10. Summary ──────────────���───────────────────────────────────────────
-    let batch_tx_hash = lb_endpoints.first()
-        .map(|_| "see lease tx above".to_string())
-        .unwrap_or_default();
-
     tracing::info!("\n═══════════════���══════════════════════════════════════════════");
     tracing::info!("  TESTNET DEPLOYED SUCCESSFULLY (LB mode)");
     tracing::info!("═════════════��══════════════════��═════════════════════════════");
@@ -441,158 +429,6 @@ fn build_testnet_v_vars(
         format!("          - {}", faucet_d)
     };
     vars.insert("VALIDATOR_80_ACCEPTS".into(), validator_accepts);
-    vars
-}
-
-fn build_testnet_a_vars(
-    config: &OLineConfig,
-    chain_id: &str,
-    genesis_url: &str,
-    validator_peer: &str,
-    ssh_pubkey: &str,
-) -> HashMap<String, String> {
-    let mut vars = config.to_sdl_vars();
-
-    vars.insert("SNAPSHOT_SVC".into(), "testnet-a-snapshot".into());
-    vars.insert("SEED_SVC".into(), "testnet-a-seed".into());
-    vars.insert("TESTNET_CHAIN_ID".into(), chain_id.to_string());
-    vars.insert("GENESIS_URL".into(), genesis_url.to_string());
-
-    vars.insert("SNAPSHOT_MONIKER".into(), generate_credential(12));
-    vars.insert("SEED_MONIKER".into(), generate_credential(12));
-
-    vars.insert("SSH_PUBKEY".into(), ssh_pubkey.to_string());
-
-    // Tailnet: sentries join headscale tailnet for private P2P access
-    if let Ok(hs_store) = crate::cmd::vpn::HeadscaleStore::load_optional() {
-        if let Ok(server) = hs_store.get(None) {
-            vars.insert("HEADSCALE_URL".into(), server.control_url.clone());
-            vars.insert("HEADSCALE_PREAUTH_KEY".into(), server.preauth_key.clone());
-        }
-    }
-
-    // Cloudflare TCP tunnel for P2P (peer-{domain})
-    let snap_domain = vars.get("P2P_D_SNAP").or(vars.get("P2P_D_TL")).or(vars.get("P2P_D_FL")).cloned().unwrap_or_default();
-    if !snap_domain.is_empty() {
-        vars.insert("P2P_TUNNEL_HOST".into(), snap_domain);
-    }
-
-    let validator_node_id = validator_peer.split('@').next().unwrap_or("").to_string();
-    vars.insert("TERPD_P2P_PERSISTENT_PEERS".into(), validator_peer.to_string());
-    vars.insert("TERPD_P2P_UNCONDITIONAL_PEER_IDS".into(), validator_node_id.clone());
-    vars.insert("TERPD_P2P_PRIVATE_PEER_IDS".into(), validator_node_id);
-
-    vars.insert("SNAPSHOT_80_ACCEPTS".into(), build_accept_items(&vars, "SNAP"));
-    vars.insert("SEED_80_ACCEPTS".into(), build_accept_items(&vars, "SEED"));
-
-    vars
-}
-
-fn build_testnet_b_vars(
-    config: &OLineConfig,
-    chain_id: &str,
-    genesis_url: &str,
-    snapshot_peer: &str,
-    validator_peer: &str,
-    validator_node_id: &str,
-    statesync_rpc: &str,
-    ssh_pubkey: &str,
-) -> HashMap<String, String> {
-    let mut vars = config.to_sdl_vars();
-
-    vars.insert("LT_SVC".into(), "oline-b-left-tackle".into());
-    vars.insert("RT_SVC".into(), "oline-b-right-tackle".into());
-    vars.insert("TESTNET_CHAIN_ID".into(), chain_id.to_string());
-    vars.insert("GENESIS_URL".into(), genesis_url.to_string());
-    vars.insert("LEFT_TACKLE_MONIKER".into(), generate_credential(12));
-    vars.insert("RIGHT_TACKLE_MONIKER".into(), generate_credential(12));
-
-    // SSH key — reuse Phase A's keypair so bootstrap_sentry can SFTP in
-    vars.insert("SSH_PUBKEY".into(), ssh_pubkey.to_string());
-
-    // Tailnet: sentries join headscale tailnet for private P2P access
-    if let Ok(hs_store) = crate::cmd::vpn::HeadscaleStore::load_optional() {
-        if let Ok(server) = hs_store.get(None) {
-            vars.insert("HEADSCALE_URL".into(), server.control_url.clone());
-            vars.insert("HEADSCALE_PREAUTH_KEY".into(), server.preauth_key.clone());
-        }
-    }
-
-    // Cloudflare TCP tunnel for P2P (peer-{domain})
-    let snap_domain = vars.get("P2P_D_SNAP").or(vars.get("P2P_D_TL")).or(vars.get("P2P_D_FL")).cloned().unwrap_or_default();
-    if !snap_domain.is_empty() {
-        vars.insert("P2P_TUNNEL_HOST".into(), snap_domain);
-    }
-
-    vars.insert(
-        "TERPD_P2P_PERSISTENT_PEERS".into(),
-        comma_join(&[snapshot_peer, validator_peer]),
-    );
-    vars.insert("TERPD_P2P_PRIVATE_PEER_IDS".into(), validator_node_id.to_string());
-    vars.insert("TERPD_P2P_UNCONDITIONAL_PEER_IDS".into(), validator_node_id.to_string());
-    vars.insert("STATESYNC_RPC_SERVERS".into(), statesync_rpc.to_string());
-
-    vars.insert("LT_80_ACCEPTS".into(), build_accept_items(&vars, "TL"));
-    vars.insert("RT_80_ACCEPTS".into(), build_accept_items(&vars, "TR"));
-
-    vars
-}
-
-fn build_testnet_c_vars(
-    config: &OLineConfig,
-    chain_id: &str,
-    genesis_url: &str,
-    seed_peer: &str,
-    snapshot_peer: &str,
-    left_tackle_peer: &str,
-    right_tackle_peer: &str,
-    validator_peer: &str,
-    validator_node_id: &str,
-    statesync_rpc: &str,
-    ssh_pubkey: &str,
-) -> HashMap<String, String> {
-    let mut vars = config.to_sdl_vars();
-
-    vars.insert("LF_SVC".into(), "oline-c-left-forward".into());
-    vars.insert("RF_SVC".into(), "oline-c-right-forward".into());
-    vars.insert("TESTNET_CHAIN_ID".into(), chain_id.to_string());
-    vars.insert("GENESIS_URL".into(), genesis_url.to_string());
-    vars.insert("LEFT_FMONIKER".into(), generate_credential(12));
-    vars.insert("RIGHT_FMONIKER".into(), generate_credential(12));
-
-    // SSH key — reuse Phase A's keypair so bootstrap_sentry can SFTP in
-    vars.insert("SSH_PUBKEY".into(), ssh_pubkey.to_string());
-
-    // Tailnet: sentries join headscale tailnet for private P2P access
-    if let Ok(hs_store) = crate::cmd::vpn::HeadscaleStore::load_optional() {
-        if let Ok(server) = hs_store.get(None) {
-            vars.insert("HEADSCALE_URL".into(), server.control_url.clone());
-            vars.insert("HEADSCALE_PREAUTH_KEY".into(), server.preauth_key.clone());
-        }
-    }
-
-    // Cloudflare TCP tunnel for P2P (peer-{domain})
-    let snap_domain = vars.get("P2P_D_SNAP").or(vars.get("P2P_D_TL")).or(vars.get("P2P_D_FL")).cloned().unwrap_or_default();
-    if !snap_domain.is_empty() {
-        vars.insert("P2P_TUNNEL_HOST".into(), snap_domain);
-    }
-
-    vars.insert("TERPD_P2P_SEEDS".into(), seed_peer.to_string());
-    vars.insert(
-        "TERPD_P2P_PERSISTENT_PEERS".into(),
-        comma_join(&[snapshot_peer, validator_peer]),
-    );
-
-    let lt_id = left_tackle_peer.split('@').next().unwrap_or("");
-    let rt_id = right_tackle_peer.split('@').next().unwrap_or("");
-    let private_ids = comma_join(&[lt_id, rt_id, validator_node_id]);
-    vars.insert("TERPD_P2P_PRIVATE_PEER_IDS".into(), private_ids.clone());
-    vars.insert("TERPD_P2P_UNCONDITIONAL_PEER_IDS".into(), private_ids);
-    vars.insert("STATESYNC_RPC_SERVERS".into(), statesync_rpc.to_string());
-
-    vars.insert("LF_80_ACCEPTS".into(), build_accept_items(&vars, "FL"));
-    vars.insert("RF_80_ACCEPTS".into(), build_accept_items(&vars, "FR"));
-
     vars
 }
 
@@ -684,14 +520,6 @@ async fn display_phase_bids(
 
 /// Join non-empty peer strings with commas. Filters out empty entries
 /// to avoid producing ",abc@host:26656" or "abc@host:26656,".
-fn comma_join(peers: &[&str]) -> String {
-    peers
-        .iter()
-        .filter(|p| !p.is_empty())
-        .copied()
-        .collect::<Vec<_>>()
-        .join(",")
-}
 
 /// Find the bid from a specific provider in a bid list.
 fn find_bid_for_provider(
