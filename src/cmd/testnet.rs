@@ -711,6 +711,12 @@ fn build_testnet_a_vars(
         }
     }
 
+    // Cloudflare TCP tunnel for P2P (peer-{domain})
+    let snap_domain = vars.get("P2P_D_SNAP").or(vars.get("P2P_D_TL")).or(vars.get("P2P_D_FL")).cloned().unwrap_or_default();
+    if !snap_domain.is_empty() {
+        vars.insert("P2P_TUNNEL_HOST".into(), snap_domain);
+    }
+
     let validator_node_id = validator_peer.split('@').next().unwrap_or("").to_string();
     vars.insert("TERPD_P2P_PERSISTENT_PEERS".into(), validator_peer.to_string());
     vars.insert("TERPD_P2P_UNCONDITIONAL_PEER_IDS".into(), validator_node_id.clone());
@@ -750,6 +756,12 @@ fn build_testnet_b_vars(
             vars.insert("HEADSCALE_URL".into(), server.control_url.clone());
             vars.insert("HEADSCALE_PREAUTH_KEY".into(), server.preauth_key.clone());
         }
+    }
+
+    // Cloudflare TCP tunnel for P2P (peer-{domain})
+    let snap_domain = vars.get("P2P_D_SNAP").or(vars.get("P2P_D_TL")).or(vars.get("P2P_D_FL")).cloned().unwrap_or_default();
+    if !snap_domain.is_empty() {
+        vars.insert("P2P_TUNNEL_HOST".into(), snap_domain);
     }
 
     vars.insert(
@@ -797,6 +809,12 @@ fn build_testnet_c_vars(
             vars.insert("HEADSCALE_URL".into(), server.control_url.clone());
             vars.insert("HEADSCALE_PREAUTH_KEY".into(), server.preauth_key.clone());
         }
+    }
+
+    // Cloudflare TCP tunnel for P2P (peer-{domain})
+    let snap_domain = vars.get("P2P_D_SNAP").or(vars.get("P2P_D_TL")).or(vars.get("P2P_D_FL")).cloned().unwrap_or_default();
+    if !snap_domain.is_empty() {
+        vars.insert("P2P_TUNNEL_HOST".into(), snap_domain);
     }
 
     vars.insert("TERPD_P2P_SEEDS".into(), seed_peer.to_string());
