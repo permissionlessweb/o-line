@@ -242,6 +242,13 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
         &config, &args.chain_id, &genesis_url, "", "", "", "", &validator_peer, &validator_node_id, "", &ssh_pubkey,
     );
 
+    // ── LB deployment: single SDL with nginx LB + 2 sentries ──
+    let sdl_lb = config.load_sdl("testnet-lb.yml").map_err(|e| -> Box<dyn Error> { e })?;
+    let lb_vars = build_testnet_lb_vars(
+        &config, &args.chain_id, &genesis_url,
+        &validator_peer, &validator_node_id, &ssh_pubkey,
+    );
+
     // ── 8. Two-pass deployment: create + collect bids OR resume with providers ──
     let mut store = FileDeploymentStore::new_default().await
         .map_err(|e| -> Box<dyn Error> { e.into() })?;
@@ -832,6 +839,56 @@ fn build_testnet_c_vars(
 
     vars.insert("LF_80_ACCEPTS".into(), build_accept_items(&vars, "FL"));
     vars.insert("RF_80_ACCEPTS".into(), build_accept_items(&vars, "FR"));
+
+    vars
+}
+
+
+fn build_testnet_lb_vars(
+    config: &OLineConfig,
+    chain_id: &str,
+    genesis_url: &str,
+    validator_peer: &str,
+    validator_node_id: &str,
+    ssh_pubkey: &str,
+) -> HashMap<String, String> {
+    let mut vars = config.to_sdl_vars();
+
+    // Service names
+    vars.insert("LB_SVC".into(), "testnet-lb".into());
+    vars.insert("SENTRY_A_SVC".into(), "testnet-sentry-a".into());
+    vars.insert("SENTRY_B_SVC".into(), "testnet-sentry-b".into());
+
+    // Chain
+    vars.insert("TESTNET_CHAIN_ID".into(), chain_id.to_string());
+    vars.insert("GENESIS_URL".into(), genesis_url.to_string());
+
+    // Monikers
+    vars.insert("SENTRY_A_MONIKER".into(), generate_credential(12));
+    vars.insert("SENTRY_B_MONIKER".into(), generate_credential(12));
+
+    // Validator peer (full peer string for sentries — P2P handled per-sentry, not via LB)
+    vars.insert("VALIDATOR_PEER".into(), validator_peer.to_string());
+    vars.insert("VALIDATOR_PEER_ID".into(), validator_node_id.to_string());
+
+    // LB domains (the unified public endpoints)
+    let lb_domain = vars.get("nodes.snapshot.domain")
+        .cloned()
+        .unwrap_or_else(|| "testnet.terp.network".into());
+    vars.insert("RPC_D_LB".into(), format!("rpc-{}", lb_domain));
+    vars.insert("API_D_LB".into(), format!("api-{}", lb_domain));
+    vars.insert("GRPC_D_LB".into(), format!("grpc-{}", lb_domain));
+
+    // LB port 80 accept items
+    let rpc_d = vars.get("RPC_D_LB").cloned().unwrap_or_default();
+    let api_d = vars.get("API_D_LB").cloned().unwrap_or_default();
+    let mut accepts = Vec::new();
+    if !rpc_d.is_empty() { accepts.push(format!("          - {}", rpc_d)); }
+    if !api_d.is_empty() { accepts.push(format!("          - {}", api_d)); }
+    vars.insert("LB_80_ACCEPTS".into(), accepts.join("\n"));
+
+    // SSH
+    vars.insert("SSH_PUBKEY".into(), ssh_pubkey.to_string());
 
     vars
 }
