@@ -354,23 +354,27 @@ if [ "$OLINE_NODE_MODE" = "native" ]; then
   fi
   [ -f "$NODE_SCRIPT" ] && { sh "$NODE_SCRIPT" 2>&1 || echo "[oline] config-node-endpoints non-fatal"; }
 
-  # ── Cloudflare TCP tunnel for P2P (if P2P_TUNNEL_HOST is set) ──────────
+  # ── P2P routing: LB mode or direct tunnel ─────────────────────────────
+  # If TERPD_P2P_PERSISTENT_PEERS already contains a service name (e.g. lb:36656),
+  # the sentry is behind an LB — no cloudflared needed. Otherwise, if
+  # P2P_TUNNEL_HOST is set, install cloudflared for direct tunnel.
   if [ -n "${P2P_TUNNEL_HOST:-}" ]; then
-    echo "[oline] Setting up cloudflared TCP proxy for P2P via $P2P_TUNNEL_HOST"
-    if ! command -v cloudflared >/dev/null 2>&1; then
-      curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
-      chmod +x /usr/local/bin/cloudflared
-    fi
-    # Start TCP proxy: peer-testnet.terp.network → localhost:36656
-    cloudflared access tcp --hostname "$P2P_TUNNEL_HOST" --url localhost:36656 &
-    sleep 3
-    echo "[oline] cloudflared TCP proxy active: $P2P_TUNNEL_HOST → localhost:36656"
-    # Rewrite persistent_peers to use localhost instead of remote IP
-    _old_peers="${TERPD_P2P_PERSISTENT_PEERS:-}"
-    if [ -n "$_old_peers" ]; then
-      _node_id=$(echo "$_old_peers" | sed 's/@.*//')
+    _peers="${TERPD_P2P_PERSISTENT_PEERS:-}"
+    if echo "$_peers" | grep -qE '@(lb|testnet-lb):'; then
+      echo "[oline] P2P via LB service — skipping cloudflared install"
+    else
+      echo "[oline] Setting up cloudflared TCP proxy for P2P via $P2P_TUNNEL_HOST"
+      if ! command -v cloudflared >/dev/null 2>&1; then
+        curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+          -o /usr/local/bin/cloudflared
+        chmod +x /usr/local/bin/cloudflared
+      fi
+      cloudflared access tcp --hostname "$P2P_TUNNEL_HOST" --url localhost:36656 &
+      sleep 3
+      echo "[oline] cloudflared TCP proxy active"
+      _node_id=$(echo "$_peers" | sed 's/@.*//')
       TERPD_P2P_PERSISTENT_PEERS="${_node_id}@127.0.0.1:36656"
-      echo "[oline] Rewrote persistent_peers: $_old_peers → $TERPD_P2P_PERSISTENT_PEERS"
+      echo "[oline] Rewrote persistent_peers → $TERPD_P2P_PERSISTENT_PEERS"
     fi
   fi
 
