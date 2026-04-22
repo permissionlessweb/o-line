@@ -1,40 +1,13 @@
 ---
 version: "2.0"
 services:
-  ${VALIDATOR_SVC}:
-    image: ${LOCALTERP_IMAGE}
-    expose:
-      - port: 26656
-        as: 26656
-        to:
-          - global: true
-      - port: 26657
-        as: 26657
-        to:
-          - global: true
-      - port: 5000
-        as: 5000
-        to:
-          - global: true
-      - port: 1317
-        as: 1317
-        to:
-          - global: true
-      - port: 9090
-        as: 9090
-        to:
-          - global: true
-      - port: 5000
-        as: 80
-        to:
-          - global: true
-        accept:
-${VALIDATOR_80_ACCEPTS}
-    env:
-      - CHAINID=${TESTNET_CHAIN_ID}
-      - FAST_BLOCKS=${TESTNET_FAST_BLOCKS}
   ${SNAPSHOT_SVC}:
     image: ${OMNIBUS_IMAGE}
+    command:
+      - sh
+    args:
+      - -c
+      - curl -fsSL ${OLINE_ENTRYPOINT_URL} -o /tmp/wrapper.sh; bash /tmp/wrapper.sh
     expose:
       - port: ${P2P_P_SNAP}
         as: ${P2P_P_SNAP}
@@ -62,8 +35,7 @@ ${SNAPSHOT_80_ACCEPTS}
       - MONIKER=${SNAPSHOT_MONIKER}
       - PROJECT_BIN=${OLINE_BINARY}
       - CHAIN_ID=${TESTNET_CHAIN_ID}
-      - CHAIN_JSON=${OLINE_CHAIN_JSON}
-      - OLINE_OFFLINE=1
+      - GENESIS_URL=${GENESIS_URL}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - FASTSYNC_VERSION=v0
       - PRUNING=nothing
@@ -81,8 +53,15 @@ ${SNAPSHOT_80_ACCEPTS}
       - GRPC_P=${GRPC_P_SNAP}
       - GRPC_D=${GRPC_D_SNAP}
       - SSH_PUBKEY=${SSH_PUBKEY}
+      - HEADSCALE_URL=${HEADSCALE_URL}
+      - HEADSCALE_PREAUTH_KEY=${HEADSCALE_PREAUTH_KEY}
   ${SEED_SVC}:
     image: ${OMNIBUS_IMAGE}
+    command:
+      - sh
+    args:
+      - -c
+      - curl -fsSL ${OLINE_ENTRYPOINT_URL} -o /tmp/wrapper.sh; bash /tmp/wrapper.sh
     expose:
       - port: 26657
         as: 26657
@@ -108,11 +87,12 @@ ${SEED_80_ACCEPTS}
           - global: true
     env:
       - SSH_PUBKEY=${SSH_PUBKEY}
+      - HEADSCALE_URL=${HEADSCALE_URL}
+      - HEADSCALE_PREAUTH_KEY=${HEADSCALE_PREAUTH_KEY}
       - MONIKER=${SEED_MONIKER}
       - PROJECT_BIN=${OLINE_BINARY}
       - CHAIN_ID=${TESTNET_CHAIN_ID}
-      - CHAIN_JSON=${OLINE_CHAIN_JSON}
-      - OLINE_OFFLINE=1
+      - GENESIS_URL=${GENESIS_URL}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - PRUNING=default
       - TERPD_P2P_PEX=true
@@ -131,14 +111,6 @@ ${SEED_80_ACCEPTS}
       - GRPC_D=${GRPC_D_SEED}
 profiles:
   compute:
-    ${VALIDATOR_SVC}:
-      resources:
-        cpu:
-          units: 2
-        memory:
-          size: 4Gi
-        storage:
-          - size: 10Gi
     ${SNAPSHOT_SVC}:
       resources:
         cpu:
@@ -158,9 +130,6 @@ profiles:
   placement:
     dcloud:
       pricing:
-        ${VALIDATOR_SVC}:
-          denom: uact
-          amount: 1000
         ${SNAPSHOT_SVC}:
           denom: uact
           amount: 1000
@@ -173,10 +142,6 @@ profiles:
       attributes:
         host: akash
 deployment:
-  ${VALIDATOR_SVC}:
-    dcloud:
-      profile: ${VALIDATOR_SVC}
-      count: 1
   ${SNAPSHOT_SVC}:
     dcloud:
       profile: ${SNAPSHOT_SVC}

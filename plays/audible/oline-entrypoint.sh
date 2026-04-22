@@ -98,7 +98,28 @@ fi
 # environment from oline-env.sh, then falls through to start mode for a full
 # re-bootstrap (TLS setup → chain metadata → snapshot → config → node launch).
 if [ "${OLINE_PHASE}" = "restart" ]; then
-  [ -f /tmp/oline-env.sh ] && . /tmp/oline-env.sh
+  # ── Tailscale tailnet join (if HEADSCALE_URL is set) ──────────────────────────
+if [ -n "${HEADSCALE_URL:-}" ] && [ -n "${HEADSCALE_PREAUTH_KEY:-}" ]; then
+  echo "[oline] Joining tailnet via $HEADSCALE_URL"
+  if ! command -v tailscale >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+      curl -fsSL https://tailscale.com/install.sh | sh 2>&1 | tail -3
+    elif command -v apk >/dev/null 2>&1; then
+      apk add --no-cache tailscale >/dev/null 2>&1
+    fi
+  fi
+  if command -v tailscaled >/dev/null 2>&1; then
+    tailscaled --tun=userspace-networking --state=mem: --socket=/tmp/tailscaled.sock &
+    sleep 3
+    tailscale --socket=/tmp/tailscaled.sock up       --login-server="$HEADSCALE_URL"       --authkey="$HEADSCALE_PREAUTH_KEY"       --hostname="${HOSTNAME:-oline-sentry}"       --accept-routes       --reset 2>&1 || echo "[oline] tailscale up failed (non-fatal)"
+    echo "[oline] Tailscale status:"
+    tailscale --socket=/tmp/tailscaled.sock status 2>&1 || true
+  else
+    echo "[oline] WARNING: tailscale not available, skipping tailnet join"
+  fi
+fi
+
+[ -f /tmp/oline-env.sh ] && . /tmp/oline-env.sh
   RESTART_BIN="${PROJECT_BIN:-terpd}"
   echo "=== Restart mode: killing ${RESTART_BIN} ==="
   pkill -f "${RESTART_BIN} start" 2>/dev/null || true
@@ -121,6 +142,27 @@ if command -v apt-get >/dev/null 2>&1; then
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq coreutils file pv lz4 zstd unzip wget >/dev/null 2>&1
 elif command -v apk >/dev/null 2>&1; then
   apk add --no-cache coreutils file pv lz4 zstd unzip wget >/dev/null 2>&1
+fi
+
+# ── Tailscale tailnet join (if HEADSCALE_URL is set) ──────────────────────────
+if [ -n "${HEADSCALE_URL:-}" ] && [ -n "${HEADSCALE_PREAUTH_KEY:-}" ]; then
+  echo "[oline] Joining tailnet via $HEADSCALE_URL"
+  if ! command -v tailscale >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+      curl -fsSL https://tailscale.com/install.sh | sh 2>&1 | tail -3
+    elif command -v apk >/dev/null 2>&1; then
+      apk add --no-cache tailscale >/dev/null 2>&1
+    fi
+  fi
+  if command -v tailscaled >/dev/null 2>&1; then
+    tailscaled --tun=userspace-networking --state=mem: --socket=/tmp/tailscaled.sock &
+    sleep 3
+    tailscale --socket=/tmp/tailscaled.sock up       --login-server="$HEADSCALE_URL"       --authkey="$HEADSCALE_PREAUTH_KEY"       --hostname="${HOSTNAME:-oline-sentry}"       --accept-routes       --reset 2>&1 || echo "[oline] tailscale up failed (non-fatal)"
+    echo "[oline] Tailscale status:"
+    tailscale --socket=/tmp/tailscaled.sock status 2>&1 || true
+  else
+    echo "[oline] WARNING: tailscale not available, skipping tailnet join"
+  fi
 fi
 
 [ -f /tmp/oline-env.sh ] && . /tmp/oline-env.sh
@@ -223,8 +265,24 @@ if [ "$OLINE_NODE_MODE" = "native" ]; then
   # Pruning
   [ -n "$PRUNING" ] && BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --pruning $PRUNING"
 
-  # Genesis override
-  [ -n "$GENESIS_URL" ] && BOOTSTRAP_ARGS="$BOOTSTRAP_ARGS --genesis-url $GENESIS_URL"
+  # Genesis override — pre-fetch and unwrap RPC genesis if needed
+  if [ -n "$GENESIS_URL" ]; then
+    echo "[oline] Fetching genesis from $GENESIS_URL"
+    _genesis_tmp="/tmp/genesis_raw.json"
+    curl -sfL "$GENESIS_URL" -o "$_genesis_tmp" 2>/dev/null
+    if command -v jq >/dev/null 2>&1 && jq -e '.result.genesis' "$_genesis_tmp" >/dev/null 2>&1; then
+      echo "[oline] Detected RPC wrapper — extracting .result.genesis"
+      jq '.result.genesis' "$_genesis_tmp" > /tmp/genesis.json
+    else
+      cp "$_genesis_tmp" /tmp/genesis.json
+    fi
+    rm -f "$_genesis_tmp"
+    _genesis_dest="${PROJECT_ROOT:-/root/.terpd}/config/genesis.json"
+    mkdir -p "$(dirname "$_genesis_dest")"
+    cp /tmp/genesis.json "$_genesis_dest"
+    echo "[oline] Genesis installed to $_genesis_dest (chain_id=$(jq -r .chain_id /tmp/genesis.json 2>/dev/null))"
+    # Don't pass --genesis-url to bootstrap since we already installed it
+  fi
 
   echo "[oline] terpd bootstrap $BOOTSTRAP_ARGS"
 
@@ -250,8 +308,9 @@ if [ "$OLINE_NODE_MODE" = "native" ]; then
     esac
     rm -f "$SNAPSHOT_SFTP_PATH"
     echo "=== [snapshot] SFTP snapshot installed ==="
-    # Data already extracted — strip sync args so bootstrap skips download.
-    BOOTSTRAP_ARGS=$(echo "$BOOTSTRAP_ARGS" | sed 's/--sync-mode [a-z]*//g; s/--snapshot-url [^ ]*//g; s/--statesync-rpcs [^ ]*//g')
+    # Data extracted — only strip snapshot-url. Keep sync-mode and statesync-rpcs
+    # for sentry snapshot detection and bootstrap-state light client verification.
+    BOOTSTRAP_ARGS=$(echo "$BOOTSTRAP_ARGS" | sed 's/--snapshot-url [^ ]*//g')
   fi
 
   # ── Snapshot export node: setup-only, then wrap with snapshot.sh ──
@@ -748,7 +807,14 @@ if [ "$DOWNLOAD_GENESIS" == "1" ]; then
   GENESIS_FILENAME="${GENESIS_FILENAME:-genesis.json}"
 
   echo "Downloading genesis $GENESIS_URL"
-  curl -sfL $GENESIS_URL > genesis.json
+  curl -sfL $GENESIS_URL > genesis_raw.json
+  # CometBFT /genesis returns JSON-RPC wrapper; extract .result.genesis if present
+  if command -v jq >/dev/null 2>&1 && jq -e '.result.genesis' genesis_raw.json >/dev/null 2>&1; then
+    jq '.result.genesis' genesis_raw.json > genesis.json
+    rm genesis_raw.json
+  else
+    mv genesis_raw.json genesis.json
+  fi
   file genesis.json | grep -q 'gzip compressed data' && mv genesis.json genesis.json.gz && gzip -d genesis.json.gz
   file genesis.json | grep -q 'tar archive' && mv genesis.json genesis.json.tar && tar -xf genesis.json.tar && rm genesis.json.tar
   file genesis.json | grep -q 'Zip archive data' && mv genesis.json genesis.json.zip && unzip -o genesis.json.zip

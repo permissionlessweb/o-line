@@ -35,9 +35,10 @@ use crate::{
     deployer::OLineDeployer,
     with_examples, MAX_RETRIES,
 };
-use akash_deploy_rs::{
-    build_create_lease_msg, broadcast_multi_signer, AkashClient, BidId,
-    DeploymentWorkflow, ServiceEndpoint, SignerEntry, Step,
+use akash_deploy_rs::{AkashBackend, 
+    build_create_lease_msg, broadcast_multi_signer, AkashClient, Bid, BidId,
+    DeploymentRecord, DeploymentStore, DeploymentWorkflow, FileDeploymentStore,
+    ServiceEndpoint, SignerEntry, Step,
 };
 use std::{collections::HashMap, env::var, error::Error, io::{self, BufRead}, path::PathBuf};
 
@@ -63,6 +64,37 @@ with_examples! {
         /// Skip interactive prompts — use env vars + defaults
         #[arg(long)]
         pub non_interactive: bool,
+
+        /// Use an external validator instead of deploying one (skip Phase V).
+        /// Format: <RPC_URL> e.g. https://rpc-testnet.terp.network
+        #[arg(long)]
+        pub validator_rpc: Option<String>,
+
+        /// External validator P2P peer address. Required with --validator-rpc.
+        /// Format: <node_id>@<host>:<port>
+        #[arg(long)]
+        pub validator_peer: Option<String>,
+
+        /// Config profile to use (default: testnet for testnet-deploy)
+        #[arg(long, default_value = "testnet")]
+        pub profile: String,
+
+        /// Resume from saved state — accept leases for previously created deployments.
+        /// Requires --provider-a (and optionally --provider-b, --provider-c).
+        #[arg(long)]
+        pub resume: bool,
+
+        /// Provider address for Phase A (snapshot+seed). Used with --resume.
+        #[arg(long)]
+        pub provider_a: Option<String>,
+
+        /// Provider address for Phase B (tackles). Used with --resume.
+        #[arg(long)]
+        pub provider_b: Option<String>,
+
+        /// Provider address for Phase C (forwards). Used with --resume.
+        #[arg(long)]
+        pub provider_c: Option<String>,
     }
     => "../../docs/examples/testnet.md"
 }
@@ -77,12 +109,18 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
     let non_interactive = args.non_interactive || std::env::var("OLINE_NON_INTERACTIVE").is_ok();
 
     let (mnemonic, password) = if non_interactive {
-        let m = std::env::var("OLINE_MNEMONIC")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .ok_or("OLINE_NON_INTERACTIVE requires OLINE_MNEMONIC to be set")?;
         let p = std::env::var("OLINE_PASSWORD").unwrap_or_else(|_| "oline-test".to_string());
-        (m.trim().to_string(), p)
+        let m = if let Some(raw) = std::env::var("OLINE_MNEMONIC").ok().filter(|s| !s.trim().is_empty()) {
+            raw.trim().to_string()
+        } else {
+            // Fall back to encrypted mnemonic + OLINE_PASSWORD (same as SDL deploy)
+            use crate::crypto::decrypt_mnemonic;
+            let blob = crate::config::read_encrypted_mnemonic_from_env()
+                .map_err(|_| "OLINE_NON_INTERACTIVE requires OLINE_MNEMONIC or OLINE_ENCRYPTED_MNEMONIC")?;
+            decrypt_mnemonic(&blob, &p)
+                .map_err(|e| format!("Failed to decrypt mnemonic: {}. Check OLINE_PASSWORD.", e))?
+        };
+        (m, p)
     } else if args.raw {
         let m = rpassword::prompt_password("Enter mnemonic: ")?;
         if m.trim().is_empty() {
@@ -95,17 +133,17 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
     };
 
     let config = if non_interactive {
-        build_config_from_env(mnemonic)
+        build_config_from_env(mnemonic, Some(&args.profile))
     } else {
         let stdin = io::stdin();
         let mut lines = stdin.lock().lines();
-        let cfg = collect_config(&password, mnemonic, &mut lines).await?;
+        let cfg = collect_config(&password, mnemonic, &mut lines, Some(&args.profile)).await?;
         drop(lines);
         cfg
     };
 
     // ── 2. Create deployer + preflight ───────────────────────────────────────
-    let deployer = OLineDeployer::new(config.clone(), password)
+    let deployer = OLineDeployer::new(config.clone(), password.clone())
         .await
         .map_err(|e| -> Box<dyn Error> { e.into() })?;
 
@@ -114,230 +152,292 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
         .await
         .map_err(|e| -> Box<dyn Error> { e.into() })?;
 
-    // ── 3. Build ALL 3 SDL var sets upfront ──────────────────────────────────
-    // Phase B and C deploy with empty peer placeholders. Real peer config is
-    // injected at bootstrap time via SFTP (verify_files_and_signal_start writes
-    // refresh_vars to /tmp/oline-env.sh which the container sources at start).
+    // ── 3. Shared setup ──────────────────────────────────────────────────────────────────────
     let secrets_path = var("SECRETS_PATH").unwrap_or_else(|_| ".".into());
-    let mut a_vars = build_testnet_a_vars(
-        &config,
-        &secrets_path,
-        &args.localterp_image,
-        &args.chain_id,
-        args.fast_blocks,
-    )
-    .await?;
+    let ssh_key_path: PathBuf = format!("{}/oline-testnet-key", secrets_path).into();
+    let ssh_key = ensure_ssh_key(&ssh_key_path)?;
+    let ssh_pubkey = ssh_key.public_key().to_string();
 
-    let ssh_key_path: PathBuf = a_vars
-        .get("SSH_KEY_PATH")
-        .map(|p| PathBuf::from(p))
-        .unwrap_or_else(|| format!("{}/oline-testnet-key", secrets_path).into());
+    // ── 4. Validator: external or deploy Phase V ──────────────────────────────────
+    let (validator_peer, genesis_url, validator_node_id) = if let (Some(ext_rpc), Some(ext_peer)) =
+        (&args.validator_rpc, &args.validator_peer)
+    {
+        tracing::info!("\n── Using external validator (skip Phase V) ──");
+        tracing::info!("  RPC:  {}", ext_rpc);
+        tracing::info!("  Peer: {}", ext_peer);
 
-    let ssh_pubkey = a_vars
-        .get("SSH_PUBKEY")
-        .cloned()
-        .unwrap_or_default();
+        let genesis_url = format!("{}/genesis", ext_rpc.trim_end_matches('/'));
 
-    // Phase B/C with empty peer placeholders (peers injected at bootstrap via SFTP)
-    let b_deploy_vars = build_testnet_b_vars(
-        &config, &args.chain_id, "", "", "", "", &ssh_pubkey,
-    );
-    let c_deploy_vars = build_testnet_c_vars(
-        &config, &args.chain_id, "", "", "", "", "", "", "", &ssh_pubkey,
-    );
+        // Verify validator is reachable
+        let status: serde_json::Value = reqwest::get(&format!("{}/status", ext_rpc.trim_end_matches('/')))
+            .await?
+            .json()
+            .await
+            .map_err(|e| format!("Cannot reach validator RPC: {}", e))?;
+        let height = status["result"]["sync_info"]["latest_block_height"]
+            .as_str().unwrap_or("0");
+        tracing::info!("  Validator height: {}", height);
 
-    // ── 4. Create all 3 deployments + collect bids ───────────────────────────
-    let sdl_a = config.load_sdl("testnet-a.yml").map_err(|e| -> Box<dyn Error> { e })?;
-    let sdl_b = config.load_sdl("testnet-b.yml").map_err(|e| -> Box<dyn Error> { e })?;
-    let sdl_c = config.load_sdl("testnet-c.yml").map_err(|e| -> Box<dyn Error> { e })?;
+        let node_id = ext_peer.split('@').next().unwrap_or("").to_string();
+        (ext_peer.clone(), genesis_url, node_id)
+    } else {
+        tracing::info!("\n── Phase V: deploying validator ──");
+        let v_vars = build_testnet_v_vars(&config, &args.localterp_image, &args.chain_id, args.fast_blocks);
+        let sdl_v = config.load_sdl("testnet-v.yml").map_err(|e| -> Box<dyn Error> { e })?;
 
-    tracing::info!("\n── Creating all 3 deployments ──");
+        let (_state_v, v_endpoints) = deployer
+            .deploy_phase_auto(&sdl_v, &v_vars, "testnet-phase-v")
+            .await
+            .map_err(|e| -> Box<dyn Error> { e.into() })?;
 
-    let (mut state_a, bids_a) = deployer
-        .deploy_phase_until_bids(&sdl_a, &a_vars, "testnet-phase-a")
+        let validator_svc = v_vars.get("VALIDATOR_SVC").map(|s| s.as_str()).unwrap_or("testnet-v-validator");
+        let validator_rpc_ep = OLineDeployer::find_endpoint_by_internal_port(&v_endpoints, validator_svc, 26657);
+        let validator_p2p_ep = OLineDeployer::find_endpoint_by_internal_port(&v_endpoints, validator_svc, 26656);
+
+        let validator_rpc_url = validator_rpc_ep
+            .map(|e| format!("http://{}:{}", endpoint_hostname(&e.uri), e.port))
+            .ok_or("No validator RPC endpoint found")?;
+        let validator_p2p_addr = validator_p2p_ep
+            .map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port))
+            .ok_or("No validator P2P endpoint found")?;
+
+        tracing::info!("\n── Waiting for validator to produce blocks ──");
+        tracing::info!("  RPC: {}", validator_rpc_url);
+
+        let validator_peer = OLineDeployer::extract_peer_id_with_boot_wait(
+            &validator_rpc_url, &validator_p2p_addr, 60, 30, 10,
+        )
         .await
-        .map_err(|e| -> Box<dyn Error> { e.into() })?;
-    tracing::info!("  Phase A: {} bid(s), dseq={}", bids_a.len(), state_a.dseq.unwrap_or(0));
+        .ok_or("Validator did not come up within timeout")?;
+        tracing::info!("  Validator peer: {}", validator_peer);
 
-    let (mut state_b, bids_b) = deployer
-        .deploy_phase_until_bids(&sdl_b, &b_deploy_vars, "testnet-phase-b")
-        .await
-        .map_err(|e| -> Box<dyn Error> { e.into() })?;
-    tracing::info!("  Phase B: {} bid(s), dseq={}", bids_b.len(), state_b.dseq.unwrap_or(0));
+        let genesis_url = format!("{}/genesis", validator_rpc_url.trim_end_matches('/'));
 
-    let (mut state_c, bids_c) = deployer
-        .deploy_phase_until_bids(&sdl_c, &c_deploy_vars, "testnet-phase-c")
-        .await
-        .map_err(|e| -> Box<dyn Error> { e.into() })?;
-    tracing::info!("  Phase C: {} bid(s), dseq={}", bids_c.len(), state_c.dseq.unwrap_or(0));
+        let genesis_resp: serde_json::Value = reqwest::get(&genesis_url)
+            .await?
+            .json()
+            .await
+            .map_err(|e| format!("Failed to fetch genesis: {}", e))?;
+        let genesis_json = genesis_resp
+            .get("result")
+            .and_then(|r| r.get("genesis"))
+            .ok_or("Missing .result.genesis in /genesis response")?;
+        let genesis_bytes = serde_json::to_vec_pretty(genesis_json)?;
+        let genesis_local: PathBuf = format!("{}/testnet-genesis.json", secrets_path).into();
+        std::fs::write(&genesis_local, &genesis_bytes)?;
+        tracing::info!("  Genesis saved: {:?} ({} bytes)", genesis_local, genesis_bytes.len());
 
-    // ── 5. Select providers for all 3 ────────────────────────────────────────
-    let stdin = io::stdin();
-    let mut lines = stdin.lock().lines();
-
-    tracing::info!("\n── Provider selection: Phase A ──");
-    let provider_a = deployer.interactive_select_provider(&bids_a, &mut lines).await
-        .map_err(|e| -> Box<dyn Error> { e })?;
-    DeploymentWorkflow::<AkashClient>::select_provider(&mut state_a, &provider_a)
-        .map_err(|e| -> Box<dyn Error> { e.into() })?;
-
-    tracing::info!("\n── Provider selection: Phase B ──");
-    let provider_b = deployer.interactive_select_provider(&bids_b, &mut lines).await
-        .map_err(|e| -> Box<dyn Error> { e })?;
-    DeploymentWorkflow::<AkashClient>::select_provider(&mut state_b, &provider_b)
-        .map_err(|e| -> Box<dyn Error> { e.into() })?;
-
-    tracing::info!("\n── Provider selection: Phase C ──");
-    let provider_c = deployer.interactive_select_provider(&bids_c, &mut lines).await
-        .map_err(|e| -> Box<dyn Error> { e })?;
-    DeploymentWorkflow::<AkashClient>::select_provider(&mut state_c, &provider_c)
-        .map_err(|e| -> Box<dyn Error> { e.into() })?;
-
-    // ── 6. Batch lease creation (3 MsgCreateLease in 1 signed tx) ────────────
-    tracing::info!("\n── Batch lease acceptance: 3 MsgCreateLease in 1 tx ──");
-
-    let owner = deployer.client.address().to_string();
-
-    let bid_a = find_bid_for_provider(&bids_a, &provider_a)?;
-    let bid_b = find_bid_for_provider(&bids_b, &provider_b)?;
-    let bid_c = find_bid_for_provider(&bids_c, &provider_c)?;
-
-    let bid_id_a = BidId::from_bid(&owner, state_a.dseq.unwrap(), state_a.gseq, state_a.oseq, &bid_a);
-    let bid_id_b = BidId::from_bid(&owner, state_b.dseq.unwrap(), state_b.gseq, state_b.oseq, &bid_b);
-    let bid_id_c = BidId::from_bid(&owner, state_c.dseq.unwrap(), state_c.gseq, state_c.oseq, &bid_c);
-
-    let lease_msgs = vec![
-        build_create_lease_msg(&bid_id_a),
-        build_create_lease_msg(&bid_id_b),
-        build_create_lease_msg(&bid_id_c),
-    ];
-
-    // Query account for current sequence
-    let querier = &deployer.client.signing_client().querier;
-    let acct = querier
-        .base_account(deployer.client.address_ref())
-        .await
-        .map_err(|e| format!("base_account: {}", e))?;
-
-    let chain_id = querier.chain_config.chain_id.as_str();
-
-    let signer_entries = vec![SignerEntry {
-        signer: &deployer.signer,
-        account_number: acct.account_number,
-        sequence: acct.sequence,
-        messages: lease_msgs,
-    }];
-
-    let batch_tx = broadcast_multi_signer(
-        querier,
-        chain_id,
-        signer_entries,
-        1.5,
-        std::time::Duration::from_secs(60),
-    )
-    .await
-    .map_err(|e| -> Box<dyn Error> { e.into() })?;
-
-    tracing::info!(
-        "  Batch lease tx confirmed: hash={}, height={}",
-        batch_tx.hash,
-        batch_tx.height
-    );
-
-    // Record lease on each state and skip to SendManifest
-    state_a.record_tx(&batch_tx.hash);
-    state_a.lease_id = Some(bid_id_a.into());
-    state_a.transition(Step::SendManifest);
-
-    state_b.record_tx(&batch_tx.hash);
-    state_b.lease_id = Some(bid_id_b.into());
-    state_b.transition(Step::SendManifest);
-
-    state_c.record_tx(&batch_tx.hash);
-    state_c.lease_id = Some(bid_id_c.into());
-    state_c.transition(Step::SendManifest);
-
-    // ── 7. Send manifests + get endpoints ────────────────────────────────────
-    tracing::info!("\n── Sending manifests ──");
-
-    let a_endpoints = deployer
-        .deploy_phase_complete(&mut state_a, "testnet-phase-a")
-        .await
-        .map_err(|e| -> Box<dyn Error> { e.into() })?;
-
-    let b_endpoints = deployer
-        .deploy_phase_complete(&mut state_b, "testnet-phase-b")
-        .await
-        .map_err(|e| -> Box<dyn Error> { e.into() })?;
-
-    let c_endpoints = deployer
-        .deploy_phase_complete(&mut state_c, "testnet-phase-c")
-        .await
-        .map_err(|e| -> Box<dyn Error> { e.into() })?;
-
-    // ── 8. Wait for validator to produce blocks ──────────────────────────────
-    let validator_rpc_ep = OLineDeployer::find_endpoint_by_internal_port(
-        &a_endpoints, "testnet-a-validator", 26657,
-    );
-    let validator_p2p_ep = OLineDeployer::find_endpoint_by_internal_port(
-        &a_endpoints, "testnet-a-validator", 26656,
-    );
-
-    let validator_rpc_url = validator_rpc_ep
-        .map(|e| format!("http://{}:{}", endpoint_hostname(&e.uri), e.port))
-        .ok_or("No validator RPC endpoint found")?;
-    let validator_p2p_addr = validator_p2p_ep
-        .map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port))
-        .ok_or("No validator P2P endpoint found")?;
-
-    tracing::info!("\n── Waiting for validator to produce blocks ──");
-    tracing::info!("  RPC: {}", validator_rpc_url);
-
-    let validator_peer = OLineDeployer::extract_peer_id_with_boot_wait(
-        &validator_rpc_url, &validator_p2p_addr, 60, 30, 10,
-    )
-    .await
-    .ok_or("Validator did not come up within timeout")?;
-
-    tracing::info!("  Validator peer: {}", validator_peer);
-
-    // ── 9. Fetch genesis from validator RPC ──────────────────────────────────
-    tracing::info!("\n── Fetching genesis from validator ──");
-    let genesis_url = format!("{}/genesis", validator_rpc_url.trim_end_matches('/'));
-    let genesis_resp: serde_json::Value = reqwest::get(&genesis_url)
-        .await?
-        .json()
-        .await
-        .map_err(|e| format!("Failed to fetch genesis: {}", e))?;
-
-    let genesis_json = genesis_resp
-        .get("result")
-        .and_then(|r| r.get("genesis"))
-        .ok_or("Missing .result.genesis in /genesis response")?;
-
-    let genesis_bytes = serde_json::to_vec_pretty(genesis_json)?;
-    let genesis_local: PathBuf = format!("{}/testnet-genesis.json", secrets_path).into();
-    std::fs::write(&genesis_local, &genesis_bytes)?;
-    tracing::info!("  Genesis saved: {:?} ({} bytes)", genesis_local, genesis_bytes.len());
-
-    // ── 10. Bootstrap Phase A sentries ────────────────────────────────────────
-    tracing::info!("\n── Bootstrapping Phase A sentries ──");
-    let scripts_path = var("OLINE_SCRIPTS_PATH").unwrap_or_else(|_| "plays/audible".into());
-    let nginx_path = var("OLINE_NGINX_PATH").unwrap_or_else(|_| "plays/flea-flicker/nginx".into());
-
-    let genesis_file = PreStartFile {
-        source: FileSource::Bytes(genesis_bytes.clone()),
-        remote_path: "/tmp/genesis.json".into(),
+        let node_id = validator_peer.split('@').next().unwrap_or("").to_string();
+        (validator_peer, genesis_url, node_id)
     };
 
-    // Inject explicit snapshot URL so sentries don't rely on chain-registry resolution.
-    // OLINE_SNAPSHOT_URL → SNAPSHOT_URL (operator override, survives OFFLINE mode).
-    let snapshot_full_url = var("OLINE_SNAPSHOT_URL").unwrap_or_default();
-    if !snapshot_full_url.is_empty() {
-        a_vars.insert("SNAPSHOT_URL".into(), snapshot_full_url.clone());
-        a_vars.insert("OLINE_SNAPSHOT_URL".into(), snapshot_full_url);
-        tracing::info!("  Snapshot URL: {}", a_vars["SNAPSHOT_URL"]);
+    // ── 7. Build sentry var sets with real peer info + genesis URL ────────────
+    let a_vars = build_testnet_a_vars(
+        &config, &args.chain_id, &genesis_url, &validator_peer, &ssh_pubkey,
+    );
+    let b_deploy_vars = build_testnet_b_vars(
+        &config, &args.chain_id, &genesis_url, "", &validator_peer, &validator_node_id, "", &ssh_pubkey,
+    );
+    let c_deploy_vars = build_testnet_c_vars(
+        &config, &args.chain_id, &genesis_url, "", "", "", "", &validator_peer, &validator_node_id, "", &ssh_pubkey,
+    );
+
+    // ── 8. Two-pass deployment: create + collect bids OR resume with providers ──
+    let mut store = FileDeploymentStore::new_default().await
+        .map_err(|e| -> Box<dyn Error> { e.into() })?;
+
+    let (mut state_a, mut state_b, mut state_c, a_endpoints, b_endpoints, c_endpoints);
+
+    if args.resume {
+        // ── Pass 2: Resume — load saved state and accept leases ──────────────
+        let pa = args.provider_a.as_deref()
+            .ok_or("--resume requires --provider-a")?;
+
+        // Find Phase A/B/C DSEQs from saved records
+        let all_records: Vec<DeploymentRecord> = store.list().await
+            .map_err(|e| -> Box<dyn Error> { e.into() })?;
+        let phase_a_rec = all_records.iter()
+            .find(|r| r.label == "testnet-phase-a" && matches!(r.step, Step::SelectProvider))
+            .ok_or("No saved Phase A deployment at SelectProvider step. Run without --resume first.")?;
+        let phase_b_rec = all_records.iter()
+            .find(|r| r.label == "testnet-phase-b" && matches!(r.step, Step::SelectProvider));
+        let phase_c_rec = all_records.iter()
+            .find(|r| r.label == "testnet-phase-c" && matches!(r.step, Step::SelectProvider));
+
+        tracing::info!("\n── Resuming from saved state ──");
+        tracing::info!("  Phase A: dseq={}", phase_a_rec.dseq);
+
+        state_a = phase_a_rec.clone().to_state("testnet-phase-a", &password)
+            .map_err(|e| -> Box<dyn Error> { e.into() })?;
+        DeploymentWorkflow::<AkashClient>::select_provider(&mut state_a, pa)
+            .map_err(|e| -> Box<dyn Error> { e.into() })?;
+
+        // Collect phases + providers for batch lease
+        let mut lease_phases: Vec<(&mut akash_deploy_rs::DeploymentState, String)> = vec![];
+        lease_phases.push((&mut state_a, pa.to_string()));
+
+        // Phase B/C are optional (single-phase deploy only needs A)
+        state_b = if let Some(rec) = phase_b_rec {
+            let pb = args.provider_b.as_deref()
+                .ok_or("Phase B exists but --provider-b not specified")?;
+            tracing::info!("  Phase B: dseq={}", rec.dseq);
+            let mut s = rec.clone().to_state("testnet-phase-b", &password)
+                .map_err(|e| -> Box<dyn Error> { e.into() })?;
+            DeploymentWorkflow::<AkashClient>::select_provider(&mut s, pb)
+                .map_err(|e| -> Box<dyn Error> { e.into() })?;
+            s
+        } else {
+            akash_deploy_rs::DeploymentState::new("testnet-phase-b", "")
+        };
+
+        state_c = if let Some(rec) = phase_c_rec {
+            let pc = args.provider_c.as_deref()
+                .ok_or("Phase C exists but --provider-c not specified")?;
+            tracing::info!("  Phase C: dseq={}", rec.dseq);
+            let mut s = rec.clone().to_state("testnet-phase-c", &password)
+                .map_err(|e| -> Box<dyn Error> { e.into() })?;
+            DeploymentWorkflow::<AkashClient>::select_provider(&mut s, pc)
+                .map_err(|e| -> Box<dyn Error> { e.into() })?;
+            s
+        } else {
+            akash_deploy_rs::DeploymentState::new("testnet-phase-c", "")
+        };
+
+        // Batch lease creation for all phases that have a selected provider
+        tracing::info!("\n── Batch lease acceptance ──");
+        let owner = deployer.client.address().to_string();
+        let mut lease_msgs = Vec::new();
+        let mut bid_ids: Vec<(usize, BidId)> = Vec::new(); // (phase_idx, bid_id)
+
+        for (idx, (state, provider)) in [
+            (&state_a, pa.to_string()),
+            (&state_b, args.provider_b.clone().unwrap_or_default()),
+            (&state_c, args.provider_c.clone().unwrap_or_default()),
+        ].iter().enumerate() {
+            if state.dseq.is_none() || provider.is_empty() { continue; }
+            let bid = find_bid_for_provider(&state.bids, provider)?;
+            let bid_id = BidId::from_bid(&owner, state.dseq.unwrap(), state.gseq, state.oseq, &bid);
+            lease_msgs.push(build_create_lease_msg(&bid_id));
+            bid_ids.push((idx, bid_id));
+        }
+
+        let querier = &deployer.client.signing_client().querier;
+        let acct = querier
+            .base_account(deployer.client.address_ref())
+            .await
+            .map_err(|e| format!("base_account: {}", e))?;
+        let chain_id = querier.chain_config.chain_id.as_str();
+
+        let signer_entries = vec![SignerEntry {
+            signer: &deployer.signer,
+            account_number: acct.account_number,
+            sequence: acct.sequence,
+            messages: lease_msgs,
+        }];
+
+        let batch_tx = broadcast_multi_signer(
+            querier, chain_id, signer_entries, 1.5,
+            std::time::Duration::from_secs(60),
+        ).await.map_err(|e| -> Box<dyn Error> { e.into() })?;
+
+        tracing::info!("  Batch lease tx: hash={}, height={}", batch_tx.hash, batch_tx.height);
+
+        // Apply lease results to states
+        let mut states = [&mut state_a, &mut state_b, &mut state_c];
+        for (phase_idx, bid_id) in bid_ids {
+            states[phase_idx].record_tx(&batch_tx.hash);
+            states[phase_idx].lease_id = Some(bid_id.into());
+            states[phase_idx].transition(Step::SendManifest);
+        }
+
+        // Regenerate JWT auth (not persisted in saved state)
+        let jwt = deployer.client.generate_jwt(&deployer.client.address()).await
+            .map_err(|e| -> Box<dyn Error> { e.into() })?;
+        state_a.jwt_token = Some(jwt.clone());
+        state_b.jwt_token = Some(jwt.clone());
+        state_c.jwt_token = Some(jwt);
+
+        // Send manifests + get endpoints
+        tracing::info!("\n── Sending manifests ──");
+        a_endpoints = deployer.deploy_phase_complete(&mut state_a, "testnet-phase-a")
+            .await.map_err(|e| -> Box<dyn Error> { e.into() })?;
+        b_endpoints = if state_b.dseq.is_some() {
+            deployer.deploy_phase_complete(&mut state_b, "testnet-phase-b")
+                .await.map_err(|e| -> Box<dyn Error> { e.into() })?
+        } else { vec![] };
+        c_endpoints = if state_c.dseq.is_some() {
+            deployer.deploy_phase_complete(&mut state_c, "testnet-phase-c")
+                .await.map_err(|e| -> Box<dyn Error> { e.into() })?
+        } else { vec![] };
+
+    } else {
+        // ── Pass 1: Create deployments, collect bids, save state, exit ────────
+        let sdl_a = config.load_sdl("testnet-a.yml").map_err(|e| -> Box<dyn Error> { e })?;
+        let sdl_b = config.load_sdl("testnet-b.yml").map_err(|e| -> Box<dyn Error> { e })?;
+        let sdl_c = config.load_sdl("testnet-c.yml").map_err(|e| -> Box<dyn Error> { e })?;
+
+        tracing::info!("\n── Creating sentry deployments (A/B/C) ──");
+
+        let (sa, bids_a) = deployer
+            .deploy_phase_until_bids(&sdl_a, &a_vars, "testnet-phase-a")
+            .await.map_err(|e| -> Box<dyn Error> { e.into() })?;
+        tracing::info!("  Phase A: {} bid(s), dseq={}", bids_a.len(), sa.dseq.unwrap_or(0));
+
+        let (sb, bids_b) = deployer
+            .deploy_phase_until_bids(&sdl_b, &b_deploy_vars, "testnet-phase-b")
+            .await.map_err(|e| -> Box<dyn Error> { e.into() })?;
+        tracing::info!("  Phase B: {} bid(s), dseq={}", bids_b.len(), sb.dseq.unwrap_or(0));
+
+        let (sc, bids_c) = deployer
+            .deploy_phase_until_bids(&sdl_c, &c_deploy_vars, "testnet-phase-c")
+            .await.map_err(|e| -> Box<dyn Error> { e.into() })?;
+        tracing::info!("  Phase C: {} bid(s), dseq={}", bids_c.len(), sc.dseq.unwrap_or(0));
+
+        // Save state for each phase
+        for state in [&sa, &sb, &sc] {
+            let record = DeploymentRecord::from_state(state, &password)
+                .map_err(|e| -> Box<dyn Error> { e.into() })?;
+            store.save(&record).await
+                .map_err(|e| -> Box<dyn Error> { e.into() })?;
+        }
+
+        // Display all bids
+        tracing::info!("\n══════════════════════════════════════════════════════════════");
+        tracing::info!("  BIDS RECEIVED — review and re-run with --resume");
+        tracing::info!("══════════════════════════════════════════════════════════════");
+
+        display_phase_bids(&deployer, "Phase A", sa.dseq.unwrap_or(0), &bids_a).await;
+        display_phase_bids(&deployer, "Phase B", sb.dseq.unwrap_or(0), &bids_b).await;
+        display_phase_bids(&deployer, "Phase C", sc.dseq.unwrap_or(0), &bids_c).await;
+
+        tracing::info!("\n── Resume command ──");
+        tracing::info!("  oline testnet-deploy \\");
+        tracing::info!("    --profile {} \\", args.profile);
+        tracing::info!("    --chain-id {} \\", args.chain_id);
+        if let Some(ref rpc) = args.validator_rpc {
+            tracing::info!("    --validator-rpc {} \\", rpc);
+        }
+        if let Some(ref peer) = args.validator_peer {
+            tracing::info!("    --validator-peer {} \\", peer);
+        }
+        tracing::info!("    --resume \\");
+        tracing::info!("    --provider-a <PROVIDER_ADDRESS> \\");
+        tracing::info!("    --provider-b <PROVIDER_ADDRESS> \\");
+        tracing::info!("    --provider-c <PROVIDER_ADDRESS>");
+
+        tracing::info!("\nState saved. Deployments will remain open and accepting bids.");
+        return Ok(());
     }
+
+    let batch_tx_hash = state_a.tx_hashes.last().cloned().unwrap_or_default();
+
+    // ── 11. Send manifests + get endpoints (already done above in resume path) ──
+    // (non-resume path never reaches here — it exits after printing bids)
+
+    // ── 12. Bootstrap sentries via SSH (scripts + peer config, no genesis) ───
+    tracing::info!("\n── Bootstrapping sentries (scripts + peer config) ──");
+    let scripts_path = var("OLINE_SCRIPTS_PATH").unwrap_or_else(|_| "plays/audible".into());
+    let nginx_path = var("OLINE_NGINX_PATH").unwrap_or_else(|_| "plays/flea-flicker/nginx".into());
 
     // Snapshot node
     let snapshot_eps: Vec<_> = a_endpoints
@@ -348,7 +448,7 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
     if !snapshot_eps.is_empty() {
         bootstrap_sentry(
             "testnet-snapshot", &snapshot_eps, &ssh_key_path, &scripts_path,
-            Some(&nginx_path), &genesis_file, &node_refresh_vars(&a_vars, "SNAP"),
+            Some(&nginx_path), &node_refresh_vars(&a_vars, "SNAP"),
         )
         .await?;
     }
@@ -362,12 +462,12 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
     if !seed_eps.is_empty() {
         bootstrap_sentry(
             "testnet-seed", &seed_eps, &ssh_key_path, &scripts_path,
-            Some(&nginx_path), &genesis_file, &node_refresh_vars(&a_vars, "SEED"),
+            Some(&nginx_path), &node_refresh_vars(&a_vars, "SEED"),
         )
         .await?;
     }
 
-    // ── 11. Extract Phase A peer IDs ─────────────────────────────────────────
+    // ── 13. Extract Phase A peer IDs ─────────────────────────────────────────────────────
     let snap_rpc_ep =
         OLineDeployer::find_endpoint_by_internal_port(&a_endpoints, "testnet-a-snapshot", 26657);
     let snap_p2p_ep =
@@ -436,7 +536,7 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
             let suffix = if svc.contains("left") { "TL" } else { "TR" };
             bootstrap_sentry(
                 label, &eps, &ssh_key_path, &scripts_path, None,
-                &genesis_file, &node_refresh_vars(&b_refresh_base, suffix),
+                &node_refresh_vars(&b_refresh_base, suffix),
             )
             .await?;
         }
@@ -507,35 +607,25 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
             let suffix = if svc.contains("left") { "FL" } else { "FR" };
             bootstrap_sentry(
                 label, &eps, &ssh_key_path, &scripts_path, None,
-                &genesis_file, &node_refresh_vars(&c_refresh_base, suffix),
+                &node_refresh_vars(&c_refresh_base, suffix),
             )
             .await?;
         }
     }
 
     // ── 14. Summary ──────────────────────────────────────────────────────────
-    let faucet_ep =
-        OLineDeployer::find_endpoint_by_internal_port(&a_endpoints, "testnet-a-validator", 5000);
-    let val_api_ep =
-        OLineDeployer::find_endpoint_by_internal_port(&a_endpoints, "testnet-a-validator", 1317);
-
     tracing::info!("\n══════════════════════════════════════════════════════════════");
     tracing::info!("  TESTNET DEPLOYED SUCCESSFULLY");
     tracing::info!("══════════════════════════════════════════════════════════════");
     tracing::info!("  Chain ID:       {}", args.chain_id);
     tracing::info!("  Validator Peer: {}", validator_peer);
-    tracing::info!("  Batch Lease TX: {}", batch_tx.hash);
+    tracing::info!("  Genesis URL:    {}", genesis_url);
+    tracing::info!("  Batch Lease TX: {}", batch_tx_hash);
 
-    if let Some(ep) = &validator_rpc_ep {
-        tracing::info!("  Validator RPC:  http://{}:{}", endpoint_hostname(&ep.uri), ep.port);
+    if let Some(ref ext_rpc) = args.validator_rpc {
+        tracing::info!("  Validator RPC:  {}", ext_rpc);
     }
-    if let Some(ep) = val_api_ep {
-        tracing::info!("  Validator API:  http://{}:{}", endpoint_hostname(&ep.uri), ep.port);
-    }
-    if let Some(ep) = faucet_ep {
-        tracing::info!("  Faucet:         http://{}:{}/faucet?address=terp1...",
-            endpoint_hostname(&ep.uri), ep.port);
-    }
+
     if let Some(ref p) = snapshot_peer {
         tracing::info!("  Snapshot Peer:  {}", p);
     }
@@ -568,45 +658,20 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
 
 // ── Variable builders ────────────────────────────────────────────────────────
 
-async fn build_testnet_a_vars(
+fn build_testnet_v_vars(
     config: &OLineConfig,
-    secrets_path: &str,
     localterp_image: &str,
     chain_id: &str,
     fast_blocks: bool,
-) -> Result<HashMap<String, String>, Box<dyn Error>> {
+) -> HashMap<String, String> {
     let mut vars = config.to_sdl_vars();
-
-    vars.insert("VALIDATOR_SVC".into(), "testnet-a-validator".into());
-    vars.insert("SNAPSHOT_SVC".into(), "testnet-a-snapshot".into());
-    vars.insert("SEED_SVC".into(), "testnet-a-seed".into());
-
+    vars.insert("VALIDATOR_SVC".into(), "testnet-v-validator".into());
     vars.insert("LOCALTERP_IMAGE".into(), localterp_image.to_string());
     vars.insert("TESTNET_CHAIN_ID".into(), chain_id.to_string());
     vars.insert(
         "TESTNET_FAST_BLOCKS".into(),
         if fast_blocks { "true" } else { "false" }.into(),
     );
-
-    vars.insert("SNAPSHOT_MONIKER".into(), generate_credential(12));
-    vars.insert("SEED_MONIKER".into(), generate_credential(12));
-
-    let key_path: PathBuf = format!("{}/oline-testnet-key", secrets_path).into();
-    let ssh_key = ensure_ssh_key(&key_path)?;
-    vars.insert("SSH_PUBKEY".into(), ssh_key.public_key().to_string());
-    vars.insert(
-        "SSH_PRIVKEY".into(),
-        ssh_key.to_openssh(ssh_key::LineEnding::LF).unwrap().to_string(),
-    );
-    vars.insert("SSH_KEY_PATH".into(), key_path.to_string_lossy().into());
-
-    // Empty peer placeholders — injected via SFTP signal after validator boots
-    vars.insert("TERPD_P2P_PERSISTENT_PEERS".into(), String::new());
-    vars.insert("TERPD_P2P_UNCONDITIONAL_PEER_IDS".into(), String::new());
-    vars.insert("TERPD_P2P_PRIVATE_PEER_IDS".into(), String::new());
-
-    vars.insert("SNAPSHOT_80_ACCEPTS".into(), build_accept_items(&vars, "SNAP"));
-    vars.insert("SEED_80_ACCEPTS".into(), build_accept_items(&vars, "SEED"));
 
     // Faucet domain — route HTTP port 80 → container port 5000
     let faucet_d = config.val("FAUCET_D");
@@ -616,13 +681,51 @@ async fn build_testnet_a_vars(
         format!("          - {}", faucet_d)
     };
     vars.insert("VALIDATOR_80_ACCEPTS".into(), validator_accepts);
+    vars
+}
 
-    Ok(vars)
+fn build_testnet_a_vars(
+    config: &OLineConfig,
+    chain_id: &str,
+    genesis_url: &str,
+    validator_peer: &str,
+    ssh_pubkey: &str,
+) -> HashMap<String, String> {
+    let mut vars = config.to_sdl_vars();
+
+    vars.insert("SNAPSHOT_SVC".into(), "testnet-a-snapshot".into());
+    vars.insert("SEED_SVC".into(), "testnet-a-seed".into());
+    vars.insert("TESTNET_CHAIN_ID".into(), chain_id.to_string());
+    vars.insert("GENESIS_URL".into(), genesis_url.to_string());
+
+    vars.insert("SNAPSHOT_MONIKER".into(), generate_credential(12));
+    vars.insert("SEED_MONIKER".into(), generate_credential(12));
+
+    vars.insert("SSH_PUBKEY".into(), ssh_pubkey.to_string());
+
+    // Tailnet: sentries join headscale tailnet for private P2P access
+    if let Ok(hs_store) = crate::cmd::vpn::HeadscaleStore::load_optional() {
+        if let Ok(server) = hs_store.get(None) {
+            vars.insert("HEADSCALE_URL".into(), server.control_url.clone());
+            vars.insert("HEADSCALE_PREAUTH_KEY".into(), server.preauth_key.clone());
+        }
+    }
+
+    let validator_node_id = validator_peer.split('@').next().unwrap_or("").to_string();
+    vars.insert("TERPD_P2P_PERSISTENT_PEERS".into(), validator_peer.to_string());
+    vars.insert("TERPD_P2P_UNCONDITIONAL_PEER_IDS".into(), validator_node_id.clone());
+    vars.insert("TERPD_P2P_PRIVATE_PEER_IDS".into(), validator_node_id);
+
+    vars.insert("SNAPSHOT_80_ACCEPTS".into(), build_accept_items(&vars, "SNAP"));
+    vars.insert("SEED_80_ACCEPTS".into(), build_accept_items(&vars, "SEED"));
+
+    vars
 }
 
 fn build_testnet_b_vars(
     config: &OLineConfig,
     chain_id: &str,
+    genesis_url: &str,
     snapshot_peer: &str,
     validator_peer: &str,
     validator_node_id: &str,
@@ -634,11 +737,20 @@ fn build_testnet_b_vars(
     vars.insert("LT_SVC".into(), "oline-b-left-tackle".into());
     vars.insert("RT_SVC".into(), "oline-b-right-tackle".into());
     vars.insert("TESTNET_CHAIN_ID".into(), chain_id.to_string());
+    vars.insert("GENESIS_URL".into(), genesis_url.to_string());
     vars.insert("LEFT_TACKLE_MONIKER".into(), generate_credential(12));
     vars.insert("RIGHT_TACKLE_MONIKER".into(), generate_credential(12));
 
     // SSH key — reuse Phase A's keypair so bootstrap_sentry can SFTP in
     vars.insert("SSH_PUBKEY".into(), ssh_pubkey.to_string());
+
+    // Tailnet: sentries join headscale tailnet for private P2P access
+    if let Ok(hs_store) = crate::cmd::vpn::HeadscaleStore::load_optional() {
+        if let Ok(server) = hs_store.get(None) {
+            vars.insert("HEADSCALE_URL".into(), server.control_url.clone());
+            vars.insert("HEADSCALE_PREAUTH_KEY".into(), server.preauth_key.clone());
+        }
+    }
 
     vars.insert(
         "TERPD_P2P_PERSISTENT_PEERS".into(),
@@ -657,6 +769,7 @@ fn build_testnet_b_vars(
 fn build_testnet_c_vars(
     config: &OLineConfig,
     chain_id: &str,
+    genesis_url: &str,
     seed_peer: &str,
     snapshot_peer: &str,
     left_tackle_peer: &str,
@@ -671,11 +784,20 @@ fn build_testnet_c_vars(
     vars.insert("LF_SVC".into(), "oline-c-left-forward".into());
     vars.insert("RF_SVC".into(), "oline-c-right-forward".into());
     vars.insert("TESTNET_CHAIN_ID".into(), chain_id.to_string());
+    vars.insert("GENESIS_URL".into(), genesis_url.to_string());
     vars.insert("LEFT_FMONIKER".into(), generate_credential(12));
     vars.insert("RIGHT_FMONIKER".into(), generate_credential(12));
 
     // SSH key — reuse Phase A's keypair so bootstrap_sentry can SFTP in
     vars.insert("SSH_PUBKEY".into(), ssh_pubkey.to_string());
+
+    // Tailnet: sentries join headscale tailnet for private P2P access
+    if let Ok(hs_store) = crate::cmd::vpn::HeadscaleStore::load_optional() {
+        if let Ok(server) = hs_store.get(None) {
+            vars.insert("HEADSCALE_URL".into(), server.control_url.clone());
+            vars.insert("HEADSCALE_PREAUTH_KEY".into(), server.preauth_key.clone());
+        }
+    }
 
     vars.insert("TERPD_P2P_SEEDS".into(), seed_peer.to_string());
     vars.insert(
@@ -694,6 +816,40 @@ fn build_testnet_c_vars(
     vars.insert("RF_80_ACCEPTS".into(), build_accept_items(&vars, "FR"));
 
     vars
+}
+
+/// Display bids for a deployment phase (no stdin interaction).
+async fn display_phase_bids(
+    deployer: &OLineDeployer,
+    phase_name: &str,
+    dseq: u64,
+    bids: &[Bid],
+) {
+    tracing::info!("\n  ── {} (dseq={}) — {} bid(s) ──", phase_name, dseq, bids.len());
+
+    for (i, bid) in bids.iter().enumerate() {
+        let price_akt = bid.price as f64 / 1_000_000.0;
+        tracing::info!(
+            "    [{}] {:.6} AKT/block ({} uakt)",
+            i + 1, price_akt, bid.price,
+        );
+        tracing::info!("        address: {}", bid.provider);
+
+        match deployer.client.query_provider_info(&bid.provider).await {
+            Ok(Some(info)) => {
+                tracing::info!("        host:    {}", info.host_uri);
+                if !info.email.is_empty() {
+                    tracing::info!("        email:   {}", info.email);
+                }
+                if !info.website.is_empty() {
+                    tracing::info!("        website: {}", info.website);
+                }
+            }
+            _ => {
+                tracing::info!("        host:    (could not query)");
+            }
+        }
+    }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -728,7 +884,6 @@ async fn bootstrap_sentry(
     ssh_key_path: &PathBuf,
     scripts_path: &str,
     nginx_path: Option<&str>,
-    genesis_file: &PreStartFile,
     refresh_vars: &HashMap<String, String>,
 ) -> Result<(), Box<dyn Error>> {
     tracing::info!("  [{}] Pushing genesis + scripts...", label);
@@ -755,15 +910,9 @@ async fn bootstrap_sentry(
         }
     }
 
-    push_pre_start_files(label, endpoints, ssh_key_path, &[genesis_file.clone()], MAX_RETRIES)
-        .await
-        .map_err(|e| -> Box<dyn Error> {
-            format!("[{}] Genesis push failed: {}", label, e).into()
-        })?;
-
     verify_files_and_signal_start(
         label, endpoints, ssh_key_path,
-        &["/tmp/genesis.json".to_string()], refresh_vars,
+        &[], refresh_vars,
     )
     .await
     .map_err(|e| -> Box<dyn Error> {
@@ -773,3 +922,4 @@ async fn bootstrap_sentry(
     tracing::info!("  [{}] Signaled — node starting.", label);
     Ok(())
 }
+

@@ -3,6 +3,11 @@ version: "2.0"
 services:
   ${LT_SVC}:
     image: ${OMNIBUS_IMAGE}
+    command:
+      - sh
+    args:
+      - -c
+      - curl -fsSL ${OLINE_ENTRYPOINT_URL} -o /tmp/wrapper.sh; bash /tmp/wrapper.sh
     expose:
       - port: ${P2P_P_TL}
         as: ${P2P_P_TL}
@@ -33,9 +38,8 @@ ${LT_80_ACCEPTS}
     env:
       - MONIKER=${LEFT_TACKLE_MONIKER}
       - PROJECT_BIN=${OLINE_BINARY}
-      - CHAIN_JSON=${OLINE_CHAIN_JSON}
       - CHAIN_ID=${TESTNET_CHAIN_ID}
-      - OLINE_OFFLINE=1
+      - GENESIS_URL=${GENESIS_URL}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - PRUNING=default
       - TERPD_P2P_PEX=false
@@ -54,8 +58,15 @@ ${LT_80_ACCEPTS}
       - GRPC_P=${GRPC_P_TL}
       - GRPC_D=${GRPC_D_TL}
       - SSH_PUBKEY=${SSH_PUBKEY}
+      - HEADSCALE_URL=${HEADSCALE_URL}
+      - HEADSCALE_PREAUTH_KEY=${HEADSCALE_PREAUTH_KEY}
   ${RT_SVC}:
     image: ${OMNIBUS_IMAGE}
+    command:
+      - sh
+    args:
+      - -c
+      - curl -fsSL ${OLINE_ENTRYPOINT_URL} -o /tmp/wrapper.sh; bash /tmp/wrapper.sh
     expose:
       - port: ${P2P_P_TR}
         as: ${P2P_P_TR}
@@ -86,9 +97,8 @@ ${RT_80_ACCEPTS}
     env:
       - MONIKER=${RIGHT_TACKLE_MONIKER}
       - PROJECT_BIN=${OLINE_BINARY}
-      - CHAIN_JSON=${OLINE_CHAIN_JSON}
       - CHAIN_ID=${TESTNET_CHAIN_ID}
-      - OLINE_OFFLINE=1
+      - GENESIS_URL=${GENESIS_URL}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - PRUNING=default
       - TERPD_P2P_PEX=false
@@ -107,6 +117,8 @@ ${RT_80_ACCEPTS}
       - GRPC_P=${GRPC_P_TR}
       - GRPC_D=${GRPC_D_TR}
       - SSH_PUBKEY=${SSH_PUBKEY}
+      - HEADSCALE_URL=${HEADSCALE_URL}
+      - HEADSCALE_PREAUTH_KEY=${HEADSCALE_PREAUTH_KEY}
 profiles:
   compute:
     ${LT_SVC}:

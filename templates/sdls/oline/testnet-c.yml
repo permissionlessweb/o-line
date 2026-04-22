@@ -3,6 +3,11 @@ version: "2.0"
 services:
   ${LF_SVC}:
     image: ${OMNIBUS_IMAGE}
+    command:
+      - sh
+    args:
+      - -c
+      - curl -fsSL ${OLINE_ENTRYPOINT_URL} -o /tmp/wrapper.sh; bash /tmp/wrapper.sh
     expose:
       - port: ${P2P_P_FL}
         as: ${P2P_P_FL}
@@ -33,9 +38,8 @@ ${LF_80_ACCEPTS}
     env:
       - MONIKER=${LEFT_FMONIKER}
       - PROJECT_BIN=${OLINE_BINARY}
-      - CHAIN_JSON=${OLINE_CHAIN_JSON}
       - CHAIN_ID=${TESTNET_CHAIN_ID}
-      - OLINE_OFFLINE=1
+      - GENESIS_URL=${GENESIS_URL}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - PRUNING=default
       - TERPD_P2P_SEEDS=${TERPD_P2P_SEEDS}
@@ -55,8 +59,15 @@ ${LF_80_ACCEPTS}
       - GRPC_P=${GRPC_P_FL}
       - GRPC_D=${GRPC_D_FL}
       - SSH_PUBKEY=${SSH_PUBKEY}
+      - HEADSCALE_URL=${HEADSCALE_URL}
+      - HEADSCALE_PREAUTH_KEY=${HEADSCALE_PREAUTH_KEY}
   ${RF_SVC}:
     image: ${OMNIBUS_IMAGE}
+    command:
+      - sh
+    args:
+      - -c
+      - curl -fsSL ${OLINE_ENTRYPOINT_URL} -o /tmp/wrapper.sh; bash /tmp/wrapper.sh
     expose:
       - port: ${P2P_P_FR}
         as: ${P2P_P_FR}
@@ -87,9 +98,8 @@ ${RF_80_ACCEPTS}
     env:
       - MONIKER=${RIGHT_FMONIKER}
       - PROJECT_BIN=${OLINE_BINARY}
-      - CHAIN_JSON=${OLINE_CHAIN_JSON}
       - CHAIN_ID=${TESTNET_CHAIN_ID}
-      - OLINE_OFFLINE=1
+      - GENESIS_URL=${GENESIS_URL}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - PRUNING=default
       - TERPD_P2P_SEEDS=${TERPD_P2P_SEEDS}
@@ -109,6 +119,8 @@ ${RF_80_ACCEPTS}
       - GRPC_P=${GRPC_P_FR}
       - GRPC_D=${GRPC_D_FR}
       - SSH_PUBKEY=${SSH_PUBKEY}
+      - HEADSCALE_URL=${HEADSCALE_URL}
+      - HEADSCALE_PREAUTH_KEY=${HEADSCALE_PREAUTH_KEY}
 profiles:
   compute:
     ${LF_SVC}:
