@@ -342,6 +342,11 @@ if [ "$OLINE_NODE_MODE" = "native" ]; then
 
   # ── Non-snapshot node: setup-only, patch endpoints, then start ──
   terpd bootstrap --setup-only $BOOTSTRAP_ARGS >>/proc/1/fd/1 2>&1
+  # Restore pre-fetched genesis if bootstrap overwrote it with a default
+  if [ -f /tmp/genesis.json ]; then
+    cp /tmp/genesis.json "${PROJECT_ROOT:-/root/.terpd}/config/genesis.json"
+    echo "[oline] Restored pre-fetched genesis (chain_id=$(jq -r .chain_id /tmp/genesis.json 2>/dev/null))"
+  fi
   NODE_SCRIPT=/tmp/node-config.sh
   if [ ! -f "$NODE_SCRIPT" ]; then
     NODE_CONFIG_SCRIPT="${NODE_CONFIG_SCRIPT:-https://raw.githubusercontent.com/permissionlessweb/o-line/refs/heads/master/plays/audible/config-node-endpoints.sh}"
