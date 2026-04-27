@@ -93,7 +93,7 @@ with_examples! {
         #[arg(long)]
         pub validator_peer: Option<String>,
         /// Dseq
-        #[arg(long)]
+        #[arg(long,default_value = "0")]
         pub dseq: u64,
     }
     => "../../docs/examples/testnet.md"
@@ -249,7 +249,10 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
     let lb_endpoints;
 
     if args.resume {
-        let dseq = args.dseq;
+        let dseq = match args.dseq == 0 {
+            true => panic!("must set deseq when resume"),
+            false => args.dseq,
+        };
         // ── Pass 2: Resume — load saved state and accept lease ───────────────
         let pa = args
             .provider_a
