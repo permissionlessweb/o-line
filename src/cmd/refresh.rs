@@ -83,10 +83,10 @@ async fn cmd_refresh_run(label: &str, override_cmd: Option<&str>) -> Result<(), 
     // Build current env vars for the phase
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines();
-    let config = collect_config(&password, mnemonic, &mut lines).await?;
+    let config = collect_config(&password, mnemonic, &mut lines, None).await?;
     drop(lines);
 
-    let env_vars = build_phase_vars(&config, &record.phase).await;
+    let env_vars = build_phase_vars(&config, &record.phase, &password).await;
 
     // Default command: re-run wrapper with OLINE_PHASE=refresh
     // Route to /proc/1/fd/1 so logs are visible via `oline manage logs`
@@ -271,14 +271,16 @@ fn cmd_refresh_remove(dseq: u64) -> Result<(), Box<dyn Error>> {
 pub async fn build_phase_vars(
     config: &crate::config::OLineConfig,
     phase: &str,
+    password: &str,
 ) -> std::collections::HashMap<String, String> {
+    let secrets = crate::config::oline_config_dir().to_string_lossy().into_owned();
     match phase.to_uppercase().as_str() {
         "B" => build_phase_b_vars(config, "", ""),
         "C" => build_phase_c_vars(config, "", "", "", "", ""),
         "E" => build_phase_rly_vars(config),
         _ => {
             // Phase A (default)
-            build_phase_a_vars(config, &std::env::var("SECRETS_PATH").unwrap_or_else(|_| ".".into()))
+            build_phase_a_vars(config, &secrets, password)
                 .await
                 .expect("build_phase_a_vars failed")
         }

@@ -3,7 +3,7 @@
 //! The TOML config file is the single source of truth. Environment variables
 //! are derived deterministically: `OLINE_` + `SCREAMING_SNAKE_CASE(config.path)`.
 //!
-//! Resolution priority: env var > .env file > config.toml > struct default.
+//! Resolution priority: env var > config.toml[profiles.X] > config.toml[top-level] > struct default.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -68,6 +68,19 @@ fn resolve_bool(path: &str, toml_val: bool) -> bool {
 
 // ─── Config structs ───────────────────────────────────────────────────────
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct TestnetConfig {
+    /// Docker image for testnet sentry nodes (terp-core with ZK wasmvm + hashmerchant + faucet).
+    #[serde(default)]
+    pub sentry_image: String,
+    /// Faucet key mnemonic for sentry-a (funded in genesis; imported into sentry keyring).
+    #[serde(default)]
+    pub sentry_a_faucet_mnemonic: String,
+    /// Faucet key mnemonic for sentry-b (separate key avoids tx sequence conflicts).
+    #[serde(default)]
+    pub sentry_b_faucet_mnemonic: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct TomlConfig {
     pub chain: ChainConfig,
@@ -93,7 +106,62 @@ pub struct TomlConfig {
     pub sites: SitesConfig,
     #[serde(default)]
     pub minio: MinioConfig,
+    #[serde(default)]
+    pub testnet: TestnetConfig,
+    #[serde(default)]
+    pub proxy: ProxyConfig,
+    #[serde(default)]
+    pub logging: LoggingConfig,
 }
+
+/// Wrapper that deserializes a config.toml with optional `[profiles.<name>]` sections.
+/// Profile values are deep-merged over the base config before env overrides apply.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ProfiledTomlConfig {
+    #[serde(flatten)]
+    pub base: TomlConfig,
+    #[serde(default)]
+    pub profiles: HashMap<String, toml::Value>,
+}
+
+impl ProfiledTomlConfig {
+    /// Resolve a named profile by deep-merging it over the base config.
+    /// Returns a plain TomlConfig with env overrides already applied.
+    pub fn resolve(self, profile: &str) -> Result<TomlConfig, Box<dyn Error>> {
+        let mut base_val = toml::Value::try_from(&self.base)
+            .map_err(|e| format!("Failed to serialize base config: {}", e))?;
+
+        if let Some(overlay) = self.profiles.get(profile) {
+            deep_merge(&mut base_val, overlay);
+        } else if !self.profiles.is_empty() {
+            let available: Vec<&String> = self.profiles.keys().collect();
+            tracing::warn!("  Profile '{}' not found. Available: {:?}", profile, available);
+        }
+
+        let mut config: TomlConfig = base_val.try_into()
+            .map_err(|e| format!("Failed to deserialize merged config: {}", e))?;
+        config.apply_env_overrides();
+        Ok(config)
+    }
+}
+
+/// Recursively merge overlay TOML tables into base. Scalars and arrays are replaced.
+fn deep_merge(base: &mut toml::Value, overlay: &toml::Value) {
+    match (base, overlay) {
+        (toml::Value::Table(base_map), toml::Value::Table(overlay_map)) => {
+            for (key, overlay_val) in overlay_map {
+                let entry = base_map
+                    .entry(key.clone())
+                    .or_insert_with(|| toml::Value::Table(Default::default()));
+                deep_merge(entry, overlay_val);
+            }
+        }
+        (base, overlay) => {
+            *base = overlay.clone();
+        }
+    }
+}
+
 
 // ── Chain ─────────────────────────────────────────────────────────────────
 
@@ -434,6 +502,78 @@ impl Default for MinioConfig {
     fn default() -> Self { Self { autopin_interval: d_autopin() } }
 }
 
+// ── Proxy ─────────────────────────────────────────────────────────────────
+
+fn d_proxy_image() -> String { "ghcr.io/hard-nett/oline-proxy-node:latest".into() }
+fn d_proxy_svc() -> String { "proxy-node".into() }
+fn d_akash_chain_id() -> String { "akashnet-2".into() }
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ProxyConfig {
+    /// Whether the proxy is enabled for log streaming and provider communication.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Docker image for the provider-proxy-node container.
+    #[serde(default = "d_proxy_image")]
+    pub image: String,
+    /// Service name in the SDL template.
+    #[serde(default = "d_proxy_svc")]
+    pub service_name: String,
+    /// Proxy deployment URL (auto-populated after `oline proxy deploy`).
+    #[serde(default)]
+    pub url: String,
+    /// DSEQ of the proxy deployment (auto-populated).
+    #[serde(default)]
+    pub dseq: u64,
+    /// Domain for the proxy's Akash ingress.
+    #[serde(default)]
+    pub domain: String,
+    /// Akash chain ID for the co-located node.
+    #[serde(default = "d_akash_chain_id")]
+    pub akash_chain_id: String,
+    /// Seed nodes for the co-located Akash node.
+    #[serde(default)]
+    pub akash_seeds: String,
+}
+
+impl Default for ProxyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            image: d_proxy_image(),
+            service_name: d_proxy_svc(),
+            url: String::new(),
+            dseq: 0,
+            domain: String::new(),
+            akash_chain_id: d_akash_chain_id(),
+            akash_seeds: String::new(),
+        }
+    }
+}
+
+// ── Logging ──────────────────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct LoggingConfig {
+    /// Auto-persist logs when entering the TUI.
+    #[serde(default = "d_persist")]
+    pub persist: bool,
+    /// Custom log directory (default: ~/.oline/logs/).
+    #[serde(default)]
+    pub log_dir: String,
+}
+
+fn d_persist() -> bool { true }
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            persist: true,
+            log_dir: String::new(),
+        }
+    }
+}
+
 // ─── Core implementation ──────────────────────────────────────────────────
 
 impl TomlConfig {
@@ -443,6 +583,20 @@ impl TomlConfig {
         let mut config: Self = toml::from_str(&content)?;
         config.apply_env_overrides();
         Ok(config)
+    }
+
+    /// Load from TOML file with optional profile selection, then apply env var overrides.
+    pub fn load_with_profile(path: impl AsRef<Path>, profile: Option<&str>) -> Result<Self, Box<dyn Error>> {
+        let content = fs::read_to_string(path.as_ref())?;
+        let profiled: ProfiledTomlConfig = toml::from_str(&content)?;
+        match profile {
+            Some(p) => profiled.resolve(p),
+            None => {
+                let mut config = profiled.base;
+                config.apply_env_overrides();
+                Ok(config)
+            }
+        }
     }
 
     /// Build from struct defaults + env var overrides (no file needed).
@@ -460,6 +614,9 @@ impl TomlConfig {
             registry: RegistryConfig::default(),
             sites: SitesConfig::default(),
             minio: MinioConfig::default(),
+            testnet: TestnetConfig::default(),
+            proxy: ProxyConfig::default(),
+            logging: LoggingConfig::default(),
         };
         config.apply_env_overrides();
         config
@@ -630,6 +787,19 @@ impl TomlConfig {
 
         // ── MinIO ────────────────────────────────────────────────────
         self.minio.autopin_interval = resolve_u32("minio.autopin_interval", self.minio.autopin_interval);
+
+        // ── Proxy ───────────────────────────────────────────────────
+        self.proxy.enabled = resolve_bool("proxy.enabled", self.proxy.enabled);
+        self.proxy.image = resolve_str("proxy.image", &self.proxy.image);
+        self.proxy.service_name = resolve_str("proxy.service_name", &self.proxy.service_name);
+        self.proxy.url = resolve_str("proxy.url", &self.proxy.url);
+        self.proxy.domain = resolve_str("proxy.domain", &self.proxy.domain);
+        self.proxy.akash_chain_id = resolve_str("proxy.akash_chain_id", &self.proxy.akash_chain_id);
+        self.proxy.akash_seeds = resolve_str("proxy.akash_seeds", &self.proxy.akash_seeds);
+
+        // ── Logging ─────────────────────────────────────────────────
+        self.logging.persist = resolve_bool("logging.persist", self.logging.persist);
+        self.logging.log_dir = resolve_str("logging.log_dir", &self.logging.log_dir);
     }
 
     fn node_mut(&mut self, name: &str) -> &mut NodeConfig {
@@ -760,8 +930,31 @@ impl TomlConfig {
         v.insert("OLINE_REGISTRY_PASSWORD".into(), self.registry.password.clone());
         v.insert("OLINE_REGISTRY_DIR".into(), self.registry.storage_dir.clone());
 
-        // ── SDL template dir (legacy compat) ─────────────────────────
-        v.insert("SDL_DIR".into(), "templates/sdls/oline".into());
+        // ── Proxy ────────────────────────────────────────────────────
+        v.insert("PROXY_NODE_IMAGE".into(), self.proxy.image.clone());
+        v.insert("PROXY_SVC".into(), self.proxy.service_name.clone());
+        v.insert("PROXY_DOMAIN".into(), self.proxy.domain.clone());
+        v.insert("AKASH_CHAIN_ID".into(), self.proxy.akash_chain_id.clone());
+        v.insert("AKASH_SEEDS".into(), self.proxy.akash_seeds.clone());
+
+        // ── SDL template dir ─────────────────────────────────────────
+        // Prefer ~/.oline/templates/ so `oline` works from any directory.
+        // Fall back to ./templates/sdls/oline for dev-tree usage.
+        let sdl_home = crate::config::oline_config_dir().join("templates");
+        let sdl_dir = if sdl_home.exists() {
+            sdl_home.to_string_lossy().into_owned()
+        } else {
+            "templates/sdls/oline".into()
+        };
+        v.insert("SDL_DIR".into(), sdl_dir);
+
+        // ── Testnet ───────────────────────────────────────────────────
+        v.insert("TESTNET_SENTRY_IMAGE".into(),
+            resolve_str("testnet.sentry_image", &self.testnet.sentry_image));
+        v.insert("TESTNET_SENTRY_A_FAUCET_MNEMONIC".into(),
+            resolve_str("testnet.sentry_a_faucet_mnemonic", &self.testnet.sentry_a_faucet_mnemonic));
+        v.insert("TESTNET_SENTRY_B_FAUCET_MNEMONIC".into(),
+            resolve_str("testnet.sentry_b_faucet_mnemonic", &self.testnet.sentry_b_faucet_mnemonic));
 
         v
     }
@@ -910,139 +1103,201 @@ pub const CONFIG_FIELDS: &[ConfigField] = &[
     ConfigField { path: "minio.autopin_interval", description: "IPFS auto-pin interval (s)",    is_secret: false },
 ];
 
+// ─── Field-dispatch macros ────────────────────────────────────────────────
+//
+// `dispatch_get!` and `dispatch_set!` expand a table of `(kind, path, field)`
+// entries into the match bodies for `get_value` and `set_value`.  Both macros
+// share the same table format so the two methods can never drift apart.
+//
+// Supported kinds:
+//   str  – String field   (get: clone;          set: direct assign)
+//   vec  – Vec<String>    (get: join(",");       set: split+collect, empty filtered)
+//   u16  – u16 field      (get: to_string();     set: parse, ignore on error)
+//   u32  – u32 field      (get: to_string();     set: parse, ignore on error)
+//
+// Field paths are dot-chained relative to `self`, e.g. `chain.id` expands to
+// `self.chain.id` (or `cfg.chain.id` in the get variant).
+
+macro_rules! dispatch_get {
+    // Entry point: `$cfg` is an ident so arm rules can chain field access after it.
+    ($cfg:ident, $key:expr, {
+        $( $kind:ident $path:literal => $( $seg:ident ).+ ),* $(,)?
+    }) => {
+        match $key {
+            $( $path => dispatch_get!(@arm $kind $cfg $( $seg ).+), )*
+            _ => String::new(),
+        }
+    };
+    // str arm: clone the String field
+    (@arm str $cfg:ident $( $seg:ident ).+) => { $cfg.$( $seg ).+.clone() };
+    // vec arm: join with comma
+    (@arm vec $cfg:ident $( $seg:ident ).+) => { $cfg.$( $seg ).+.join(",") };
+    // u16 / u32 arms: convert to string
+    (@arm u16 $cfg:ident $( $seg:ident ).+) => { $cfg.$( $seg ).+.to_string() };
+    (@arm u32 $cfg:ident $( $seg:ident ).+) => { $cfg.$( $seg ).+.to_string() };
+}
+
+macro_rules! dispatch_set {
+    // Entry point: `$cfg` and `$val` are idents so arms can use them freely.
+    ($cfg:ident, $key:expr, $val:ident, {
+        $( $kind:ident $path:literal => $( $seg:ident ).+ ),* $(,)?
+    }) => {
+        match $key {
+            $( $path => dispatch_set!(@arm $kind $cfg $val $( $seg ).+), )*
+            _ => {}
+        }
+    };
+    // str arm: move the value in directly
+    (@arm str $cfg:ident $val:ident $( $seg:ident ).+) => { $cfg.$( $seg ).+ = $val };
+    // vec arm: split on comma, trim, drop empty
+    (@arm vec $cfg:ident $val:ident $( $seg:ident ).+) => {
+        $cfg.$( $seg ).+ = $val
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    };
+    // u16 arm: parse; silently ignore unparseable input
+    (@arm u16 $cfg:ident $val:ident $( $seg:ident ).+) => {
+        if let Ok(n) = $val.parse() { $cfg.$( $seg ).+ = n }
+    };
+    // u32 arm: parse; silently ignore unparseable input
+    (@arm u32 $cfg:ident $val:ident $( $seg:ident ).+) => {
+        if let Ok(n) = $val.parse() { $cfg.$( $seg ).+ = n }
+    };
+}
+
 impl TomlConfig {
     /// Get the current value of a field by its dotted path.
     pub fn get_value(&self, path: &str) -> String {
-        match path {
-            "chain.id"              => self.chain.id.clone(),
-            "chain.binary"          => self.chain.binary.clone(),
-            "chain.genesis_url"     => self.chain.genesis_url.clone(),
-            "chain.chain_json"      => self.chain.chain_json.clone(),
-            "chain.addrbook_url"    => self.chain.addrbook_url.clone(),
-            "chain.peers"           => self.chain.peers.join(","),
-            "chain.private_peers"   => self.chain.private_peers.join(","),
-            "chain.sync_method"     => self.chain.sync_method.clone(),
-            "chain.snapshot_url"    => self.chain.snapshot_url.clone(),
-            "chain.entrypoint_url"  => self.chain.entrypoint_url.clone(),
-            "chain.faucet_domain"   => self.chain.faucet_domain.clone(),
-            "images.node"           => self.images.node.clone(),
-            "images.minio"          => self.images.minio.clone(),
-            "images.relayer"        => self.images.relayer.clone(),
-            "images.argus"          => self.images.argus.clone(),
-            "akash.rpc"             => self.akash.rpc.clone(),
-            "akash.grpc"            => self.akash.grpc.clone(),
-            "akash.rest"            => self.akash.rest.clone(),
-            "dns.cf_token"          => self.dns.cf_token.clone(),
-            "dns.cf_zone"           => self.dns.cf_zone.clone(),
-            "ssh.port"              => self.ssh.port.to_string(),
-            "ssh.pubkey"            => self.ssh.pubkey.clone(),
-            "snapshot.domain"       => self.snapshot.domain.clone(),
-            "snapshot.path"         => self.snapshot.path.clone(),
-            "snapshot.schedule"     => self.snapshot.schedule.clone(),
-            "snapshot.format"       => self.snapshot.format.clone(),
-            "snapshot.retain"       => self.snapshot.retain.clone(),
-            "snapshot.keep_last"    => self.snapshot.keep_last.to_string(),
-            "nodes.snapshot.domain"      => self.nodes.snapshot.domain.clone(),
-            "nodes.seed.domain"          => self.nodes.seed.domain.clone(),
-            "nodes.left_tackle.domain"   => self.nodes.left_tackle.domain.clone(),
-            "nodes.right_tackle.domain"  => self.nodes.right_tackle.domain.clone(),
-            "nodes.left_forward.domain"  => self.nodes.left_forward.domain.clone(),
-            "nodes.right_forward.domain" => self.nodes.right_forward.domain.clone(),
-            "relayer.key_name"      => self.relayer.key_name.clone(),
-            "relayer.remote_chain"  => self.relayer.remote_chain.clone(),
-            "relayer.domain"        => self.relayer.domain.clone(),
-            "relayer.key_terp"      => self.relayer.key_terp.clone(),
-            "relayer.key_remote"    => self.relayer.key_remote.clone(),
-            "relayer.entrypoint"    => self.relayer.entrypoint.clone(),
-            "argus.node_moniker"         => self.argus.node_moniker.clone(),
-            "argus.node_seeds"           => self.argus.node_seeds.clone(),
-            "argus.node_persistent_peers"=> self.argus.node_persistent_peers.clone(),
-            "argus.image"                => self.argus.image.clone(),
-            "argus.entrypoint_url"       => self.argus.entrypoint_url.clone(),
-            "argus.api_domain"           => self.argus.api_domain.clone(),
-            "argus.bech32_prefix"        => self.argus.bech32_prefix.clone(),
-            "argus.db_user"              => self.argus.db_user.clone(),
-            "argus.db_password"          => self.argus.db_password.clone(),
-            "argus.db_data_name"         => self.argus.db_data_name.clone(),
-            "argus.db_accounts_name"     => self.argus.db_accounts_name.clone(),
-            "registry.url"          => self.registry.url.clone(),
-            "registry.port"         => self.registry.port.to_string(),
-            "registry.username"     => self.registry.username.clone(),
-            "registry.password"     => self.registry.password.clone(),
-            "registry.storage_dir"  => self.registry.storage_dir.clone(),
-            "sites.gateway_domain"  => self.sites.gateway_domain.clone(),
-            "sites.s3_domain"       => self.sites.s3_domain.clone(),
-            "sites.console_domain"  => self.sites.console_domain.clone(),
-            "minio.autopin_interval"=> self.minio.autopin_interval.to_string(),
-            _ => String::new(),
-        }
+        dispatch_get!(self, path, {
+            str  "chain.id"                       => chain.id,
+            str  "chain.binary"                   => chain.binary,
+            str  "chain.genesis_url"               => chain.genesis_url,
+            str  "chain.chain_json"                => chain.chain_json,
+            str  "chain.addrbook_url"              => chain.addrbook_url,
+            vec  "chain.peers"                    => chain.peers,
+            vec  "chain.private_peers"             => chain.private_peers,
+            str  "chain.sync_method"               => chain.sync_method,
+            str  "chain.snapshot_url"              => chain.snapshot_url,
+            str  "chain.entrypoint_url"            => chain.entrypoint_url,
+            str  "chain.faucet_domain"             => chain.faucet_domain,
+            str  "images.node"                    => images.node,
+            str  "images.minio"                   => images.minio,
+            str  "images.relayer"                 => images.relayer,
+            str  "images.argus"                   => images.argus,
+            str  "akash.rpc"                      => akash.rpc,
+            str  "akash.grpc"                     => akash.grpc,
+            str  "akash.rest"                     => akash.rest,
+            str  "dns.cf_token"                   => dns.cf_token,
+            str  "dns.cf_zone"                    => dns.cf_zone,
+            u16  "ssh.port"                       => ssh.port,
+            str  "ssh.pubkey"                     => ssh.pubkey,
+            str  "snapshot.domain"                => snapshot.domain,
+            str  "snapshot.path"                  => snapshot.path,
+            str  "snapshot.schedule"              => snapshot.schedule,
+            str  "snapshot.format"                => snapshot.format,
+            str  "snapshot.retain"                => snapshot.retain,
+            u32  "snapshot.keep_last"             => snapshot.keep_last,
+            str  "nodes.snapshot.domain"          => nodes.snapshot.domain,
+            str  "nodes.seed.domain"              => nodes.seed.domain,
+            str  "nodes.left_tackle.domain"       => nodes.left_tackle.domain,
+            str  "nodes.right_tackle.domain"      => nodes.right_tackle.domain,
+            str  "nodes.left_forward.domain"      => nodes.left_forward.domain,
+            str  "nodes.right_forward.domain"     => nodes.right_forward.domain,
+            str  "relayer.key_name"               => relayer.key_name,
+            str  "relayer.remote_chain"           => relayer.remote_chain,
+            str  "relayer.domain"                 => relayer.domain,
+            str  "relayer.key_terp"               => relayer.key_terp,
+            str  "relayer.key_remote"             => relayer.key_remote,
+            str  "relayer.entrypoint"             => relayer.entrypoint,
+            str  "argus.node_moniker"             => argus.node_moniker,
+            str  "argus.node_seeds"               => argus.node_seeds,
+            str  "argus.node_persistent_peers"    => argus.node_persistent_peers,
+            str  "argus.image"                    => argus.image,
+            str  "argus.entrypoint_url"           => argus.entrypoint_url,
+            str  "argus.api_domain"               => argus.api_domain,
+            str  "argus.bech32_prefix"            => argus.bech32_prefix,
+            str  "argus.db_user"                  => argus.db_user,
+            str  "argus.db_password"              => argus.db_password,
+            str  "argus.db_data_name"             => argus.db_data_name,
+            str  "argus.db_accounts_name"         => argus.db_accounts_name,
+            str  "registry.url"                   => registry.url,
+            u16  "registry.port"                  => registry.port,
+            str  "registry.username"              => registry.username,
+            str  "registry.password"              => registry.password,
+            str  "registry.storage_dir"           => registry.storage_dir,
+            str  "sites.gateway_domain"           => sites.gateway_domain,
+            str  "sites.s3_domain"                => sites.s3_domain,
+            str  "sites.console_domain"           => sites.console_domain,
+            u32  "minio.autopin_interval"         => minio.autopin_interval,
+        })
     }
 
     /// Set a field value by its dotted path.
     pub fn set_value(&mut self, path: &str, value: String) {
-        match path {
-            "chain.id"              => self.chain.id = value,
-            "chain.binary"          => self.chain.binary = value,
-            "chain.genesis_url"     => self.chain.genesis_url = value,
-            "chain.chain_json"      => self.chain.chain_json = value,
-            "chain.addrbook_url"    => self.chain.addrbook_url = value,
-            "chain.peers"           => self.chain.peers = value.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
-            "chain.private_peers"   => self.chain.private_peers = value.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
-            "chain.sync_method"     => self.chain.sync_method = value,
-            "chain.snapshot_url"    => self.chain.snapshot_url = value,
-            "chain.entrypoint_url"  => self.chain.entrypoint_url = value,
-            "chain.faucet_domain"   => self.chain.faucet_domain = value,
-            "images.node"           => self.images.node = value,
-            "images.minio"          => self.images.minio = value,
-            "images.relayer"        => self.images.relayer = value,
-            "images.argus"          => self.images.argus = value,
-            "akash.rpc"             => self.akash.rpc = value,
-            "akash.grpc"            => self.akash.grpc = value,
-            "akash.rest"            => self.akash.rest = value,
-            "dns.cf_token"          => self.dns.cf_token = value,
-            "dns.cf_zone"           => self.dns.cf_zone = value,
-            "ssh.port"              => if let Ok(p) = value.parse() { self.ssh.port = p },
-            "ssh.pubkey"            => self.ssh.pubkey = value,
-            "snapshot.domain"       => self.snapshot.domain = value,
-            "snapshot.path"         => self.snapshot.path = value,
-            "snapshot.schedule"     => self.snapshot.schedule = value,
-            "snapshot.format"       => self.snapshot.format = value,
-            "snapshot.retain"       => self.snapshot.retain = value,
-            "snapshot.keep_last"    => if let Ok(n) = value.parse() { self.snapshot.keep_last = n },
-            "nodes.snapshot.domain"      => self.nodes.snapshot.domain = value,
-            "nodes.seed.domain"          => self.nodes.seed.domain = value,
-            "nodes.left_tackle.domain"   => self.nodes.left_tackle.domain = value,
-            "nodes.right_tackle.domain"  => self.nodes.right_tackle.domain = value,
-            "nodes.left_forward.domain"  => self.nodes.left_forward.domain = value,
-            "nodes.right_forward.domain" => self.nodes.right_forward.domain = value,
-            "relayer.key_name"      => self.relayer.key_name = value,
-            "relayer.remote_chain"  => self.relayer.remote_chain = value,
-            "relayer.domain"        => self.relayer.domain = value,
-            "relayer.key_terp"      => self.relayer.key_terp = value,
-            "relayer.key_remote"    => self.relayer.key_remote = value,
-            "relayer.entrypoint"    => self.relayer.entrypoint = value,
-            "argus.node_moniker"         => self.argus.node_moniker = value,
-            "argus.node_seeds"           => self.argus.node_seeds = value,
-            "argus.node_persistent_peers"=> self.argus.node_persistent_peers = value,
-            "argus.image"                => self.argus.image = value,
-            "argus.entrypoint_url"       => self.argus.entrypoint_url = value,
-            "argus.api_domain"           => self.argus.api_domain = value,
-            "argus.bech32_prefix"        => self.argus.bech32_prefix = value,
-            "argus.db_user"              => self.argus.db_user = value,
-            "argus.db_password"          => self.argus.db_password = value,
-            "argus.db_data_name"         => self.argus.db_data_name = value,
-            "argus.db_accounts_name"     => self.argus.db_accounts_name = value,
-            "registry.url"          => self.registry.url = value,
-            "registry.port"         => if let Ok(p) = value.parse() { self.registry.port = p },
-            "registry.username"     => self.registry.username = value,
-            "registry.password"     => self.registry.password = value,
-            "registry.storage_dir"  => self.registry.storage_dir = value,
-            "sites.gateway_domain"  => self.sites.gateway_domain = value,
-            "sites.s3_domain"       => self.sites.s3_domain = value,
-            "sites.console_domain"  => self.sites.console_domain = value,
-            "minio.autopin_interval"=> if let Ok(n) = value.parse() { self.minio.autopin_interval = n },
-            _ => {}
-        }
+        dispatch_set!(self, path, value, {
+            str  "chain.id"                       => chain.id,
+            str  "chain.binary"                   => chain.binary,
+            str  "chain.genesis_url"               => chain.genesis_url,
+            str  "chain.chain_json"                => chain.chain_json,
+            str  "chain.addrbook_url"              => chain.addrbook_url,
+            vec  "chain.peers"                    => chain.peers,
+            vec  "chain.private_peers"             => chain.private_peers,
+            str  "chain.sync_method"               => chain.sync_method,
+            str  "chain.snapshot_url"              => chain.snapshot_url,
+            str  "chain.entrypoint_url"            => chain.entrypoint_url,
+            str  "chain.faucet_domain"             => chain.faucet_domain,
+            str  "images.node"                    => images.node,
+            str  "images.minio"                   => images.minio,
+            str  "images.relayer"                 => images.relayer,
+            str  "images.argus"                   => images.argus,
+            str  "akash.rpc"                      => akash.rpc,
+            str  "akash.grpc"                     => akash.grpc,
+            str  "akash.rest"                     => akash.rest,
+            str  "dns.cf_token"                   => dns.cf_token,
+            str  "dns.cf_zone"                    => dns.cf_zone,
+            u16  "ssh.port"                       => ssh.port,
+            str  "ssh.pubkey"                     => ssh.pubkey,
+            str  "snapshot.domain"                => snapshot.domain,
+            str  "snapshot.path"                  => snapshot.path,
+            str  "snapshot.schedule"              => snapshot.schedule,
+            str  "snapshot.format"                => snapshot.format,
+            str  "snapshot.retain"                => snapshot.retain,
+            u32  "snapshot.keep_last"             => snapshot.keep_last,
+            str  "nodes.snapshot.domain"          => nodes.snapshot.domain,
+            str  "nodes.seed.domain"              => nodes.seed.domain,
+            str  "nodes.left_tackle.domain"       => nodes.left_tackle.domain,
+            str  "nodes.right_tackle.domain"      => nodes.right_tackle.domain,
+            str  "nodes.left_forward.domain"      => nodes.left_forward.domain,
+            str  "nodes.right_forward.domain"     => nodes.right_forward.domain,
+            str  "relayer.key_name"               => relayer.key_name,
+            str  "relayer.remote_chain"           => relayer.remote_chain,
+            str  "relayer.domain"                 => relayer.domain,
+            str  "relayer.key_terp"               => relayer.key_terp,
+            str  "relayer.key_remote"             => relayer.key_remote,
+            str  "relayer.entrypoint"             => relayer.entrypoint,
+            str  "argus.node_moniker"             => argus.node_moniker,
+            str  "argus.node_seeds"               => argus.node_seeds,
+            str  "argus.node_persistent_peers"    => argus.node_persistent_peers,
+            str  "argus.image"                    => argus.image,
+            str  "argus.entrypoint_url"           => argus.entrypoint_url,
+            str  "argus.api_domain"               => argus.api_domain,
+            str  "argus.bech32_prefix"            => argus.bech32_prefix,
+            str  "argus.db_user"                  => argus.db_user,
+            str  "argus.db_password"              => argus.db_password,
+            str  "argus.db_data_name"             => argus.db_data_name,
+            str  "argus.db_accounts_name"         => argus.db_accounts_name,
+            str  "registry.url"                   => registry.url,
+            u16  "registry.port"                  => registry.port,
+            str  "registry.username"              => registry.username,
+            str  "registry.password"              => registry.password,
+            str  "registry.storage_dir"           => registry.storage_dir,
+            str  "sites.gateway_domain"           => sites.gateway_domain,
+            str  "sites.s3_domain"                => sites.s3_domain,
+            str  "sites.console_domain"           => sites.console_domain,
+            u32  "minio.autopin_interval"         => minio.autopin_interval,
+        })
     }
 
     /// Check if a given env var name corresponds to a secret field.
@@ -1096,4 +1351,74 @@ mod tests {
         assert_eq!(vars.get("RPC_P_SNAP").unwrap(), "26657");
         assert_eq!(vars.get("P2P_P_SEED").unwrap(), "26656");
     }
+
+    #[test]
+    fn test_deep_merge_scalars() {
+        let mut base = toml::toml! {
+            [chain]
+            id = "default-chain"
+            binary = "terpd"
+        };
+        let overlay = toml::toml! {
+            [chain]
+            id = "morocco-1"
+        };
+        deep_merge(&mut toml::Value::Table(base.clone()), &toml::Value::Table(overlay));
+        // Re-test via ProfiledTomlConfig round-trip
+        let toml_str = r#"
+[chain]
+id = "default"
+binary = "terpd"
+
+[profiles.mainnet.chain]
+id = "morocco-1"
+"#;
+        let profiled: ProfiledTomlConfig = toml::from_str(toml_str).unwrap();
+        let resolved = profiled.resolve("mainnet").unwrap();
+        assert_eq!(resolved.chain.id, "morocco-1");
+        assert_eq!(resolved.chain.binary, "terpd");
+    }
+
+    #[test]
+    fn test_profiled_config_resolve() {
+        let toml_str = r#"
+[chain]
+id = "default"
+binary = "terpd"
+
+[images]
+node = "ghcr.io/terpnetwork/terp-core:5.1.8-oline"
+
+[profiles.mainnet.chain]
+id = "morocco-1"
+
+[profiles.testnet.chain]
+id = "athena-4"
+"#;
+        let profiled: ProfiledTomlConfig = toml::from_str(toml_str).unwrap();
+        let mainnet = profiled.clone().resolve("mainnet").unwrap();
+        assert_eq!(mainnet.chain.id, "morocco-1");
+        assert_eq!(mainnet.chain.binary, "terpd");
+        assert_eq!(mainnet.images.node, "ghcr.io/terpnetwork/terp-core:5.1.8-oline");
+
+        let testnet = profiled.resolve("testnet").unwrap();
+        assert_eq!(testnet.chain.id, "athena-4");
+        assert_eq!(testnet.chain.binary, "terpd");
+    }
+
+    #[test]
+    fn test_profiled_missing_profile_falls_back() {
+        let toml_str = r#"
+[chain]
+id = "default-id"
+binary = "terpd"
+
+[profiles.mainnet.chain]
+id = "morocco-1"
+"#;
+        let profiled: ProfiledTomlConfig = toml::from_str(toml_str).unwrap();
+        let resolved = profiled.resolve("nonexistent").unwrap();
+        assert_eq!(resolved.chain.id, "default-id"); // base value, no crash
+    }
+
 }

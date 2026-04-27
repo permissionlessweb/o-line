@@ -6,7 +6,7 @@
 use crate::{
     cli::*,
     config::*,
-    crypto::{check_rpc_health, gen_ssh_key, generate_credential, save_ssh_key, verify_files_and_signal_start},
+    crypto::{check_rpc_health, gen_ssh_key, generate_credential, verify_files_and_signal_start},
     deployer::OLineDeployer,
     nodes::{NodeRecord, NodeStore},
     with_examples,
@@ -69,11 +69,11 @@ async fn cmd_node_deploy() -> Result<(), Box<dyn Error>> {
     };
 
     let config = if non_interactive {
-        build_config_from_env(mnemonic)
+        build_config_from_env(mnemonic, None)
     } else {
         let stdin = io::stdin();
         let mut lines = stdin.lock().lines();
-        let cfg = collect_config(&password, mnemonic, &mut lines).await?;
+        let cfg = collect_config(&password, mnemonic, &mut lines, None).await?;
         drop(lines);
         cfg
     };
@@ -86,13 +86,12 @@ async fn cmd_node_deploy() -> Result<(), Box<dyn Error>> {
     let vars = build_node_vars(&deployer.config);
 
     // Save SSH private key for post-deploy operations
-    let secrets_dir = std::env::var("SECRETS_PATH").unwrap_or_else(|_| ".".into());
     let key_name = "oline-node-ssh-key";
-    let key_path = PathBuf::from(&secrets_dir).join(key_name);
+    let key_path = crate::config::oline_config_dir().join(key_name);
     if let Some(privkey_pem) = vars.get("SSH_PRIVKEY") {
         let privkey = ssh_key::PrivateKey::from_openssh(privkey_pem)
             .map_err(|e| format!("Failed to parse generated SSH key: {}", e))?;
-        save_ssh_key(&privkey, &key_path)?;
+        crate::crypto::save_ssh_key_encrypted(&privkey, &key_path, &password)?;
         tracing::info!("  SSH key saved to {}", key_path.display());
     }
 

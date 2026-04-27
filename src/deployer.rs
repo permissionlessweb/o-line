@@ -1,5 +1,5 @@
 use crate::{
-    config::{substitute_template_raw, OLineConfig},
+    config::OLineConfig,
     providers::TrustedProviderStore,
 };
 use akash_deploy_rs::{
@@ -10,12 +10,25 @@ use akash_deploy_rs::{
 use bip32::DerivationPath;
 use std::{collections::HashMap, error::Error, io, str::FromStr};
 
+/// Context for AuthZ-delegated deployments.
+///
+/// When present, the deployer wallet (grantee) executes operations on behalf
+/// of the main wallet (granter). All deployment messages are wrapped in
+/// `MsgExec` and fees are paid by the granter via FeeGrant.
+#[derive(Clone, Debug)]
+pub struct AuthzContext {
+    /// The main wallet address that owns deployments.
+    pub granter_address: String,
+}
+
 pub struct OLineDeployer {
     pub client: AkashClient,
     pub signer: KeySigner,
     pub config: OLineConfig,
     pub password: String,
     pub deployment_store: FileDeploymentStore,
+    /// When set, this deployer operates via AuthZ delegation.
+    pub authz_context: Option<AuthzContext>,
 }
 
 impl OLineDeployer {
@@ -48,6 +61,7 @@ impl OLineDeployer {
             config,
             password,
             deployment_store: FileDeploymentStore::new_default().await?,
+            authz_context: None,
         })
     }
 
@@ -90,7 +104,62 @@ impl OLineDeployer {
             config,
             password,
             deployment_store: FileDeploymentStore::new_default().await?,
+            authz_context: None,
         })
+    }
+
+    /// Create a deployer using AuthZ delegation.
+    ///
+    /// The deployer wallet (grantee) signs transactions, but all deployment
+    /// messages are wrapped in `MsgExec` and executed on behalf of the granter.
+    /// No password is needed — the deployer mnemonic is stored unencrypted.
+    pub async fn new_authz(
+        config: OLineConfig,
+        granter_address: String,
+    ) -> Result<Self, DeployError> {
+        let rpc = config.val("OLINE_RPC_ENDPOINT");
+        let grpc = config.val("OLINE_GRPC_ENDPOINT");
+        let rest = config.val("OLINE_REST_ENDPOINT");
+
+        let mut client = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            AkashClient::new_from_mnemonic(&config.mnemonic, &rpc, &grpc),
+        )
+        .await
+        .map_err(|_| {
+            DeployError::InvalidState(format!(
+                "Timed out connecting to Akash RPC ({}).",
+                rpc
+            ))
+        })??;
+
+        if !rest.is_empty() {
+            client = client.with_rest(rest);
+        }
+
+        // Enable AuthZ wrapping on all broadcast calls
+        client = client.with_authz_granter(&granter_address);
+
+        Ok(Self {
+            client,
+            signer: KeySigner::new_mnemonic_str(&config.mnemonic, None)
+                .map_err(|e| DeployError::Signer(format!("Failed to create authz signer: {}", e)))?,
+            config,
+            password: String::new(),
+            deployment_store: FileDeploymentStore::new_default().await?,
+            authz_context: Some(AuthzContext { granter_address }),
+        })
+    }
+
+    /// Returns the effective owner address for deployments.
+    ///
+    /// With AuthZ, the granter owns deployments. Without, it's the signer's address.
+    pub fn deployment_owner(&self) -> String {
+        if let Some(ref ctx) = self.authz_context {
+            ctx.granter_address.clone()
+        } else {
+            self.client.address()
+        }
     }
 
     /// Pre-flight connectivity check: query providers list + open bids for this
@@ -154,10 +223,9 @@ impl OLineDeployer {
         label: &str,
         lines: &mut io::Lines<impl io::BufRead>,
     ) -> Result<(DeploymentState, Vec<ServiceEndpoint>), DeployError> {
-        let rendered_sdl = substitute_template_raw(sdl_template, variables)
-            .map_err(|e| DeployError::Template(format!("Template substitution failed: {}", e)))?;
+        let rendered_sdl = akash_deploy_rs::substitute_partial(sdl_template, variables);
 
-        let mut state = DeploymentState::new(label, self.client.address())
+        let mut state = DeploymentState::new(label, self.deployment_owner())
             .with_sdl(&rendered_sdl)
             .with_label(label);
 
@@ -235,10 +303,9 @@ impl OLineDeployer {
         variables: &HashMap<String, String>,
         label: &str,
     ) -> Result<(DeploymentState, Vec<Bid>), DeployError> {
-        let rendered_sdl = substitute_template_raw(sdl_template, variables)
-            .map_err(|e| DeployError::Template(format!("Template substitution failed: {}", e)))?;
+        let rendered_sdl = akash_deploy_rs::substitute_partial(sdl_template, variables);
 
-        let mut state = DeploymentState::new(label, self.client.address())
+        let mut state = DeploymentState::new(label, self.deployment_owner())
             .with_sdl(&rendered_sdl)
             .with_label(label);
 
@@ -450,10 +517,9 @@ impl OLineDeployer {
         variables: &HashMap<String, String>,
         label: &str,
     ) -> Result<(DeploymentState, Vec<ServiceEndpoint>), DeployError> {
-        let rendered_sdl = substitute_template_raw(sdl_template, variables)
-            .map_err(|e| DeployError::Template(format!("Template substitution failed: {}", e)))?;
+        let rendered_sdl = akash_deploy_rs::substitute_partial(sdl_template, variables);
 
-        let mut state = DeploymentState::new(label, self.client.address())
+        let mut state = DeploymentState::new(label, self.deployment_owner())
             .with_sdl(&rendered_sdl)
             .with_label(label);
 

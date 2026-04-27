@@ -1,4 +1,5 @@
 use crate::{cli::*, config::*, templates, with_examples};
+use crate::config::oline_deploy_config_path;
 use crate::toml_config::{TomlConfig, CONFIG_FIELDS};
 use std::collections::HashSet;
 use std::{
@@ -10,9 +11,9 @@ use std::{
 with_examples! {
     #[derive(clap::Args, Debug, Default)]
     pub struct InitArgs {
-        /// Path to write deploy-config.json.
-        #[arg(long, short = 'o', default_value = "deploy-config.json")]
-        pub output: String,
+        /// Path to write deploy-config.json. Default: ~/.oline/deploy-config.json
+        #[arg(long, short = 'o')]
+        pub output: Option<String>,
 
         /// Use a named template for non-interactive config generation.
         #[arg(long, short = 't', value_name = "NAME")]
@@ -26,6 +27,9 @@ with_examples! {
 }
 
 pub async fn cmd_init(args: &InitArgs) -> Result<(), Box<dyn Error>> {
+    let output: String = args.output.clone().unwrap_or_else(|| {
+        oline_deploy_config_path().to_string_lossy().into_owned()
+    });
     // ── list-templates ────────────────────────────────────────────────────────
     if args.list_templates {
         tracing::info!("Available templates:\n");
@@ -49,10 +53,10 @@ pub async fn cmd_init(args: &InitArgs) -> Result<(), Box<dyn Error>> {
         let config = t.build_config();
         let peers = PeerInputs::default();
         let deploy_config = DeployConfig::from_oline_config(&config, peers);
-        deploy_config.write_to_file(Path::new(&args.output))?;
-        tracing::info!("\n  Config written to: {}", args.output);
+        deploy_config.write_to_file(Path::new(&output))?;
+        tracing::info!("\n  Config written to: {}", output);
         tracing::info!("  Review and customise, then render SDL with:");
-        tracing::info!("    oline sdl --load-config {}", args.output);
+        tracing::info!("    oline sdl --load-config {}", output);
         return Ok(());
     }
 
@@ -116,9 +120,9 @@ pub async fn cmd_init(args: &InitArgs) -> Result<(), Box<dyn Error>> {
 
     let peers = PeerInputs { snapshot, seed, statesync_rpc, left_tackle, right_tackle };
     let deploy_config = DeployConfig::from_oline_config(&config, peers);
-    deploy_config.write_to_file(Path::new(&args.output))?;
+    deploy_config.write_to_file(Path::new(&output))?;
 
-    tracing::info!("\n  Config written to: {}", args.output);
-    tracing::info!("  Render SDL from it with: oline sdl --load-config {}", args.output);
+    tracing::info!("\n  Config written to: {}", output);
+    tracing::info!("  Render SDL from it with: oline sdl --load-config {}", output);
     Ok(())
 }

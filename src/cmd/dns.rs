@@ -23,10 +23,10 @@ pub enum DnsSubcommand {
         #[arg(long)]
         name: Option<String>,
         /// Cloudflare API token (auto-resolved from key store if omitted)
-        #[arg(long, env = "OLINE_CF_API_TOKEN")]
+        #[arg(long)]
         token: Option<String>,
         /// Cloudflare zone ID (auto-resolved from key store if omitted)
-        #[arg(long, env = "OLINE_CF_ZONE_ID")]
+        #[arg(long)]
         zone: Option<String>,
     },
     /// Upsert a TXT record
@@ -35,9 +35,9 @@ pub enum DnsSubcommand {
         name: String,
         /// TXT content value
         content: String,
-        #[arg(long, env = "OLINE_CF_API_TOKEN")]
+        #[arg(long)]
         token: Option<String>,
-        #[arg(long, env = "OLINE_CF_ZONE_ID")]
+        #[arg(long)]
         zone: Option<String>,
     },
     /// Upsert a CNAME record (proxied by default)
@@ -46,9 +46,9 @@ pub enum DnsSubcommand {
         name: String,
         /// CNAME target (e.g. "abc.ingress.provider.com")
         target: String,
-        #[arg(long, env = "OLINE_CF_API_TOKEN")]
+        #[arg(long)]
         token: Option<String>,
-        #[arg(long, env = "OLINE_CF_ZONE_ID")]
+        #[arg(long)]
         zone: Option<String>,
     },
     /// Upsert an A record
@@ -60,18 +60,47 @@ pub enum DnsSubcommand {
         /// DNS-only mode (disables Cloudflare proxy)
         #[arg(long)]
         dns_only: bool,
-        #[arg(long, env = "OLINE_CF_API_TOKEN")]
+        #[arg(long)]
         token: Option<String>,
-        #[arg(long, env = "OLINE_CF_ZONE_ID")]
+        #[arg(long)]
         zone: Option<String>,
     },
     /// Delete DNS records by name
     Delete {
         /// Record name to delete (all matching records removed)
         name: String,
-        #[arg(long, env = "OLINE_CF_API_TOKEN")]
+        #[arg(long)]
         token: Option<String>,
-        #[arg(long, env = "OLINE_CF_ZONE_ID")]
+        #[arg(long)]
+        zone: Option<String>,
+    },
+    /// Enable Cloudflare Web3 IPFS gateway for a domain (free, one-time setup)
+    #[command(name = "web3-enable")]
+    Web3Enable {
+        /// Domain to enable Web3 IPFS gateway for
+        name: String,
+        #[arg(long)]
+        token: Option<String>,
+        #[arg(long)]
+        zone: Option<String>,
+    },
+    /// List Web3 IPFS gateway hostnames
+    #[command(name = "web3-list")]
+    Web3List {
+        #[arg(long)]
+        token: Option<String>,
+        #[arg(long)]
+        zone: Option<String>,
+    },
+    /// Full IPFS publish: Web3 gateway + DNSLink + CNAME (one command)
+    Publish {
+        /// Domain to publish to
+        domain: String,
+        /// IPFS CID
+        cid: String,
+        #[arg(long)]
+        token: Option<String>,
+        #[arg(long)]
         zone: Option<String>,
     },
     /// Manage encrypted credential keys (add, list, remove)
@@ -216,6 +245,33 @@ pub async fn cmd_dns(args: &DnsArgs) -> Result<(), Box<dyn Error>> {
             let (t, z) = resolve_cf_creds(token, zone, Some(name))?;
             let count = cloudflare_delete_by_name(&t, &z, name).await?;
             println!("Deleted {} record(s) for {}.", count, name);
+            Ok(())
+        }
+        Some(DnsSubcommand::Web3Enable { name, token, zone }) => {
+            let (t, z) = resolve_cf_creds(token, zone, Some(name))?;
+            println!("Enabling Web3 IPFS gateway for {}", name);
+            cloudflare_create_web3_hostname(&t, &z, name).await?;
+            println!("Done. CNAME {} to cloudflare-ipfs.com and set DNSLink TXT.", name);
+            Ok(())
+        }
+        Some(DnsSubcommand::Web3List { token, zone }) => {
+            let (t, z) = resolve_cf_creds(token, zone, None)?;
+            let hostnames = cloudflare_list_web3_hostnames(&t, &z).await?;
+            if hostnames.is_empty() {
+                println!("No Web3 hostnames configured.");
+            } else {
+                println!("{:<40} {:<12} {}", "HOSTNAME", "STATUS", "ID");
+                println!("{:-<70}", "");
+                for (id, name, status) in &hostnames {
+                    println!("{:<40} {:<12} {}", name, status, id);
+                }
+            }
+            Ok(())
+        }
+        Some(DnsSubcommand::Publish { domain, cid, token, zone }) => {
+            let (t, z) = resolve_cf_creds(token, zone, Some(domain))?;
+            println!("Publishing IPFS site: {} -> {}", domain, cid);
+            cloudflare_publish_ipfs_site(&t, &z, domain, cid).await?;
             Ok(())
         }
         Some(DnsSubcommand::Keys { action }) => cmd_dns_keys(action).await,

@@ -11,8 +11,8 @@
 //!   logs           — SSH tail of /tmp/rly.log.
 //!   status         — SSH query of the rly debug API + process check.
 
-use crate::with_examples;
-use openssh::{KnownHosts, Session, SessionBuilder};
+use crate::{crypto::open_node_session, with_examples};
+use openssh::Session;
 use openssh_sftp_client::Sftp;
 use std::{error::Error, path::Path, path::PathBuf};
 
@@ -113,13 +113,8 @@ pub async fn cmd_relayer(args: &RelayerArgs) -> Result<(), Box<dyn Error>> {
 
 async fn connect(conn: &RelayerConnArgs) -> Result<Session, Box<dyn Error>> {
     let dest = format!("ssh://{}@{}:{}", conn.user, conn.host, conn.port);
-    let session = SessionBuilder::default()
-        .keyfile(&conn.key)
-        .known_hosts_check(KnownHosts::Add)
-        .connect_mux(&dest)
-        .await
-        .map_err(|e| format!("SSH connect to {} failed: {}", dest, e))?;
-    Ok(session)
+    open_node_session(&dest, &conn.key).await
+        .map_err(|e| format!("SSH connect to {} failed: {}", dest, e).into())
 }
 
 /// Run a command and return stdout as a String (stderr swallowed).

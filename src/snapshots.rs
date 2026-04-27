@@ -518,6 +518,174 @@ pub async fn fetch_genesis_from_node(
     Ok(())
 }
 
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_url() -> reqwest::Url {
+        reqwest::Url::parse("https://s3.us-east-1.amazonaws.com/my-bucket/my-object").unwrap()
+    }
+
+    #[test]
+    fn test_s3_signed_headers_structure() {
+        let headers = s3_signed_headers(
+            "GET",
+            &test_url(),
+            b"",
+            "AKIAIOSFODNN7EXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "us-east-1",
+        );
+        assert_eq!(headers.len(), 3);
+        let names: Vec<&str> = headers.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(names.contains(&"Authorization"));
+        assert!(names.contains(&"x-amz-date"));
+        assert!(names.contains(&"x-amz-content-sha256"));
+    }
+
+    #[test]
+    fn test_s3_signed_headers_auth_format() {
+        let headers = s3_signed_headers(
+            "PUT",
+            &test_url(),
+            b"hello world",
+            "AKIAIOSFODNN7EXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "us-east-1",
+        );
+        let auth = headers
+            .iter()
+            .find(|(k, _)| k == "Authorization")
+            .map(|(_, v)| v.as_str())
+            .expect("Authorization header missing");
+
+        assert!(
+            auth.starts_with("AWS4-HMAC-SHA256 Credential="),
+            "Auth header must start with AWS4-HMAC-SHA256 Credential=, got: {}",
+            auth
+        );
+        assert!(
+            auth.contains("SignedHeaders=host;x-amz-content-sha256;x-amz-date"),
+            "Auth header must contain signed headers list, got: {}",
+            auth
+        );
+    }
+
+    #[test]
+    fn test_s3_signed_headers_date_format() {
+        let headers = s3_signed_headers(
+            "GET",
+            &test_url(),
+            b"",
+            "AKIAIOSFODNN7EXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "us-east-1",
+        );
+        let date = headers
+            .iter()
+            .find(|(k, _)| k == "x-amz-date")
+            .map(|(_, v)| v.as_str())
+            .expect("x-amz-date header missing");
+
+        // Must be exactly 16 chars: 8 digits + 'T' + 6 digits + 'Z'
+        assert_eq!(date.len(), 16, "x-amz-date must be 16 chars, got: {}", date);
+        assert!(date.ends_with('Z'), "x-amz-date must end with 'Z', got: {}", date);
+        let (date_part, time_z) = date.split_at(9); // "YYYYMMDD" + "T"
+        assert!(date_part[..8].chars().all(|c| c.is_ascii_digit()), "date part must be digits");
+        assert_eq!(&date_part[8..], "T", "separator must be 'T'");
+        assert!(time_z[..6].chars().all(|c| c.is_ascii_digit()), "time part must be digits");
+    }
+
+    #[test]
+    fn test_s3_signed_headers_payload_hash() {
+        let payload = b"test payload";
+        let headers = s3_signed_headers(
+            "PUT",
+            &test_url(),
+            payload,
+            "AKIAIOSFODNN7EXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "us-east-1",
+        );
+        let content_sha = headers
+            .iter()
+            .find(|(k, _)| k == "x-amz-content-sha256")
+            .map(|(_, v)| v.as_str())
+            .expect("x-amz-content-sha256 header missing");
+
+        assert_eq!(content_sha.len(), 64, "SHA-256 hex must be 64 chars");
+        assert!(
+            content_sha.chars().all(|c| c.is_ascii_hexdigit()),
+            "SHA-256 must be hex, got: {}",
+            content_sha
+        );
+
+        // Verify it matches expected SHA-256 of the payload
+        let expected = sha256_hex(payload);
+        assert_eq!(content_sha, expected);
+    }
+
+    #[test]
+    fn test_s3_signed_headers_different_payloads() {
+        let headers_a = s3_signed_headers(
+            "PUT",
+            &test_url(),
+            b"payload one",
+            "AKIAIOSFODNN7EXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "us-east-1",
+        );
+        let headers_b = s3_signed_headers(
+            "PUT",
+            &test_url(),
+            b"payload two",
+            "AKIAIOSFODNN7EXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "us-east-1",
+        );
+
+        let hash_a = headers_a
+            .iter()
+            .find(|(k, _)| k == "x-amz-content-sha256")
+            .map(|(_, v)| v.as_str())
+            .unwrap();
+        let hash_b = headers_b
+            .iter()
+            .find(|(k, _)| k == "x-amz-content-sha256")
+            .map(|(_, v)| v.as_str())
+            .unwrap();
+
+        assert_ne!(hash_a, hash_b, "Different payloads must produce different content hashes");
+    }
+
+    #[test]
+    fn test_s3_signed_headers_contains_region() {
+        let region = "eu-west-2";
+        let headers = s3_signed_headers(
+            "GET",
+            &test_url(),
+            b"",
+            "AKIAIOSFODNN7EXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            region,
+        );
+        let auth = headers
+            .iter()
+            .find(|(k, _)| k == "Authorization")
+            .map(|(_, v)| v.as_str())
+            .expect("Authorization header missing");
+
+        assert!(
+            auth.contains(region),
+            "Authorization header must contain region '{}', got: {}",
+            region,
+            auth
+        );
+    }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Extract `(user@host, port)` strings from `endpoints` suitable for passing

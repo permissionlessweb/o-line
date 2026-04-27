@@ -20,7 +20,7 @@ pub fn draw(f: &mut Frame, app: &TuiApp) {
 
     draw_tabs(f, app, chunks[0]);
     draw_logs(f, app, chunks[1]);
-    draw_status_bar(f, chunks[2]);
+    draw_status_bar(f, app, chunks[2]);
 }
 
 /// Render the tab bar with service labels and connection indicators.
@@ -148,7 +148,7 @@ fn draw_deploy_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
         Span::styled(" DEPLOYING ", Style::default().fg(Color::Black).bg(Color::Yellow))
     };
 
-    let hints = Line::from(vec![
+    let mut spans = vec![
         status_indicator,
         Span::raw("  "),
         Span::styled("Tab", Style::default().add_modifier(Modifier::BOLD)),
@@ -161,8 +161,17 @@ fn draw_deploy_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
         Span::raw(":ssh  "),
         Span::styled("Ctrl+C", Style::default().add_modifier(Modifier::BOLD)),
         Span::raw(":exit"),
-    ]);
+    ];
 
+    if let Some(ref path) = app.persist_path {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!(" PERSIST: {} ", path),
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        ));
+    }
+
+    let hints = Line::from(spans);
     let bar = Paragraph::new(hints).style(
         Style::default()
             .fg(Color::Black)
@@ -171,9 +180,9 @@ fn draw_deploy_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
     f.render_widget(bar, area);
 }
 
-/// Render the bottom status bar with keybinding hints.
-fn draw_status_bar(f: &mut Frame, area: Rect) {
-    let hints = Line::from(vec![
+/// Render the bottom status bar with keybinding hints and persistence indicator.
+fn draw_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let mut spans = vec![
         Span::styled(" Tab", Style::default().add_modifier(Modifier::BOLD)),
         Span::raw(":switch  "),
         Span::styled("↑↓/PgUp/PgDn", Style::default().add_modifier(Modifier::BOLD)),
@@ -184,8 +193,17 @@ fn draw_status_bar(f: &mut Frame, area: Rect) {
         Span::raw(":back  "),
         Span::styled("Ctrl+C", Style::default().add_modifier(Modifier::BOLD)),
         Span::raw(":exit"),
-    ]);
+    ];
 
+    if let Some(ref path) = app.persist_path {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!(" PERSIST: {} ", path),
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        ));
+    }
+
+    let hints = Line::from(spans);
     let bar = Paragraph::new(hints).style(
         Style::default()
             .fg(Color::Black)

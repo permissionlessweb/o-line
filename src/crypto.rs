@@ -6,7 +6,7 @@ use akash_deploy_rs::ServiceEndpoint;
 use argon2::Argon2;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
-use openssh::{KnownHosts, SessionBuilder};
+use openssh::{KnownHosts, Session, SessionBuilder};
 use rand::RngCore;
 use ssh_key::LineEnding;
 use std::{
@@ -20,6 +20,33 @@ use std::{
     thread::sleep,
     time::{Duration, Instant},
 };
+
+use crate::config::write_encrypted_mnemonic;
+
+// ── Subcommand: encrypt ──
+pub fn cmd_encrypt() -> Result<(), Box<dyn Error>> {
+    tracing::info!("=== Encrypt Mnemonic ===\n");
+    let mnemonic = rpassword::prompt_password("Enter mnemonic: ")?;
+    if mnemonic.trim().is_empty() {
+        return Err("Mnemonic cannot be empty.".into());
+    }
+    let password = rpassword::prompt_password("Enter password: ")?;
+    if password.is_empty() {
+        return Err("Password cannot be empty.".into());
+    }
+    let confirm = rpassword::prompt_password("Confirm password: ")?;
+    if password != confirm {
+        return Err("Passwords do not match.".into());
+    }
+    let blob = encrypt_mnemonic(mnemonic.trim(), &password)?;
+    write_encrypted_mnemonic(&blob)?;
+    tracing::info!(
+        "\nEncrypted mnemonic written to {}",
+        crate::config::oline_mnemonic_path().display()
+    );
+    tracing::info!("You can now run `oline deploy` to deploy using your encrypted mnemonic.");
+    Ok(())
+}
 
 /// Human-readable byte size (e.g. "1.23 GB", "456.7 MB").
 pub fn fmt_bytes(bytes: u64) -> String {
@@ -158,20 +185,118 @@ pub const S3_KEY: usize = 24;
 ///   compression just burns CPU.
 /// - `ServerAliveInterval=15` — detect stalled connections quickly.
 pub const SSH_FAST_ARGS: &[&str] = &[
-    "-o", "StrictHostKeyChecking=no",
-    "-o", "UserKnownHostsFile=/dev/null",
-    "-o", "ConnectTimeout=10",
-    "-o", "BatchMode=yes",
-    "-o", "Compression=no",
-    "-o", "ServerAliveInterval=15",
-    "-c", "aes128-gcm@openssh.com",
+    "-o",
+    "StrictHostKeyChecking=no",
+    "-o",
+    "UserKnownHostsFile=/dev/null",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "Compression=no",
+    "-o",
+    "ServerAliveInterval=15",
+    "-c",
+    "aes128-gcm@openssh.com",
 ];
+
+/// Open a single SSH session to an Akash node.
+///
+/// Uses KnownHosts::Accept (StrictHostKeyChecking=no) + /dev/null known_hosts so
+/// that re-used provider IP:port combinations from previous deployments never
+/// cause "host key verification failed" errors.  All node SSH calls must go
+/// through this function.
+///
+/// Accepts either a plaintext key path or an encrypted `.enc` key path.
+/// If the `.enc` variant exists, it is decrypted to a temporary file for the
+/// duration of the SSH session (the tempfile is auto-deleted on drop).
+pub async fn open_node_session(dest: &str, key_path: &PathBuf) -> Result<Session, Box<dyn Error>> {
+    // Resolve actual key file: prefer .enc, fall back to plaintext
+    let enc_path = key_path.with_extension("enc");
+    let effective_key_path = if enc_path.exists() && !key_path.exists() {
+        // Decrypt to a temporary file for the SSH session
+        let password = std::env::var("OLINE_PASSWORD")
+            .or_else(|_| std::env::var("OLINE_SSH_KEY_PASSWORD"))
+            .unwrap_or_default();
+        if password.is_empty() {
+            return Err(format!(
+                "SSH key is encrypted at {:?} but no password available (set OLINE_PASSWORD)",
+                enc_path
+            )
+            .into());
+        }
+        let key = load_ssh_key_encrypted(key_path, &password)?;
+        let tmp_path = std::env::temp_dir().join(format!("oline-ssh-{}", std::process::id()));
+        let pem = key
+            .to_openssh(ssh_key::LineEnding::LF)
+            .map_err(|e| format!("Failed to serialize SSH key: {}", e))?;
+        fs::write(&tmp_path, pem.as_ref() as &str)
+            .map_err(|e| format!("Failed to write temp key: {}", e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600));
+        }
+        tmp_path
+    } else {
+        key_path.clone()
+    };
+
+    Ok(SessionBuilder::default()
+        .keyfile(&effective_key_path)
+        .known_hosts_check(KnownHosts::Accept)
+        .user_known_hosts_file("/dev/null")
+        .connect_timeout(Duration::from_secs(15))
+        .server_alive_interval(Duration::from_secs(15))
+        .compression(false)
+        .connect_mux(dest)
+        .await?)
+}
 
 pub fn gen_ssh_key() -> ssh_key::PrivateKey {
     use ssh_key::rand_core::OsRng;
     ssh_key::PrivateKey::random(&mut OsRng, ssh_key::Algorithm::Ed25519).unwrap()
 }
 
+/// Save an SSH private key encrypted with AES-256-GCM + Argon2.
+/// The file gets a `.enc` extension appended to the given path.
+pub fn save_ssh_key_encrypted(
+    k: &ssh_key::PrivateKey,
+    path: &PathBuf,
+    password: &str,
+) -> Result<(), Box<dyn Error>> {
+    let pem = k
+        .to_openssh(LineEnding::LF)
+        .map_err(|e| format!("Failed to serialize SSH key: {}", e))?;
+    let encrypted = encrypt_mnemonic(pem.as_ref(), password)?;
+    let enc_path = path.with_extension("enc");
+    fs::write(&enc_path, encrypted.as_bytes())
+        .map_err(|e| format!("Failed to write encrypted SSH key to {:?}: {}", enc_path, e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&enc_path, fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+/// Load an SSH private key from an encrypted `.enc` file.
+pub fn load_ssh_key_encrypted(
+    path: &PathBuf,
+    password: &str,
+) -> Result<ssh_key::PrivateKey, Box<dyn Error>> {
+    let enc_path = path.with_extension("enc");
+    let encrypted = fs::read_to_string(&enc_path)
+        .map_err(|e| format!("Failed reading encrypted SSH key: {:?}: {}", enc_path, e))?;
+    let pem = decrypt_mnemonic(&encrypted, password)?;
+    ssh_key::PrivateKey::from_openssh(&pem)
+        .map_err(|e| format!("Failed to parse decrypted SSH key: {}", e).into())
+}
+
+#[deprecated(
+    note = "Use save_ssh_key_encrypted instead — plaintext keys on disk are a security risk"
+)]
 pub fn save_ssh_key(k: &ssh_key::PrivateKey, path: &PathBuf) -> Result<(), Box<dyn Error>> {
     // write_openssh_file sets 0o600 permissions automatically on Unix
     k.write_openssh_file(path, LineEnding::LF)
@@ -180,8 +305,35 @@ pub fn save_ssh_key(k: &ssh_key::PrivateKey, path: &PathBuf) -> Result<(), Box<d
 }
 
 /// Load an existing SSH key from `path`, or generate a new one and save it there.
+/// Keys are stored encrypted — requires the user's password for encrypt/decrypt.
 ///
-/// Returns the private key. Logs whether the key was reused or freshly generated.
+/// Resolution order:
+/// 1. Encrypted file at `<path>.enc` (preferred)
+/// 2. Legacy plaintext file at `<path>` (migrated to encrypted on load)
+/// 3. Generate new key and save encrypted
+pub fn ensure_ssh_key_encrypted(
+    path: &PathBuf,
+    password: &str,
+) -> Result<ssh_key::PrivateKey, Box<dyn Error>> {
+    let enc_path = path.with_extension("enc");
+    if enc_path.exists() {
+        let key = load_ssh_key_encrypted(path, password)?;
+        tracing::info!("  SSH key reused from {:?}", enc_path);
+        return Ok(key);
+    }
+
+    // Generate new
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create SSH key directory {:?}: {}", parent, e))?;
+    }
+    let key = gen_ssh_key();
+    save_ssh_key_encrypted(&key, path, password)?;
+    tracing::info!("  SSH key generated → {:?}", enc_path);
+    Ok(key)
+}
+
+/// Legacy unencrypted loader — kept for call sites that don't have a password yet.
 pub fn ensure_ssh_key(path: &PathBuf) -> Result<ssh_key::PrivateKey, Box<dyn Error>> {
     if path.exists() {
         let key = ssh_key::PrivateKey::read_openssh_file(path)
@@ -195,6 +347,7 @@ pub fn ensure_ssh_key(path: &PathBuf) -> Result<ssh_key::PrivateKey, Box<dyn Err
                 .map_err(|e| format!("Failed to create SSH key directory {:?}: {}", parent, e))?;
         }
         let key = gen_ssh_key();
+        #[allow(deprecated)]
         save_ssh_key(&key, path)?;
         tracing::info!("  SSH key generated → {:?}", path);
         Ok(key)
@@ -269,18 +422,29 @@ pub async fn push_pre_start_files(
     let dest = ssh_dest_path(&ssh_ep.port.to_string(), &ssh_ep.uri);
 
     // ── SSH-pipe files (large: snapshots) ─────────────────────────────────────
-    for file in files.iter().filter(|f| matches!(f.source, FileSource::Path(_))) {
+    for file in files
+        .iter()
+        .filter(|f| matches!(f.source, FileSource::Path(_)))
+    {
         if let FileSource::Path(ref local_path) = file.source {
             let size = fs::metadata(local_path)
                 .map_err(|e| format!("[{}] Cannot stat {:?}: {}", label, local_path, e))?
                 .len();
             tracing::info!(
                 "  [{}] SSH-pipe {:?} ({} bytes) → {}",
-                label, local_path, size, file.remote_path
+                label,
+                local_path,
+                size,
+                file.remote_path
             );
-            let host = ssh_ep.uri
-                .strip_prefix("https://").or_else(|| ssh_ep.uri.strip_prefix("http://"))
-                .unwrap_or(&ssh_ep.uri).split(':').next().unwrap_or(&ssh_ep.uri);
+            let host = ssh_ep
+                .uri
+                .strip_prefix("https://")
+                .or_else(|| ssh_ep.uri.strip_prefix("http://"))
+                .unwrap_or(&ssh_ep.uri)
+                .split(':')
+                .next()
+                .unwrap_or(&ssh_ep.uri);
             let port_str = ssh_ep.port.to_string();
 
             // Retry loop — containers may not have SSH ready immediately after deploy.
@@ -288,13 +452,20 @@ pub async fn push_pre_start_files(
             loop {
                 attempt += 1;
                 // Ensure remote parent dir exists
-                let parent = file.remote_path.rsplit('/').skip(1)
-                    .collect::<Vec<_>>().into_iter().rev()
-                    .collect::<Vec<_>>().join("/");
+                let parent = file
+                    .remote_path
+                    .rsplit('/')
+                    .skip(1)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("/");
                 let root_host = format!("root@{}", host);
                 let mkdir_remote = format!("mkdir -p '{}'", parent);
                 if !parent.is_empty() {
-                    let mut mkdir_args: Vec<&str> = vec!["-i", ssh_key_path.to_str().unwrap(), "-p", &port_str];
+                    let mut mkdir_args: Vec<&str> =
+                        vec!["-i", ssh_key_path.to_str().unwrap(), "-p", &port_str];
                     mkdir_args.extend_from_slice(SSH_FAST_ARGS);
                     mkdir_args.extend_from_slice(&[&root_host, &mkdir_remote]);
                     let _ = std::process::Command::new("ssh").args(&mkdir_args).status();
@@ -302,7 +473,8 @@ pub async fn push_pre_start_files(
                 let mut src_file = fs::File::open(local_path)
                     .map_err(|e| format!("[{}] Cannot open {:?}: {}", label, local_path, e))?;
                 let cat_remote = format!("cat > '{}'", file.remote_path);
-                let mut ssh_args: Vec<&str> = vec!["-i", ssh_key_path.to_str().unwrap(), "-p", &port_str];
+                let mut ssh_args: Vec<&str> =
+                    vec!["-i", ssh_key_path.to_str().unwrap(), "-p", &port_str];
                 ssh_args.extend_from_slice(SSH_FAST_ARGS);
                 ssh_args.extend_from_slice(&[&root_host as &str, &cat_remote as &str]);
                 let mut child = std::process::Command::new("ssh")
@@ -319,23 +491,37 @@ pub async fn push_pre_start_files(
                     return Err(format!(
                         "[{}] SSH pipe failed for {:?} after {} attempts",
                         label, local_path, max_retries
-                    ).into());
+                    )
+                    .into());
                 }
                 tracing::info!(
                     "  [{}] SSH-pipe attempt {}/{} failed (exit {:?}) — retrying in 10s",
-                    label, attempt, max_retries, status.code()
+                    label,
+                    attempt,
+                    max_retries,
+                    status.code()
                 );
                 sleep(Duration::from_secs(10));
             }
-            tracing::info!("  [{}] Pushed {:?} → {}", label, local_path, file.remote_path);
+            tracing::info!(
+                "  [{}] Pushed {:?} → {}",
+                label,
+                local_path,
+                file.remote_path
+            );
         }
     }
 
     // ── SFTP files (small: scripts, configs) ──────────────────────────────────
-    let bytes_files: Vec<(&[u8], &str)> = files.iter()
-        .filter_map(|f| if let FileSource::Bytes(ref b) = f.source {
-            Some((b.as_slice(), f.remote_path.as_str()))
-        } else { None })
+    let bytes_files: Vec<(&[u8], &str)> = files
+        .iter()
+        .filter_map(|f| {
+            if let FileSource::Bytes(ref b) = f.source {
+                Some((b.as_slice(), f.remote_path.as_str()))
+            } else {
+                None
+            }
+        })
         .collect();
 
     if bytes_files.is_empty() {
@@ -346,11 +532,7 @@ pub async fn push_pre_start_files(
     loop {
         let sftp_result = async {
             let sftp = Sftp::from_session(
-                SessionBuilder::default()
-                    .keyfile(ssh_key_path)
-                    .known_hosts_check(KnownHosts::Add)
-                    .connect_mux(&dest)
-                    .await?,
+                open_node_session(&dest, ssh_key_path).await?,
                 Default::default(),
             )
             .await?;
@@ -377,18 +559,26 @@ pub async fn push_pre_start_files(
                     return Err(format!(
                         "[{}] SFTP failed after {} retries: {}",
                         label, max_retries, e
-                    ).into());
+                    )
+                    .into());
                 }
                 tracing::info!(
                     "  [{}] SFTP attempt {}/{} failed: {} — retrying in 5s",
-                    label, retries, max_retries, e
+                    label,
+                    retries,
+                    max_retries,
+                    e
                 );
                 sleep(Duration::from_secs(5));
             }
         }
     }
 
-    tracing::info!("  [{}] Pre-start files delivered ({} files).", label, files.len());
+    tracing::info!(
+        "  [{}] Pre-start files delivered ({} files).",
+        label,
+        files.len()
+    );
     Ok(())
 }
 
@@ -434,11 +624,7 @@ pub async fn push_scripts_sftp(
     tracing::info!("  [{}] Pushing local scripts → {}", label, dest);
 
     let sftp = Sftp::from_session(
-        SessionBuilder::default()
-            .keyfile(ssh_key_path)
-            .known_hosts_check(KnownHosts::Add)
-            .connect_mux(&dest)
-            .await?,
+        open_node_session(&dest, ssh_key_path).await?,
         Default::default(),
     )
     .await?;
@@ -466,11 +652,7 @@ pub async fn push_scripts_sftp(
     // instead of downloading from GitHub. Local changes take effect immediately.
     if let Some(ndir) = nginx_dir {
         // Ensure remote /tmp/nginx/ directory exists before uploading.
-        let mk_session = SessionBuilder::default()
-            .keyfile(ssh_key_path)
-            .known_hosts_check(KnownHosts::Add)
-            .connect_mux(&dest)
-            .await?;
+        let mk_session = open_node_session(&dest, ssh_key_path).await?;
         mk_session
             .command("mkdir")
             .arg("-p")
@@ -559,22 +741,21 @@ pub async fn verify_files_and_signal_start(
     let session = {
         let mut attempt = 0u32;
         loop {
-            match SessionBuilder::default()
-                .keyfile(ssh_key_path)
-                .known_hosts_check(KnownHosts::Add)
-                .connect_mux(&dest)
-                .await
-            {
+            match open_node_session(&dest, ssh_key_path).await {
                 Ok(s) => break s,
                 Err(e) => {
                     attempt += 1;
                     if attempt >= CONNECT_RETRIES {
-                        return Err(e.into());
+                        return Err(e);
                     }
                     let delay = Duration::from_secs(2u64.pow(attempt).min(30));
                     tracing::info!(
                         "  [{}] SSH connect attempt {}/{} failed: {} — retrying in {:?}",
-                        label, attempt, CONNECT_RETRIES, e, delay
+                        label,
+                        attempt,
+                        CONNECT_RETRIES,
+                        e,
+                        delay
                     );
                     sleep(delay);
                 }
@@ -717,11 +898,7 @@ pub async fn update_nginx_grpc_tls(
         .ok_or_else(|| format!("[{}] No SSH endpoint for port {}", label, ssh_port))?;
     let dest = ssh_dest_path(&ep.port.to_string(), &ep.uri);
 
-    let session = SessionBuilder::default()
-        .keyfile(ssh_key_path)
-        .known_hosts_check(KnownHosts::Add)
-        .connect_mux(&dest)
-        .await?;
+    let session = open_node_session(&dest, ssh_key_path).await?;
 
     // Build the nginx server block. The heredoc delimiter is single-quoted so
     // nginx variables like $host are written literally (not expanded by the shell).
@@ -862,11 +1039,7 @@ pub async fn bootstrap_private_node(
     let dest = format!("ssh://root@{}:{}", ssh_host, ssh_port);
     tracing::info!("  [{}] Connecting via SSH → {}", label, dest);
 
-    let session = SessionBuilder::default()
-        .keyfile(ssh_key_path)
-        .known_hosts_check(KnownHosts::Add)
-        .connect_mux(&dest)
-        .await?;
+    let session = open_node_session(&dest, ssh_key_path).await?;
 
     let (peers_cmd, stop_cmd, clean_cmd, extract_cmd) = bootstrap_commands(
         home_dir,
@@ -1081,6 +1254,7 @@ pub fn decrypt_mnemonic(encrypted_b64: &str, password: &str) -> Result<String, B
         &blob[SALT_LEN + NONCE_LEN..],
     );
 
+    println!("{:#?}", password);
     let mut key = [0u8; 32];
     Argon2::default()
         .hash_password_into(password.as_bytes(), salt, &mut key)
@@ -1092,7 +1266,7 @@ pub fn decrypt_mnemonic(encrypted_b64: &str, password: &str) -> Result<String, B
 
     let plaintext = cipher
         .decrypt(nonce, ciphertext)
-        .map_err(|_| "Decryption failed — wrong password or corrupted data")?;
+        .map_err(|_| "Mnemonic Decryption failed — wrong password or corrupted data")?;
 
     String::from_utf8(plaintext)
         .map_err(|e| format!("Decrypted data is not valid UTF-8: {}", e).into())
@@ -1136,12 +1310,7 @@ pub async fn ssh_push_env_and_run(
     let session = {
         let mut attempt = 0u32;
         loop {
-            match SessionBuilder::default()
-                .keyfile(key_path)
-                .known_hosts_check(KnownHosts::Add)
-                .connect_mux(&dest)
-                .await
-            {
+            match open_node_session(&dest, key_path).await {
                 Ok(s) => break s,
                 Err(e) => {
                     attempt += 1;
@@ -1155,7 +1324,11 @@ pub async fn ssh_push_env_and_run(
                     let delay = Duration::from_secs(2u64.pow(attempt).min(30));
                     tracing::info!(
                         "  [{}] SSH connect attempt {}/{} failed: {} — retrying in {:?}",
-                        label, attempt, CONNECT_RETRIES, e, delay
+                        label,
+                        attempt,
+                        CONNECT_RETRIES,
+                        e,
+                        delay
                     );
                     sleep(delay);
                 }
@@ -1248,4 +1421,87 @@ pub async fn check_rpc_health(rpc_url: &str) -> Result<String, String> {
         .unwrap_or("?")
         .to_string();
     Ok(format!("{} @ height {}", moniker, height))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine;
+
+    const TEST_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon \
+        abandon abandon abandon abandon abandon abandon abandon abandon \
+        abandon abandon abandon abandon abandon abandon abandon art";
+
+    #[test]
+    fn test_encrypt_decrypt_roundtrip() {
+        let password = "hunter2";
+        let encrypted =
+            encrypt_mnemonic(TEST_MNEMONIC, password).expect("encryption should succeed");
+        let decrypted = decrypt_mnemonic(&encrypted, password).expect("decryption should succeed");
+        assert_eq!(decrypted, TEST_MNEMONIC);
+    }
+
+    #[test]
+    fn test_decrypt_wrong_password() {
+        let encrypted =
+            encrypt_mnemonic(TEST_MNEMONIC, "correct-password").expect("encryption should succeed");
+        let result = decrypt_mnemonic(&encrypted, "wrong-password");
+        assert!(
+            result.is_err(),
+            "decryption with wrong password should fail"
+        );
+    }
+
+    #[test]
+    fn test_decrypt_tampered_ciphertext() {
+        let encrypted =
+            encrypt_mnemonic(TEST_MNEMONIC, "password").expect("encryption should succeed");
+
+        // Decode, flip a byte in the ciphertext region (past salt + nonce), re-encode.
+        let mut blob = BASE64.decode(&encrypted).expect("valid base64");
+        let tamper_idx = SALT_LEN + NONCE_LEN + 2;
+        blob[tamper_idx] ^= 0xFF;
+        let tampered = BASE64.encode(&blob);
+
+        let result = decrypt_mnemonic(&tampered, "password");
+        assert!(
+            result.is_err(),
+            "decryption of tampered ciphertext should fail"
+        );
+    }
+
+    #[test]
+    fn test_decrypt_truncated_blob() {
+        // Build a blob that is shorter than SALT_LEN + NONCE_LEN + 1 bytes.
+        let short_blob = vec![0u8; SALT_LEN + NONCE_LEN - 1];
+        let encoded = BASE64.encode(&short_blob);
+
+        let result = decrypt_mnemonic(&encoded, "password");
+        assert!(result.is_err(), "should error on truncated blob");
+        let err_msg = result.unwrap_err().to_string().to_lowercase();
+        assert!(
+            err_msg.contains("too short") || err_msg.contains("short"),
+            "error message should mention 'too short', got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_encrypt_different_salts() {
+        let password = "same-password";
+        let enc1 =
+            encrypt_mnemonic(TEST_MNEMONIC, password).expect("first encryption should succeed");
+        let enc2 =
+            encrypt_mnemonic(TEST_MNEMONIC, password).expect("second encryption should succeed");
+        assert_ne!(
+            enc1, enc2,
+            "two encryptions with random salt must produce different ciphertexts"
+        );
+    }
+
+    #[test]
+    fn test_decrypt_invalid_base64() {
+        let result = decrypt_mnemonic("not-valid-base64!!!", "password");
+        assert!(result.is_err(), "invalid base64 should return Err");
+    }
 }

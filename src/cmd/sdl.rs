@@ -1,5 +1,22 @@
-use crate::{akash::*, cli::*, config::*, with_examples};
-use crate::toml_config::{TomlConfig, CONFIG_FIELDS};
+use akash_deploy_rs::AkashBackend;
+
+use crate::{
+    akash::*,
+    authz::*,
+    cli::*,
+    config::*,
+    crypto::decrypt_mnemonic,
+    deployer::OLineDeployer,
+    toml_config::{TomlConfig, CONFIG_FIELDS},
+    with_examples,
+};
+use std::{
+    collections::HashMap,
+    error::Error,
+    fs,
+    io::{self, BufRead},
+    path::Path,
+};
 
 with_examples! {
     #[derive(clap::Args, Debug, Default)]
@@ -15,13 +32,185 @@ with_examples! {
     => "../../docs/examples/sdl.md"
 }
 
-use std::{
-    collections::HashMap,
-    error::Error,
-    fs,
-    io::{self, BufRead},
-    path::Path,
-};
+/// Shared init for both deploy --sdl steps: load env, render SDL, create deployer.
+async fn init_sdl_deploy(
+    sdl_path: &str,
+) -> Result<
+    (
+        OLineDeployer,
+        String,
+        std::collections::HashMap<String, String>,
+        String,
+    ),
+    Box<dyn Error>,
+> {
+    tracing::info!("=== Deploy SDL: {} ===", sdl_path);
+
+    let raw_sdl = std::fs::read_to_string(sdl_path)
+        .map_err(|e| format!("Cannot read SDL {}: {}", sdl_path, e))?;
+
+    // Build vars from TOML config + env vars (env vars take priority)
+    let config_for_vars = build_config_from_env(String::new(), None);
+    let vars: std::collections::HashMap<String, String> = config_for_vars
+        .to_sdl_vars()
+        .into_iter()
+        .chain(std::env::vars())
+        .collect();
+
+    // Partial substitution: resolves known vars, passes through shell runtime vars
+    let rendered = akash_deploy_rs::substitute_partial(&raw_sdl, &vars);
+
+    tracing::info!("  Rendered SDL ({} bytes)", rendered.len());
+
+    // Check AuthZ first (passwordless), then env, then interactive
+    let authz_state = load_authz_state();
+    let non_interactive = std::env::var("OLINE_NON_INTERACTIVE").is_ok() || authz_state.is_some();
+
+    let (mnemonic, authz_granter) = if let Some(ref state) = authz_state {
+        let m = load_deployer_mnemonic().map_err(|e| -> Box<dyn Error> { e.into() })?;
+        tracing::info!(
+            "Using AuthZ delegation (deployer → {})",
+            state.granter_address
+        );
+        (m, Some(state.granter_address.clone()))
+    } else if non_interactive {
+        let p = std::env::var("OLINE_PASSWORD").unwrap_or_else(|_| "oline-test".to_string());
+        let m = if let Some(raw) = std::env::var("OLINE_MNEMONIC")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+        {
+            raw.trim().to_string()
+        } else {
+            let blob = read_encrypted_mnemonic().map_err(|_| {
+                "OLINE_NON_INTERACTIVE requires OLINE_MNEMONIC or OLINE_ENCRYPTED_MNEMONIC"
+            })?;
+            decrypt_mnemonic(&blob, &p).map_err(|e| format!("Failed to decrypt mnemonic: {}", e))?
+        };
+        (m, None)
+    } else {
+        (unlock_mnemonic()?.0, None)
+    };
+
+    let config = build_config_from_env(mnemonic, None);
+    let deployer = if let Some(granter) = authz_granter {
+        OLineDeployer::new_authz(config, granter).await?
+    } else {
+        let password = std::env::var("OLINE_PASSWORD").unwrap_or_default();
+        OLineDeployer::new(config, password).await?
+    };
+
+    let label = std::path::Path::new(sdl_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("custom-sdl")
+        .to_string();
+
+    Ok((deployer, rendered, vars, label))
+}
+
+// ── Subcommand: deploy --sdl <path> (step 1: create deployment + list bids) ──
+pub async fn cmd_deploy_sdl(sdl_path: &str) -> Result<(), Box<dyn Error>> {
+    let (deployer, rendered, vars, label) = init_sdl_deploy(sdl_path).await?;
+
+    let (state, bids) = deployer
+        .deploy_phase_until_bids(&rendered, &vars, &label)
+        .await
+        .map_err(|e| format!("Deployment failed: {}", e))?;
+
+    let dseq = state.dseq.unwrap_or(0);
+
+    // Print bids as structured output for LLM/script consumption
+    println!("DSEQ={}", dseq);
+    println!("BIDS={}", bids.len());
+    for (i, bid) in bids.iter().enumerate() {
+        let price_akt = bid.price as f64 / 1_000_000.0;
+        // Query provider info for context
+        let info = deployer
+            .client
+            .query_provider_info(&bid.provider)
+            .await
+            .ok()
+            .flatten();
+        let host = info
+            .as_ref()
+            .map(|i| i.host_uri.as_str())
+            .unwrap_or("unknown");
+        let email = info.as_ref().map(|i| i.email.as_str()).unwrap_or("");
+        let website = info.as_ref().map(|i| i.website.as_str()).unwrap_or("");
+
+        println!(
+            "BID[{}] provider={} price={} price_akt={:.6} host={} email={} website={}",
+            i, bid.provider, bid.price, price_akt, host, email, website
+        );
+    }
+    println!();
+    println!("To select a provider, run:");
+    println!(
+        "  oline deploy --sdl {} --select {} <PROVIDER_ADDRESS>",
+        sdl_path, dseq
+    );
+
+    Ok(())
+}
+
+// ── Subcommand: deploy --sdl <path> --select <dseq> <provider> (step 2: complete) ──
+pub async fn cmd_deploy_sdl_select(
+    sdl_path: &str,
+    dseq: u64,
+    provider: &str,
+) -> Result<(), Box<dyn Error>> {
+    use akash_deploy_rs::{DeploymentState, DeploymentStore, DeploymentWorkflow};
+
+    let (deployer, rendered, _vars, label) = init_sdl_deploy(sdl_path).await?;
+
+    // rendered is already fully substituted by init_sdl_deploy
+    let mut state = DeploymentState::new(&label, deployer.client.address())
+        .with_sdl(&rendered)
+        .with_label(&label);
+    state.dseq = Some(dseq);
+
+    // Add synthetic bid so select_provider validation passes
+    state.bids.push(akash_deploy_rs::Bid {
+        provider: provider.to_string(),
+        price: 0,
+        price_denom: String::new(),
+        resources: akash_deploy_rs::Resources {
+            cpu_millicores: 0,
+            memory_bytes: 0,
+            storage_bytes: 0,
+            gpu_count: 0,
+        },
+    });
+
+    // Select the provider
+    DeploymentWorkflow::<akash_deploy_rs::AkashClient>::select_provider(&mut state, provider)?;
+
+    // Complete the deployment (lease + manifest + endpoints)
+    let endpoints = deployer
+        .deploy_phase_complete(&mut state, &label)
+        .await
+        .map_err(|e| format!("Deployment failed: {}", e))?;
+
+    println!("DSEQ={}", dseq);
+    println!("PROVIDER={}", provider);
+    for ep in &endpoints {
+        println!(
+            "ENDPOINT={} port={} internal_port={} service={}",
+            ep.uri, ep.port, ep.internal_port, ep.service
+        );
+    }
+    println!("DEPLOY_COMPLETE=true");
+
+    // Save to local store so `oline manage logs/close` can find this deployment
+    let password = std::env::var("OLINE_PASSWORD").unwrap_or_default();
+    if let Ok(record) = akash_deploy_rs::DeploymentRecord::from_state(&state, &password) {
+        let mut store = akash_deploy_rs::FileDeploymentStore::new_default().await?;
+        store.save(&record).await?;
+        tracing::info!("Saved deployment record for DSEQ {}", dseq);
+    }
+
+    Ok(())
+}
 
 // ── Subcommand: generate-sdl ──
 pub async fn cmd_generate_sdl(
@@ -48,8 +237,8 @@ pub async fn cmd_generate_sdl(
         tracing::info!("  Loading config from: {}\n", cfg_path);
         let raw = fs::read_to_string(cfg_path)
             .map_err(|e| format!("Cannot read '{}': {}", cfg_path, e))?;
-        let deploy_config: DeployConfig = serde_json::from_str(&raw)
-            .map_err(|e| format!("Invalid deploy-config.json: {}", e))?;
+        let deploy_config: DeployConfig =
+            serde_json::from_str(&raw).map_err(|e| format!("Invalid deploy-config.json: {}", e))?;
         // Rebuild OLineConfig from deploy-config values + env overrides
         let mut toml_cfg = TomlConfig::from_defaults();
         for field in CONFIG_FIELDS {
@@ -79,7 +268,11 @@ pub async fn cmd_generate_sdl(
             let password = rpassword::prompt_password(
                 "Enter password to decrypt config (or press Enter to skip): ",
             )?;
-            if password.is_empty() { None } else { load_config(&password) }
+            if password.is_empty() {
+                None
+            } else {
+                load_config(&password)
+            }
         } else {
             None
         };
@@ -112,36 +305,78 @@ pub async fn cmd_generate_sdl(
     // ── Peer inputs ───────���───────────────────────────���───────────────────────
     let needs_peers = matches!(phase.as_str(), "b" | "c" | "all");
     let (snapshot_peer, seed_peer) = if needs_peers {
-        let default_snap = preloaded_peers.as_ref().map(|p| p.snapshot.as_str()).unwrap_or("<SNAPSHOT_PEER_1>");
-        let default_seed = preloaded_peers.as_ref().map(|p| p.seed.as_str()).unwrap_or("<SEED_PEER_1>");
-        let sp = read_input(&mut lines, "Snapshot peer 1 (id@host:port)", Some(default_snap))?;
+        let default_snap = preloaded_peers
+            .as_ref()
+            .map(|p| p.snapshot.as_str())
+            .unwrap_or("<SNAPSHOT_PEER_1>");
+        let default_seed = preloaded_peers
+            .as_ref()
+            .map(|p| p.seed.as_str())
+            .unwrap_or("<SEED_PEER_1>");
+        let sp = read_input(
+            &mut lines,
+            "Snapshot peer 1 (id@host:port)",
+            Some(default_snap),
+        )?;
         let sd = read_input(&mut lines, "Seed peer 1 (id@host:port)", Some(default_seed))?;
         (sp, sd)
     } else {
         (
-            preloaded_peers.as_ref().map(|p| p.snapshot.clone()).unwrap_or_default(),
-            preloaded_peers.as_ref().map(|p| p.seed.clone()).unwrap_or_default(),
+            preloaded_peers
+                .as_ref()
+                .map(|p| p.snapshot.clone())
+                .unwrap_or_default(),
+            preloaded_peers
+                .as_ref()
+                .map(|p| p.seed.clone())
+                .unwrap_or_default(),
         )
     };
 
     let statesync_rpc = if needs_peers {
-        let default_rpc = preloaded_peers.as_ref().map(|p| p.statesync_rpc.as_str()).unwrap_or("");
+        let default_rpc = preloaded_peers
+            .as_ref()
+            .map(|p| p.statesync_rpc.as_str())
+            .unwrap_or("");
         read_input(&mut lines, "Statesync RPC servers", Some(default_rpc))?
     } else {
-        preloaded_peers.as_ref().map(|p| p.statesync_rpc.clone()).unwrap_or_default()
+        preloaded_peers
+            .as_ref()
+            .map(|p| p.statesync_rpc.clone())
+            .unwrap_or_default()
     };
 
     let needs_tackles = matches!(phase.as_str(), "c" | "all");
     let (left_tackle_peer, right_tackle_peer) = if needs_tackles {
-        let default_lt = preloaded_peers.as_ref().map(|p| p.left_tackle.as_str()).unwrap_or("<LEFT_TACKLE_PEER>");
-        let default_rt = preloaded_peers.as_ref().map(|p| p.right_tackle.as_str()).unwrap_or("<RIGHT_TACKLE_PEER>");
-        let lt = read_input(&mut lines, "Left tackle peer (id@host:port)", Some(default_lt))?;
-        let rt = read_input(&mut lines, "Right tackle peer (id@host:port)", Some(default_rt))?;
+        let default_lt = preloaded_peers
+            .as_ref()
+            .map(|p| p.left_tackle.as_str())
+            .unwrap_or("<LEFT_TACKLE_PEER>");
+        let default_rt = preloaded_peers
+            .as_ref()
+            .map(|p| p.right_tackle.as_str())
+            .unwrap_or("<RIGHT_TACKLE_PEER>");
+        let lt = read_input(
+            &mut lines,
+            "Left tackle peer (id@host:port)",
+            Some(default_lt),
+        )?;
+        let rt = read_input(
+            &mut lines,
+            "Right tackle peer (id@host:port)",
+            Some(default_rt),
+        )?;
         (lt, rt)
     } else {
         (
-            preloaded_peers.as_ref().map(|p| p.left_tackle.clone()).unwrap_or_default(),
-            preloaded_peers.as_ref().map(|p| p.right_tackle.clone()).unwrap_or_default(),
+            preloaded_peers
+                .as_ref()
+                .map(|p| p.left_tackle.clone())
+                .unwrap_or_default(),
+            preloaded_peers
+                .as_ref()
+                .map(|p| p.right_tackle.clone())
+                .unwrap_or_default(),
         )
     };
 
@@ -157,26 +392,51 @@ pub async fn cmd_generate_sdl(
                   vars: &HashMap<String, String>|
      -> Result<String, Box<dyn Error>> {
         tracing::info!("\n── {} ���─", label);
-        let rendered = substitute_template_raw(template, vars)?;
+        let rendered = akash_deploy_rs::substitute_partial(template, vars);
         tracing::info!("{}", rendered);
         Ok(rendered)
     };
 
     let mut rendered_files: Vec<(&str, String)> = Vec::new();
-    let secrets = std::env::var("SECRETS_PATH").unwrap_or_else(|_| ".".into());
+    let secrets = crate::config::oline_config_dir()
+        .to_string_lossy()
+        .into_owned();
+
+    // Phase A generates SSH keys — prompt for encryption password
+    let key_password = if matches!(phase.as_str(), "a" | "all") {
+        rpassword::prompt_password("  Key encryption password: ")?
+    } else {
+        String::new()
+    };
 
     match phase.as_str() {
         "a" => {
-            let vars = build_phase_a_vars(&config, &secrets).await?;
-            rendered_files.push(("a.yml", render("Phase A: Kickoff Special Teams", &sdl_a, &vars)?));
+            let vars = build_phase_a_vars(&config, &secrets, &key_password).await?;
+            rendered_files.push((
+                "a.yml",
+                render("Phase A: Kickoff Special Teams", &sdl_a, &vars)?,
+            ));
         }
         "b" => {
             let vars = build_phase_b_vars(&config, &snapshot_peer, &statesync_rpc);
-            rendered_files.push(("b.yml", render("Phase B: Left & Right Tackles", &sdl_b, &vars)?));
+            rendered_files.push((
+                "b.yml",
+                render("Phase B: Left & Right Tackles", &sdl_b, &vars)?,
+            ));
         }
         "c" => {
-            let vars = build_phase_c_vars(&config, &seed_peer, &snapshot_peer, &left_tackle_peer, &right_tackle_peer, &statesync_rpc);
-            rendered_files.push(("c.yml", render("Phase C: Left & Right Forwards", &sdl_c, &vars)?));
+            let vars = build_phase_c_vars(
+                &config,
+                &seed_peer,
+                &snapshot_peer,
+                &left_tackle_peer,
+                &right_tackle_peer,
+                &statesync_rpc,
+            );
+            rendered_files.push((
+                "c.yml",
+                render("Phase C: Left & Right Forwards", &sdl_c, &vars)?,
+            ));
         }
         "e" => {
             let vars = build_phase_rly_vars(&config);
@@ -188,20 +448,39 @@ pub async fn cmd_generate_sdl(
         }
         "all" => {
             let (a, b, c, e, f) = (
-                build_phase_a_vars(&config, &secrets).await?,
+                build_phase_a_vars(&config, &secrets, &key_password).await?,
                 build_phase_b_vars(&config, &snapshot_peer, &statesync_rpc),
-                build_phase_c_vars(&config, &seed_peer, &snapshot_peer, &left_tackle_peer, &right_tackle_peer, &statesync_rpc),
+                build_phase_c_vars(
+                    &config,
+                    &seed_peer,
+                    &snapshot_peer,
+                    &left_tackle_peer,
+                    &right_tackle_peer,
+                    &statesync_rpc,
+                ),
                 build_phase_rly_vars(&config),
                 build_phase_f_vars(&config, &statesync_rpc),
             );
-            rendered_files.push(("a.yml", render("Phase A: Kickoff Special Teams", &sdl_a, &a)?));
-            rendered_files.push(("b.yml", render("Phase B: Left & Right Tackles", &sdl_b, &b)?));
-            rendered_files.push(("c.yml", render("Phase C: Left & Right Forwards", &sdl_c, &c)?));
+            rendered_files.push((
+                "a.yml",
+                render("Phase A: Kickoff Special Teams", &sdl_a, &a)?,
+            ));
+            rendered_files.push((
+                "b.yml",
+                render("Phase B: Left & Right Tackles", &sdl_b, &b)?,
+            ));
+            rendered_files.push((
+                "c.yml",
+                render("Phase C: Left & Right Forwards", &sdl_c, &c)?,
+            ));
             rendered_files.push(("e.yml", render("Phase E: IBC Relayer", &sdl_e, &e)?));
             rendered_files.push(("f.yml", render("Phase F: Argus Indexer", &sdl_f, &f)?));
         }
         _ => {
-            tracing::info!("Unknown phase: {}. Choose a, a2, b, c, e, f, or all.", phase);
+            tracing::info!(
+                "Unknown phase: {}. Choose a, a2, b, c, e, f, or all.",
+                phase
+            );
             return Ok(());
         }
     }

@@ -31,8 +31,8 @@ pub async fn deploy_special_teams(
         return Ok(StepResult::Complete);
     }
 
-    let secrets_path = var("SECRETS_PATH").unwrap_or_else(|_| ".".into());
-    let a_vars = build_phase_a_vars(&w.ctx.deployer.config, &secrets_path)
+    let secrets_path = crate::config::oline_config_dir().to_string_lossy().into_owned();
+    let a_vars = build_phase_a_vars(&w.ctx.deployer.config, &secrets_path, &w.ctx.deployer.password)
         .await
         .map_err(|e| DeployError::InvalidState(format!("build_phase_a_vars: {}", e)))?;
     tracing::info!("  Deploying...");
@@ -166,21 +166,20 @@ pub async fn deploy_special_teams(
         );
     }
 
-    let secrets_path = var("SECRETS_PATH").unwrap_or_else(|_| ".".into());
-    let ssh_key_path: std::path::PathBuf =
-        format!("{}/{}", secrets_path, a_state.dseq.unwrap()).into();
+    let ssh_key_path = crate::config::oline_config_dir()
+        .join(a_state.dseq.unwrap().to_string());
     let ssh_privkey_pem = a_vars
         .get("SSH_PRIVKEY")
         .ok_or_else(|| DeployError::InvalidState("SSH_PRIVKEY missing from phase-A vars".into()))?
         .clone();
 
-    // Save SSH key to disk for subsequent SFTP/SSH steps.
+    // Save SSH key encrypted to disk for subsequent SFTP/SSH steps.
     {
-        use crate::crypto::save_ssh_key;
+        use crate::crypto::save_ssh_key_encrypted;
         use ssh_key::PrivateKey;
         let k = PrivateKey::from_openssh(ssh_privkey_pem.as_bytes())
             .map_err(|e| DeployError::InvalidState(format!("Invalid SSH key: {}", e)))?;
-        save_ssh_key(&k, &ssh_key_path)
+        save_ssh_key_encrypted(&k, &ssh_key_path, &w.ctx.deployer.password)
             .map_err(|e| DeployError::InvalidState(format!("save SSH key: {}", e)))?;
     }
 

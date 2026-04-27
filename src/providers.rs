@@ -178,3 +178,124 @@ impl TrustedProviderStore {
         bids.iter().filter(|b| addrs.contains(b.provider.as_str())).collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use akash_deploy_rs::Resources;
+
+    fn make_bid(provider: &str, price: u64) -> Bid {
+        Bid {
+            provider: provider.to_string(),
+            price,
+            price_denom: "uakt".to_string(),
+            resources: Resources::default(),
+        }
+    }
+
+    fn store_with_providers(providers: &[(&str, &str)]) -> (TrustedProviderStore, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("trusted-providers.json");
+        let store = TrustedProviderStore::open(&path);
+        for (address, host_uri) in providers {
+            store.add(TrustedProvider::new(*address, *host_uri)).expect("add provider");
+        }
+        (store, dir)
+    }
+
+    #[test]
+    fn test_select_from_bids_empty_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("trusted-providers.json");
+        let store = TrustedProviderStore::open(&path);
+
+        let bids = vec![make_bid("akash1provider1", 100)];
+        assert_eq!(store.select_from_bids(&bids), None);
+    }
+
+    #[test]
+    fn test_select_from_bids_no_trusted_bidding() {
+        let (store, _dir) = store_with_providers(&[
+            ("akash1trusted1", "https://trusted1.example.com:8443"),
+        ]);
+
+        let bids = vec![
+            make_bid("akash1other1", 50),
+            make_bid("akash1other2", 200),
+        ];
+        assert_eq!(store.select_from_bids(&bids), None);
+    }
+
+    #[test]
+    fn test_select_from_bids_single_match() {
+        let (store, _dir) = store_with_providers(&[
+            ("akash1trusted1", "https://trusted1.example.com:8443"),
+        ]);
+
+        let bids = vec![
+            make_bid("akash1other1", 50),
+            make_bid("akash1trusted1", 150),
+        ];
+        assert_eq!(
+            store.select_from_bids(&bids),
+            Some("akash1trusted1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_select_from_bids_cheapest_trusted() {
+        let (store, _dir) = store_with_providers(&[
+            ("akash1trusted1", "https://trusted1.example.com:8443"),
+            ("akash1trusted2", "https://trusted2.example.com:8443"),
+        ]);
+
+        let bids = vec![
+            make_bid("akash1trusted1", 300),
+            make_bid("akash1trusted2", 100),
+            make_bid("akash1other1", 50),
+        ];
+        assert_eq!(
+            store.select_from_bids(&bids),
+            Some("akash1trusted2".to_string())
+        );
+    }
+
+    #[test]
+    fn test_select_from_bids_ignores_untrusted_cheaper() {
+        let (store, _dir) = store_with_providers(&[
+            ("akash1trusted1", "https://trusted1.example.com:8443"),
+        ]);
+
+        let bids = vec![
+            make_bid("akash1untrusted_cheap", 10),
+            make_bid("akash1trusted1", 500),
+        ];
+        // Untrusted provider is cheaper, but we must return the trusted one.
+        assert_eq!(
+            store.select_from_bids(&bids),
+            Some("akash1trusted1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_trusted_bids_filter() {
+        let (store, _dir) = store_with_providers(&[
+            ("akash1trusted1", "https://trusted1.example.com:8443"),
+            ("akash1trusted2", "https://trusted2.example.com:8443"),
+        ]);
+
+        let bids = vec![
+            make_bid("akash1trusted1", 100),
+            make_bid("akash1untrusted1", 50),
+            make_bid("akash1trusted2", 200),
+            make_bid("akash1untrusted2", 75),
+        ];
+        let trusted = store.trusted_bids(&bids);
+        assert_eq!(trusted.len(), 2);
+        let providers: Vec<&str> = trusted.iter().map(|b| b.provider.as_str()).collect();
+        assert!(providers.contains(&"akash1trusted1"));
+        assert!(providers.contains(&"akash1trusted2"));
+        assert!(!providers.contains(&"akash1untrusted1"));
+        assert!(!providers.contains(&"akash1untrusted2"));
+    }
+}

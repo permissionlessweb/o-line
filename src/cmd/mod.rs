@@ -1,10 +1,12 @@
+pub mod authz;
 pub mod console;
 pub mod deploy;
 pub mod dns;
 pub mod endpoints;
-pub mod firewall;
+// pub mod firewall;
 pub mod init;
 pub mod providers;
+pub mod proxy;
 pub mod registry;
 pub mod node;
 pub mod refresh;

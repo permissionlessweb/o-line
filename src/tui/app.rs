@@ -15,6 +15,7 @@ use tokio::task::JoinHandle;
 
 use super::log_stream::{build_log_targets, ConnStatus, LogBuffer, LogLine, LogTarget};
 use super::ui;
+use crate::log_persistence::{self, PersistLine};
 use crate::nodes::NodeStore;
 use crate::workflow::context::OLineContext;
 
@@ -50,6 +51,10 @@ struct TuiControllerInner {
     collector: Option<(mpsc::UnboundedReceiver<LogLine>, Vec<JoinHandle<()>>)>,
     /// All log buffers (shared between collector and TUI).
     log_buffers: Vec<LogBuffer>,
+    /// Persist channel sender — when set, log lines are written to disk.
+    persist_tx: Option<mpsc::UnboundedSender<PersistLine>>,
+    /// Path where logs are being persisted (for status bar display).
+    persist_path: Option<String>,
 }
 
 impl TuiController {
@@ -60,8 +65,36 @@ impl TuiController {
                 ssh_targets: Vec::new(),
                 collector: None,
                 log_buffers: Vec::new(),
+                persist_tx: None,
+                persist_path: None,
             })),
         }
+    }
+
+    /// Enable log persistence for this controller.
+    ///
+    /// Spawns a background task that writes all streamed log lines to
+    /// `~/.oline/logs/{session_id}/`. Must be called before adding targets.
+    pub fn enable_persistence(&self, session_id: &str) {
+        let mut inner = self.inner.try_lock().unwrap();
+        match log_persistence::spawn_persist_task(session_id) {
+            Ok(tx) => {
+                let path = log_persistence::log_dir()
+                    .join(session_id)
+                    .display()
+                    .to_string();
+                inner.persist_path = Some(path);
+                inner.persist_tx = Some(tx);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to enable log persistence: {}", e);
+            }
+        }
+    }
+
+    /// Returns the persistence path if active.
+    pub async fn persist_path(&self) -> Option<String> {
+        self.inner.lock().await.persist_path.clone()
     }
 
     /// Build a TuiController pre-populated from an OLineContext (for backward compat).
@@ -84,13 +117,15 @@ impl TuiController {
             for (i, target) in targets.iter().enumerate() {
                 let idx = base_idx + i;
                 let tx = tx.clone();
+                let persist_tx = inner.persist_tx.clone();
                 let ws_url = target.ws_url.clone();
                 let jwt = target.jwt.clone();
                 let label = target.label.clone();
+                let proxy_url = target.proxy_url.clone();
                 let handle = tokio::spawn(async move {
                     let mut retries = 0u32;
                     loop {
-                        match super::log_stream::connect_and_stream(&ws_url, &jwt, idx, &tx).await
+                        match super::log_stream::connect_and_stream_with_proxy(&ws_url, &jwt, idx, &tx, persist_tx.as_ref(), &label, proxy_url.as_deref()).await
                         {
                             Ok(()) => break,
                             Err(e) => {
@@ -147,14 +182,16 @@ impl TuiController {
         for (i, target) in targets.iter().enumerate() {
             let idx = base_idx + i;
             let tx = tx.clone();
+            let persist_tx = inner.persist_tx.clone();
             let ws_url = target.ws_url.clone();
             let jwt = target.jwt.clone();
             let label = target.label.clone();
+            let proxy_url = target.proxy_url.clone();
 
             let handle = tokio::spawn(async move {
                 let mut retries = 0u32;
                 loop {
-                    match super::log_stream::connect_and_stream(&ws_url, &jwt, idx, &tx).await {
+                    match super::log_stream::connect_and_stream_with_proxy(&ws_url, &jwt, idx, &tx, persist_tx.as_ref(), &label, proxy_url.as_deref()).await {
                         Ok(()) => break,
                         Err(e) => {
                             retries += 1;
@@ -293,13 +330,15 @@ pub struct TuiApp {
     pub deploy_scroll: usize,
     /// Whether the background deploy task has finished.
     pub deploy_done: bool,
+    /// Path where logs are being persisted (None = persistence off).
+    pub persist_path: Option<String>,
 }
 
 /// Max lines retained in the deploy progress pane.
 const MAX_DEPLOY_LINES: usize = 10_000;
 
 impl TuiApp {
-    fn new(buffers: Vec<LogBuffer>) -> Self {
+    fn new(buffers: Vec<LogBuffer>, persist_path: Option<String>) -> Self {
         let count = buffers.len();
         Self {
             screen: Screen::Summary,
@@ -310,11 +349,12 @@ impl TuiApp {
             deploy_lines: VecDeque::new(),
             deploy_scroll: 0,
             deploy_done: false,
+            persist_path,
         }
     }
 
     /// Create a TuiApp for the split-pane deploy mode.
-    pub fn new_deploy(buffers: Vec<LogBuffer>) -> Self {
+    pub fn new_deploy(buffers: Vec<LogBuffer>, persist_path: Option<String>) -> Self {
         let count = buffers.len();
         Self {
             screen: Screen::LogViewer,
@@ -325,6 +365,7 @@ impl TuiApp {
             deploy_lines: VecDeque::new(),
             deploy_scroll: 0,
             deploy_done: false,
+            persist_path,
         }
     }
 
@@ -418,6 +459,7 @@ pub async fn run_tui(controller: TuiController) -> Result<(), Box<dyn std::error
     let buffers = std::mem::take(&mut inner.log_buffers);
     let mut rx = inner.collector.take().map(|(rx, _)| rx);
     let ssh_targets = inner.ssh_targets.clone();
+    let persist_path = inner.persist_path.clone();
     drop(inner);
 
     tracing::info!(
@@ -425,7 +467,7 @@ pub async fn run_tui(controller: TuiController) -> Result<(), Box<dyn std::error
         buffers.len()
     );
 
-    let mut app = TuiApp::new(buffers);
+    let mut app = TuiApp::new(buffers, persist_path);
 
     // Install panic hook that restores terminal state.
     let original_hook = std::panic::take_hook();
@@ -484,9 +526,10 @@ pub async fn run_tui_briefly(controller: TuiController) -> Result<(), Box<dyn st
     let buffers = std::mem::take(&mut inner.log_buffers);
     let mut rx = inner.collector.take().map(|(rx, _)| rx);
     let ssh_targets = inner.ssh_targets.clone();
+    let persist_path = inner.persist_path.clone();
     drop(inner);
 
-    let mut app = TuiApp::new(buffers);
+    let mut app = TuiApp::new(buffers, persist_path);
 
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -544,9 +587,10 @@ pub async fn run_deploy_tui(
     let buffers = std::mem::take(&mut inner.log_buffers);
     let mut log_rx = inner.collector.take().map(|(rx, _)| rx);
     let mut ssh_targets = inner.ssh_targets.clone();
+    let persist_path = inner.persist_path.clone();
     drop(inner);
 
-    let mut app = TuiApp::new_deploy(buffers);
+    let mut app = TuiApp::new_deploy(buffers, persist_path);
 
     // Install panic hook that restores terminal state.
     let original_hook = std::panic::take_hook();

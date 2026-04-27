@@ -1,15 +1,36 @@
 use crate::{
-    cli::*, config::*, crypto::*, nodes::NodeStore, snapshots::fetch_snapshot_url_from_metadata,
+    authz::*,
+    cli::*,
+    config::*,
+    crypto::*,
+    runtime::*,
+    deployer::OLineDeployer,
+    nodes::NodeStore,
+    snapshots::fetch_snapshot_url_from_metadata,
+    tui::*,
     with_examples,
+    workflow::{
+        step::{DeployPhase, OLineStep},
+        OLineWorkflow,
+    },
 };
-use akash_deploy_rs::{AkashBackend, AkashClient, DeploymentStore, FileDeploymentStore, KeySigner};
+use akash_deploy_rs::{
+    broadcast_multi_signer, build_close_deployment_msg, substitute_partial, AkashBackend,
+    AkashClient, DeploymentRecord, DeploymentStore, FileDeploymentStore, KeySigner, SignerEntry,
+    Step,
+};
 use std::{
     collections::HashSet,
     env::var,
     error::Error,
     io::{self, BufRead},
     path::{Path, PathBuf},
+    sync::LazyLock,
 };
+
+/// Global tracing writer switch: stdout by default, channel when TUI is active.
+pub static TRACING_SWITCH: LazyLock<crate::tui::TracingSwitch> =
+    LazyLock::new(crate::tui::TracingSwitch::new);
 
 // ── Clap arg structs ─────────────────────────────────────────────────────────
 
@@ -84,12 +105,23 @@ pub enum ManageSubcommand {
         /// Number of historical lines to fetch (default: 100)
         #[arg(long, default_value = "100")]
         tail: u64,
+        /// Persist logs to ~/.oline/logs/{dseq}/
+        #[arg(long)]
+        persist: bool,
     },
     /// Reconnect to a session's TUI log viewer
     Tui {
         /// Session ID (default: latest session)
         #[arg(long)]
         session: Option<String>,
+    },
+    /// Replay persisted logs from a previous session
+    Replay {
+        /// Session/DSEQ ID to replay (omit to list available sessions)
+        session: Option<String>,
+        /// Filter to a specific service
+        #[arg(long)]
+        service: Option<String>,
     },
     /// Check liveness of deployments in a session
     Status {
@@ -117,6 +149,17 @@ pub enum ManageSubcommand {
         #[arg(long, default_value = "10000")]
         gas_reserve: u64,
         /// Actually broadcast drain txs. Without this flag, only prints balances.
+        #[arg(long)]
+        execute: bool,
+    },
+    /// Send an updated manifest (SDL) to a running deployment without redeploying
+    Update {
+        /// Deployment sequence number
+        dseq: u64,
+        /// Path to the new SDL file
+        #[arg(long, value_name = "PATH")]
+        sdl: String,
+        /// Actually send the manifest update (without this flag, dry-run only)
         #[arg(long)]
         execute: bool,
     },
@@ -186,6 +229,225 @@ impl Default for BootstrapArgs {
     }
 }
 
+// ── Subcommand: deploy ──
+pub async fn cmd_deploy(
+    raw: bool,
+    parallel: bool,
+    provider_selections: Option<std::collections::HashMap<String, String>>,
+    profile: &str,
+) -> Result<(), Box<dyn Error>> {
+    tracing::info!("=== Welcome to O-Line Deployer ===\n");
+    if parallel {
+        tracing::info!("  Strategy: parallel (all phases deployed before snapshot sync wait)");
+    } else {
+        tracing::info!("  Strategy: sequential (one phase at a time)");
+    }
+
+    // Mnemonic resolution order:
+    // 1. AuthZ delegation (deployer.key + authz.json exist) — no password needed
+    // 2. OLINE_MNEMONIC env var (non-interactive CI)
+    // 3. Encrypted mnemonic + OLINE_PASSWORD (non-interactive)
+    // 4. Interactive password prompt (default)
+    //
+    // Use --no-authz to skip step 1 and force password-based master key.
+    let no_authz = std::env::var("OLINE_NO_AUTHZ").is_ok();
+    let authz_state = if !no_authz { load_authz_state() } else { None };
+
+    let non_interactive = provider_selections.is_some()
+        || std::env::var("OLINE_NON_INTERACTIVE").is_ok()
+        || authz_state.is_some();
+
+    let (mnemonic, password, authz_granter) = if let Some(ref state) = authz_state {
+        // AuthZ mode: load deployer mnemonic (no password)
+        let m = load_deployer_mnemonic().map_err(|e| -> Box<dyn Error> { e.into() })?;
+        tracing::info!(
+            "Using AuthZ delegation (deployer → {})",
+            state.granter_address
+        );
+        (m, String::new(), Some(state.granter_address.clone()))
+    } else if non_interactive {
+        let p = std::env::var("OLINE_PASSWORD").unwrap_or_else(|_| "oline-test".to_string());
+        let m = if let Some(raw) = std::env::var("OLINE_MNEMONIC")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+        {
+            raw.trim().to_string()
+        } else {
+            // Fall back to encrypted mnemonic + OLINE_PASSWORD
+            use crate::crypto::decrypt_mnemonic;
+            let blob = read_encrypted_mnemonic().map_err(|_| {
+                "OLINE_NON_INTERACTIVE requires OLINE_MNEMONIC or OLINE_ENCRYPTED_MNEMONIC"
+            })?;
+            decrypt_mnemonic(&blob, &p)
+                .map_err(|e| format!("Failed to decrypt mnemonic: {}. Check OLINE_PASSWORD.", e))?
+        };
+        (m, p, None)
+    } else if raw {
+        let m = rpassword::prompt_password("Enter mnemonic: ")?;
+        if m.trim().is_empty() {
+            return Err("Mnemonic cannot be empty.".into());
+        }
+        let password = rpassword::prompt_password("Enter a password (for config encryption): ")?;
+        (m.trim().to_string(), password, None)
+    } else {
+        let (m, p) = unlock_mnemonic()?;
+        (m, p, None)
+    };
+
+    // Non-interactive: build config from env vars + FD defaults (no prompting).
+    let config = if non_interactive {
+        build_config_from_env(mnemonic, Some(profile))
+    } else {
+        let stdin = io::stdin();
+        let mut lines = stdin.lock().lines();
+        let cfg = collect_config(&password, mnemonic, &mut lines, Some(profile)).await?;
+        drop(lines);
+        cfg
+    };
+
+    let deployer = if let Some(granter) = authz_granter {
+        OLineDeployer::new_authz(config, granter)
+            .await
+            .map_err(|e| -> Box<dyn Error> { e.into() })?
+    } else {
+        OLineDeployer::new(config, password)
+            .await
+            .map_err(|e| -> Box<dyn Error> { e.into() })?
+    };
+
+    deployer
+        .preflight_check()
+        .await
+        .map_err(|e| -> Box<dyn Error> { e.into() })?;
+
+    if parallel {
+        // Parallel path: deploy all phases up-front, then distribute snapshot.
+        // HD-derived accounts are required for parallel deployment — concurrent
+        // MsgCreateDeployment broadcasts from a single account cause sequence
+        // conflicts.  Default to 4 children × 5 AKT if not explicitly set.
+        use crate::sessions::{FundingMethod, OLineSession, OLineSessionStore};
+        let funding = match FundingMethod::from_env() {
+            FundingMethod::Master => {
+                tracing::info!("  Parallel mode: defaulting to direct (single-signer batch).");
+                tracing::info!(
+                    "  Override with OLINE_FUNDING_METHOD=hd:<count>:<amount_uakt> or direct"
+                );
+                FundingMethod::Direct
+            }
+            other => other,
+        };
+        let session = OLineSession::new(
+            funding,
+            &deployer.client.address().to_string(),
+            &deployer.config.val("OLINE_CHAIN_ID"),
+        );
+        let session_store = OLineSessionStore::new();
+        let mut workflow = OLineWorkflow::new_with_session(
+            deployer,
+            OLineStep::FundChildAccounts,
+            session,
+            session_store,
+        );
+
+        // Set pre-selected providers for two-step flow (--select a=<addr> ...)
+        if let Some(ref sels) = provider_selections {
+            workflow.ctx.provider_selections = sels.clone();
+        }
+
+        if non_interactive {
+            // Non-interactive: run entire workflow headless, no TUI.
+            workflow
+                .run_headless()
+                .await
+                .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+        } else {
+            // ── Phase 1: Interactive (normal terminal) ──
+            // Run steps that need stdin: FundChildAccounts → DeployAllUnits → SelectAllProviders
+            let stdin2 = io::stdin();
+            let mut lines2 = stdin2.lock().lines();
+            loop {
+                workflow
+                    .advance(&mut lines2)
+                    .await
+                    .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+                if matches!(workflow.step, OLineStep::UpdateAllDns | OLineStep::Complete) {
+                    break;
+                }
+            }
+            drop(lines2); // release stdin lock before entering TUI
+
+            if matches!(workflow.step, OLineStep::Complete) {
+                // Workflow finished during interactive phase (user aborted).
+                return Ok(());
+            }
+
+            // ── Phase 2: Automated (split-pane TUI) ──
+            // Redirect tracing to channel, build TUI, drive workflow as pinned local future.
+            let (deploy_tx, deploy_rx) = tokio::sync::mpsc::unbounded_channel();
+            TRACING_SWITCH.activate(deploy_tx);
+
+            // Populate provider host URIs so TUI log targets can build WS URLs
+            // without requiring the trusted provider store.
+            for phase in [
+                DeployPhase::SpecialTeams,
+                DeployPhase::Tackles,
+                DeployPhase::Forwards,
+                DeployPhase::Relayer,
+            ] {
+                let provider_addr = workflow
+                    .ctx
+                    .state(phase)
+                    .and_then(|s| s.selected_provider.clone());
+                if let Some(addr) = provider_addr {
+                    if !workflow.ctx.provider_hosts.contains_key(&addr) {
+                        if let Ok(Some(info)) = workflow
+                            .ctx
+                            .deployer
+                            .client
+                            .query_provider_info(&addr)
+                            .await
+                        {
+                            workflow
+                                .ctx
+                                .provider_hosts
+                                .insert(addr, info.host_uri.clone());
+                        }
+                    }
+                }
+            }
+
+            let controller = TuiController::from_context(&workflow.ctx);
+            controller.enable_persistence(&workflow.ctx.session.id);
+            let controller_for_ssh = controller.clone();
+            let password_for_ssh = workflow.ctx.deployer.password.clone();
+
+            let workflow_fut = async move {
+                if let Err(e) = workflow.run_headless().await {
+                    tracing::error!("Deploy workflow failed: {}", e);
+                }
+                // Populate SSH targets from NodeRecords written during deploy.
+                controller_for_ssh
+                    .load_ssh_targets_from_nodes(&password_for_ssh, &[])
+                    .await;
+            };
+
+            run_deploy_tui(controller, deploy_rx, workflow_fut).await?;
+            TRACING_SWITCH.deactivate();
+        }
+        Ok(())
+    } else {
+        // Sequential path (legacy): one phase at a time via OLineRuntime.
+        let mut runtime = OLineRuntime::new();
+        runtime.add_workflow("main", deployer);
+        let stdin2 = io::stdin();
+        let mut lines2 = stdin2.lock().lines();
+        runtime
+            .run_single(&mut lines2)
+            .await
+            .map_err(|e| -> Box<dyn Error> { e.to_string().into() })
+    }
+}
+
 // ── Subcommand: manage (default — list active only) ──
 pub async fn cmd_manage_deployments() -> Result<(), Box<dyn Error>> {
     use akash_deploy_rs::gen::akash::deployment::v1beta4::{
@@ -195,7 +457,7 @@ pub async fn cmd_manage_deployments() -> Result<(), Box<dyn Error>> {
     tracing::info!("=== Active Deployments ===\n");
 
     let (mnemonic, password) = unlock_mnemonic()?;
-    let config = build_config_from_env(mnemonic.clone());
+    let config = build_config_from_env(mnemonic.clone(), None);
     let grpc = normalize_grpc_endpoint(&config.val("OLINE_GRPC_ENDPOINT"));
     let owner = crate::accounts::child_address_str(&mnemonic, 0, "akash")
         .map_err(|e| format!("Failed to derive address: {}", e))?;
@@ -241,7 +503,10 @@ pub async fn cmd_manage_deployments() -> Result<(), Box<dyn Error>> {
     tracing::info!("  Owner: {}\n", owner);
     tracing::info!(
         "  {:<10} {:<22} {:<20} {:<20}",
-        "DSEQ", "Label", "Provider", "Created"
+        "DSEQ",
+        "Label",
+        "Provider",
+        "Created"
     );
     tracing::info!("  {:-<75}", "");
 
@@ -252,7 +517,7 @@ pub async fn cmd_manage_deployments() -> Result<(), Box<dyn Error>> {
             .and_then(|r| r.selected_provider.as_deref())
             .map(|p| {
                 if p.len() > 18 {
-                    format!("{}..{}", &p[..8], &p[p.len()-4..])
+                    format!("{}..{}", &p[..8], &p[p.len() - 4..])
                 } else {
                     p.to_string()
                 }
@@ -264,11 +529,17 @@ pub async fn cmd_manage_deployments() -> Result<(), Box<dyn Error>> {
 
         tracing::info!(
             "  {:<10} {:<22} {:<20} {:<20}",
-            dseq, truncate(label, 22), provider, created,
+            dseq,
+            truncate(label, 22),
+            provider,
+            created,
         );
     }
 
-    tracing::info!("\n  {} active deployment(s).  Close with: oline manage close <DSEQ...> or --all", on_chain.len());
+    tracing::info!(
+        "\n  {} active deployment(s).  Close with: oline manage close <DSEQ...> or --all",
+        on_chain.len()
+    );
 
     Ok(())
 }
@@ -281,7 +552,7 @@ async fn cmd_manage_close(dseqs: &[u64], all: bool) -> Result<(), Box<dyn Error>
     };
 
     let (mnemonic, _password) = unlock_mnemonic()?;
-    let config = build_config_from_env(mnemonic.clone());
+    let config = build_config_from_env(mnemonic.clone(), None);
     let rpc = config.val("OLINE_RPC_ENDPOINT");
     let grpc = normalize_grpc_endpoint(&config.val("OLINE_GRPC_ENDPOINT"));
 
@@ -326,22 +597,90 @@ async fn cmd_manage_close(dseqs: &[u64], all: bool) -> Result<(), Box<dyn Error>
         return Ok(());
     }
 
-    tracing::info!("=== Closing {} deployment(s) ===\n", targets.len());
+    // Check for protected deployments (Headscale auth server + proxy-node)
+    let mut protected_dseqs = crate::cmd::vpn::load_protected_dseqs();
+    protected_dseqs.extend(load_proxy_protected_dseqs());
+    let (protected, closeable): (Vec<u64>, Vec<u64>) = targets
+        .into_iter()
+        .partition(|d| protected_dseqs.contains(d));
+
+    if !protected.is_empty() {
+        tracing::warn!(
+            "  Skipping {} protected deployment(s): {:?}",
+            protected.len(),
+            protected
+        );
+        tracing::warn!("  These are critical infrastructure (e.g. Headscale auth, proxy-node).");
+        tracing::warn!("  Use `oline manage close <DSEQ> --include-protected` to force.");
+    }
+
+    let targets = closeable;
+    if targets.is_empty() {
+        tracing::info!("All targeted deployments are protected. Nothing to close.");
+        return Ok(());
+    }
+
+    tracing::info!(
+        "=== Closing {} deployment(s) in single tx ===\n",
+        targets.len()
+    );
 
     let mut store = FileDeploymentStore::new_default().await?;
+    let owner = client.address();
 
-    for dseq in &targets {
-        tracing::info!("  Closing DSEQ {}...", dseq);
-        match client
-            .broadcast_close_deployment(&signer, &client.address(), *dseq)
-            .await
-        {
-            Ok(result) => {
-                tracing::info!("    Closed. TX: {}", result.hash);
+    // Build all MsgCloseDeployment into a single batch transaction
+    let close_msgs: Vec<_> = targets
+        .iter()
+        .map(|dseq| build_close_deployment_msg(&owner, *dseq))
+        .collect();
+
+    for d in &targets {
+        tracing::info!("  Queued DSEQ {} for close", d);
+    }
+
+    let querier = &client.signing_client().querier;
+    let acct = querier
+        .base_account(client.address_ref())
+        .await
+        .map_err(|e| format!("base_account: {}", e))?;
+    let chain_id = querier.chain_config.chain_id.as_str();
+
+    let signer_entries = vec![SignerEntry {
+        signer: &signer,
+        account_number: acct.account_number,
+        sequence: acct.sequence,
+        messages: close_msgs,
+    }];
+
+    match broadcast_multi_signer(
+        querier,
+        chain_id,
+        signer_entries,
+        1.5,
+        std::time::Duration::from_secs(60),
+    )
+    .await
+    {
+        Ok(result) => {
+            tracing::info!("  Batch close TX: {}", result.hash);
+            for dseq in &targets {
                 let _ = store.delete(*dseq).await;
             }
-            Err(e) => {
-                tracing::error!("    Failed: {}", e);
+        }
+        Err(e) => {
+            tracing::error!("  Batch close failed: {}", e);
+            tracing::error!("  Falling back to individual close...");
+            for dseq in &targets {
+                match client
+                    .broadcast_close_deployment(&signer, &owner, *dseq)
+                    .await
+                {
+                    Ok(r) => {
+                        tracing::info!("    Closed DSEQ {}. TX: {}", dseq, r.hash);
+                        let _ = store.delete(*dseq).await;
+                    }
+                    Err(e) => tracing::error!("    Failed DSEQ {}: {}", dseq, e),
+                }
             }
         }
     }
@@ -357,20 +696,118 @@ pub async fn cmd_manage(args: &ManageArgs) -> Result<(), Box<dyn Error>> {
         Some(ManageSubcommand::Sync) => cmd_manage_sync().await,
         Some(ManageSubcommand::PruneKeys) => cmd_manage_prune_keys().await,
         Some(ManageSubcommand::Restart { label }) => cmd_manage_restart(label).await,
-        Some(ManageSubcommand::Logs { dseq, service, tail }) => {
-            cmd_manage_logs(*dseq, service.as_deref(), *tail).await
-        }
+        Some(ManageSubcommand::Logs {
+            dseq,
+            service,
+            tail,
+            persist,
+        }) => cmd_manage_logs(*dseq, service.as_deref(), *tail, *persist).await,
         Some(ManageSubcommand::Tui { session }) => cmd_manage_tui(session.as_deref()).await,
-        Some(ManageSubcommand::Status { session }) => cmd_manage_status(session.as_deref()).await,
-        Some(ManageSubcommand::Close { dseqs, all }) => {
-            cmd_manage_close(dseqs, *all).await
+        Some(ManageSubcommand::Replay { session, service }) => {
+            cmd_manage_replay(session.as_deref(), service.as_deref())
         }
+        Some(ManageSubcommand::Status { session }) => cmd_manage_status(session.as_deref()).await,
+        Some(ManageSubcommand::Close { dseqs, all }) => cmd_manage_close(dseqs, *all).await,
         Some(ManageSubcommand::Drain {
             session,
             gas_reserve,
             execute,
         }) => cmd_manage_drain(session.as_deref(), *gas_reserve, *execute).await,
+        Some(ManageSubcommand::Update { dseq, sdl, execute }) => {
+            cmd_manage_update(*dseq, sdl, *execute).await
+        }
     }
+}
+
+// ── manage update ───────────────────────────────────────────────────────────
+
+async fn cmd_manage_update(dseq: u64, sdl_path: &str, execute: bool) -> Result<(), Box<dyn Error>> {
+    use crate::config::build_config_from_env;
+    use crate::deployer::OLineDeployer;
+
+    tracing::info!("=== Manage: Update Manifest (dseq={}) ===\n", dseq);
+
+    // 1. Load deployment record
+    let mut store = FileDeploymentStore::new_default().await?;
+    let record = store
+        .load(dseq)
+        .await?
+        .ok_or_else(|| format!("no deployment found for dseq {dseq}"))?;
+
+    let lease = record
+        .lease_id
+        .clone()
+        .ok_or("deployment has no lease — was it fully deployed?")?;
+
+    tracing::info!("  Label:    {}", record.label);
+    tracing::info!("  Owner:    {}", record.owner);
+    tracing::info!("  Provider: {}", lease.provider);
+
+    // 2. Read SDL and apply config variable substitution
+    let (mnemonic, password) = unlock_mnemonic()?;
+    let config = build_config_from_env(mnemonic.clone(), None);
+    let vars = config.to_sdl_vars();
+    let sdl_raw = std::fs::read_to_string(sdl_path)
+        .map_err(|e| format!("failed to read SDL '{}': {}", sdl_path, e))?;
+    let sdl_content = substitute_partial(&sdl_raw, &vars);
+    tracing::info!("  SDL:      {} ({} bytes)", sdl_path, sdl_content.len());
+
+    if !execute {
+        tracing::info!("\n  DRY RUN — pass --execute to actually send the manifest update.");
+        tracing::info!("  SDL content preview (first 200 chars):");
+        let preview_len = sdl_content.len().min(200);
+        tracing::info!("  {}", &sdl_content[..preview_len]);
+        return Ok(());
+    }
+
+    // 3. Build deployer (mnemonic + config already loaded above)
+    let deployer = OLineDeployer::new(config, password.clone())
+        .await
+        .map_err(|e| format!("failed to build deployer: {e}"))?;
+
+    // 4. Reconstruct DeploymentState at SendManifest step
+    let mut state = record
+        .to_state(&format!("update-{dseq}"), &password)
+        .map_err(|e| format!("failed to restore state: {e}"))?;
+
+    // Override SDL with the new content and jump to SendManifest
+    state.sdl_content = Some(sdl_content);
+    state.transition(Step::SendManifest);
+
+    // 5. Generate JWT
+    let jwt = deployer
+        .client
+        .generate_jwt(&lease.owner)
+        .await
+        .map_err(|e| format!("JWT generation failed: {e}"))?;
+    state.jwt_token = Some(jwt);
+
+    // 6. Run manifest send via deploy_phase_complete
+    tracing::info!("\n  Sending manifest update...");
+    let endpoints = deployer
+        .deploy_phase_complete(&mut state, "manifest-update")
+        .await
+        .map_err(|e| format!("manifest update failed: {e}"))?;
+
+    // 7. Save updated state back to store
+    let updated_record = DeploymentRecord::from_state(&state, &password)
+        .map_err(|e| format!("failed to serialize updated state: {e}"))?;
+    store
+        .save(&updated_record)
+        .await
+        .map_err(|e| format!("failed to save updated record: {e}"))?;
+
+    tracing::info!("\n  Manifest sent successfully!");
+    if endpoints.is_empty() {
+        tracing::info!("  (no endpoint changes)");
+    } else {
+        tracing::info!("  Endpoints:");
+        for ep in &endpoints {
+            tracing::info!("    {} ({}:{})", ep.uri, ep.service, ep.port);
+        }
+    }
+
+    Ok(())
 }
 
 // ── manage sync ─────────────────────────────────────────────────────────────
@@ -382,11 +819,11 @@ async fn cmd_manage_sync() -> Result<(), Box<dyn Error>> {
 
     // Load saved config for endpoints
     let config = if std::env::var("OLINE_NON_INTERACTIVE").is_ok() {
-        build_config_from_env(mnemonic.clone())
+        build_config_from_env(mnemonic.clone(), None)
     } else {
         let stdin = io::stdin();
         let mut lines = stdin.lock().lines();
-        let cfg = collect_config(&password, mnemonic.clone(), &mut lines).await?;
+        let cfg = collect_config(&password, mnemonic.clone(), &mut lines, None).await?;
         drop(lines);
         cfg
     };
@@ -617,10 +1054,10 @@ async fn cmd_manage_restart(label: &str) -> Result<(), Box<dyn Error>> {
     // Build current env vars for the phase (same as refresh)
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines();
-    let config = collect_config(&password, mnemonic, &mut lines).await?;
+    let config = collect_config(&password, mnemonic, &mut lines, None).await?;
     drop(lines);
 
-    let env_vars = crate::cmd::refresh::build_phase_vars(&config, &record.phase).await;
+    let env_vars = crate::cmd::refresh::build_phase_vars(&config, &record.phase, &password).await;
 
     // Restart command: OLINE_PHASE=restart triggers full re-bootstrap
     // Route to /proc/1/fd/1 so logs are visible via `oline manage logs`
@@ -834,6 +1271,7 @@ async fn cmd_manage_logs(
     dseq: u64,
     service: Option<&str>,
     tail: u64,
+    persist: bool,
 ) -> Result<(), Box<dyn Error>> {
     use akash_deploy_rs::logs::ws::WsLogStream;
     use akash_deploy_rs::{LogStreamConfig, ProviderAuth};
@@ -863,10 +1301,10 @@ async fn cmd_manage_logs(
 
     // 3. Build AkashClient + generate JWT
     let (mnemonic, _password) = unlock_mnemonic()?;
-    let rpc = var("OLINE_RPC_ENDPOINT")
-        .unwrap_or_else(|_| "https://rpc-akash.ecostake.com:443".into());
-    let grpc = var("OLINE_GRPC_ENDPOINT")
-        .unwrap_or_else(|_| "https://akash.lavenderfive.com:443".into());
+    let rpc =
+        var("OLINE_RPC_ENDPOINT").unwrap_or_else(|_| "https://rpc-akash.ecostake.com:443".into());
+    let grpc =
+        var("OLINE_GRPC_ENDPOINT").unwrap_or_else(|_| "https://akash.lavenderfive.com:443".into());
     let client = AkashClient::new_from_mnemonic(&mnemonic, &rpc, &grpc).await?;
     let jwt = client
         .generate_jwt(&lease.owner)
@@ -874,9 +1312,7 @@ async fn cmd_manage_logs(
         .map_err(|e| format!("JWT generation failed: {e}"))?;
 
     // 4. Build log stream config
-    let mut config = LogStreamConfig::new()
-        .with_follow(true)
-        .with_tail(tail);
+    let mut config = LogStreamConfig::new().with_follow(true).with_tail(tail);
     if let Some(svc) = service {
         config = config.with_service(svc);
     }
@@ -889,22 +1325,43 @@ async fn cmd_manage_logs(
         dseq
     );
 
-    // 5. Connect and stream via akash-deploy-rs
-    let mut stream = WsLogStream::connect(
-        &provider.host_uri,
-        &lease,
-        &auth,
-        &config,
-    ).await.map_err(|e| format!("log stream failed: {e}"))?;
+    // 5. Set up persistence if requested
+    let mut persister = if persist {
+        let session_id = dseq.to_string();
+        match crate::log_persistence::LogPersister::new(&session_id) {
+            Ok(p) => {
+                tracing::info!("  persisting to {}", p.log_path().display());
+                Some(p)
+            }
+            Err(e) => {
+                tracing::warn!("  failed to enable persistence: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
-    // 6. Stream logs until Ctrl+C
+    let svc_label = service.unwrap_or("all");
+
+    // 6. Connect and stream via akash-deploy-rs
+    let mut stream = WsLogStream::connect(&provider.host_uri, &lease, &auth, &config)
+        .await
+        .map_err(|e| format!("log stream failed: {e}"))?;
+
+    // 7. Stream logs until Ctrl+C
     let ctrl_c = tokio::signal::ctrl_c();
     tokio::pin!(ctrl_c);
 
     loop {
         tokio::select! {
             line = stream.next() => match line {
-                Some(Ok(log_line)) => print!("{log_line}"),
+                Some(Ok(log_line)) => {
+                    print!("{log_line}");
+                    if let Some(ref mut p) = persister {
+                        let _ = p.write_line(svc_label, log_line.message.trim());
+                    }
+                }
                 Some(Err(e)) => { eprintln!("log stream error: {e}"); break; }
                 None => break,
             },
@@ -921,7 +1378,7 @@ async fn cmd_manage_logs(
 
 async fn cmd_manage_tui(session_id: Option<&str>) -> Result<(), Box<dyn Error>> {
     use crate::sessions::OLineSessionStore;
-    use crate::tui::{build_log_targets_from_session, TuiController, run_tui};
+    use crate::tui::{build_log_targets_from_session, run_tui, TuiController};
 
     tracing::info!("=== Manage: TUI Log Viewer ===\n");
 
@@ -943,10 +1400,10 @@ async fn cmd_manage_tui(session_id: Option<&str>) -> Result<(), Box<dyn Error>> 
     }
 
     let (mnemonic, password) = unlock_mnemonic()?;
-    let rpc = var("OLINE_RPC_ENDPOINT")
-        .unwrap_or_else(|_| "https://rpc-akash.ecostake.com:443".into());
-    let grpc = var("OLINE_GRPC_ENDPOINT")
-        .unwrap_or_else(|_| "https://akash.lavenderfive.com:443".into());
+    let rpc =
+        var("OLINE_RPC_ENDPOINT").unwrap_or_else(|_| "https://rpc-akash.ecostake.com:443".into());
+    let grpc =
+        var("OLINE_GRPC_ENDPOINT").unwrap_or_else(|_| "https://akash.lavenderfive.com:443".into());
 
     let client = AkashClient::new_from_mnemonic(&mnemonic, &rpc, &grpc).await?;
     let targets = build_log_targets_from_session(&session, &client).await;
@@ -959,15 +1416,47 @@ async fn cmd_manage_tui(session_id: Option<&str>) -> Result<(), Box<dyn Error>> 
     tracing::info!("  Connecting to {} log stream(s)...\n", targets.len());
 
     let controller = TuiController::new();
+    // Enable log persistence using session ID.
+    controller.enable_persistence(&session.id);
     controller.add_targets(targets).await;
 
     // Load SSH targets from encrypted node store for this session's deployments.
-    let dseqs: Vec<u64> = session.deployments.iter().map(|d| d.dseq).filter(|d| *d > 0).collect();
-    controller.load_ssh_targets_from_nodes(&password, &dseqs).await;
+    let dseqs: Vec<u64> = session
+        .deployments
+        .iter()
+        .map(|d| d.dseq)
+        .filter(|d| *d > 0)
+        .collect();
+    controller
+        .load_ssh_targets_from_nodes(&password, &dseqs)
+        .await;
 
     run_tui(controller).await?;
 
     Ok(())
+}
+
+/// Replay persisted logs from a previous session.
+fn cmd_manage_replay(
+    session_id: Option<&str>,
+    service: Option<&str>,
+) -> Result<(), Box<dyn Error>> {
+    match session_id {
+        Some(id) => crate::log_persistence::replay_session(id, service),
+        None => {
+            let sessions = crate::log_persistence::list_sessions();
+            if sessions.is_empty() {
+                tracing::info!("No persisted log sessions found.");
+            } else {
+                tracing::info!("Available log sessions:");
+                for s in &sessions {
+                    tracing::info!("  {}", s);
+                }
+                tracing::info!("\nReplay with: oline manage replay <SESSION_ID>");
+            }
+            Ok(())
+        }
+    }
 }
 
 // ── manage status ───────────────────────────────────────────────────────────
@@ -998,8 +1487,7 @@ async fn cmd_manage_status(session_id: Option<&str>) -> Result<(), Box<dyn Error
     }
 
     let grpc = normalize_grpc_endpoint(
-        &var("OLINE_GRPC_ENDPOINT")
-            .unwrap_or_else(|_| "https://akash.lavenderfive.com:443".into()),
+        &var("OLINE_GRPC_ENDPOINT").unwrap_or_else(|_| "https://akash.lavenderfive.com:443".into()),
     );
 
     let mut deploy_client = DeployQueryClient::connect(grpc)
@@ -1030,7 +1518,13 @@ async fn cmd_manage_status(session_id: Option<&str>) -> Result<(), Box<dyn Error
         })
         .collect();
 
-    tracing::info!("\n  {:<8} {:<16} {:<20} {:<10}", "DSEQ", "Phase", "Provider", "Status");
+    tracing::info!(
+        "\n  {:<8} {:<16} {:<20} {:<10}",
+        "DSEQ",
+        "Phase",
+        "Provider",
+        "Status"
+    );
     tracing::info!("  {:-<60}", "");
 
     for dep in &session.deployments {
@@ -1287,4 +1781,77 @@ async fn cmd_manage_drain(
     }
 
     Ok(())
+}
+
+// ── Proxy deployment protection ───────────────────────────────────────────
+
+/// Simple JSON record for proxy-node deployment tracking.
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+pub struct ProxyDeployment {
+    pub dseq: u64,
+    pub protected: bool,
+    pub url: String,
+}
+
+fn proxy_store_path() -> PathBuf {
+    crate::config::oline_config_dir().join("proxy.json")
+}
+
+/// Save the proxy-node deployment record (called after `oline proxy deploy`).
+pub fn save_proxy_deployment(deployment: &ProxyDeployment) -> Result<(), Box<dyn Error>> {
+    let path = proxy_store_path();
+    std::fs::write(&path, serde_json::to_string_pretty(deployment)?)?;
+    Ok(())
+}
+
+/// Load protected proxy-node DSEQs for `cmd_manage_close` filtering.
+pub fn load_proxy_protected_dseqs() -> Vec<u64> {
+    let path = proxy_store_path();
+    if !path.exists() {
+        return vec![];
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(json) => match serde_json::from_str::<ProxyDeployment>(&json) {
+            Ok(dep) if dep.protected && dep.dseq > 0 => vec![dep.dseq],
+            _ => vec![],
+        },
+        Err(_) => vec![],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_grpc_endpoint;
+
+    #[test]
+    fn test_normalize_grpc_https() {
+        assert_eq!(
+            normalize_grpc_endpoint("https://foo:443"),
+            "https://foo:443"
+        );
+    }
+
+    #[test]
+    fn test_normalize_grpc_http() {
+        assert_eq!(
+            normalize_grpc_endpoint("http://foo:9090"),
+            "http://foo:9090"
+        );
+    }
+
+    #[test]
+    fn test_normalize_grpc_bare() {
+        assert_eq!(
+            normalize_grpc_endpoint("grpc.example.com:443"),
+            "https://grpc.example.com:443"
+        );
+    }
+
+    #[test]
+    fn test_normalize_grpc_bare_with_port() {
+        assert_eq!(
+            normalize_grpc_endpoint("1.2.3.4:9090"),
+            "https://1.2.3.4:9090"
+        );
+    }
 }

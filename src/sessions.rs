@@ -112,6 +112,16 @@ fn default_oseq() -> u32 {
     1
 }
 
+/// AuthZ delegation metadata recorded in a session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionAuthzInfo {
+    pub granter_address: String,
+    pub grantee_address: String,
+    pub granted_at: u64,
+    pub expiration: Option<u64>,
+    pub fee_spend_limit: Option<u64>,
+}
+
 /// Session state for a deployment run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OLineSession {
@@ -124,6 +134,9 @@ pub struct OLineSession {
     pub ssh_key_path: String,
     pub created_at: u64,
     pub updated_at: u64,
+    /// AuthZ delegation info, if this session uses delegated deployment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authz: Option<SessionAuthzInfo>,
 }
 
 impl OLineSession {
@@ -143,6 +156,7 @@ impl OLineSession {
             ssh_key_path: String::new(),
             created_at: now,
             updated_at: now,
+            authz: None,
         }
     }
 

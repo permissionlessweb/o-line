@@ -11,10 +11,67 @@ use std::{
 };
 
 use crate::{
-    cli::{print_config_table, prompt_continue, read_input, read_override_selection, read_secret_input},
+    cli::{
+        print_config_table, prompt_continue, read_input, read_override_selection, read_secret_input,
+    },
     crypto::{decrypt_mnemonic, encrypt_mnemonic},
     toml_config::{TomlConfig, CONFIG_FIELDS},
 };
+
+// ── Home-global config dir ──
+//
+// All oline config lives under `~/.oline/` by default (overridable via
+// `OLINE_CONFIG_DIR`). This keeps secrets out of the repo working tree.
+
+fn ensure_dir(p: &Path) {
+    let _ = fs::create_dir_all(p);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(p, fs::Permissions::from_mode(0o700));
+    }
+}
+
+/// Root config directory for oline (`~/.oline/` by default).
+///
+/// Override with `OLINE_CONFIG_DIR=/path`. Directory is created with mode 0700
+/// on first touch.
+pub fn oline_config_dir() -> PathBuf {
+    if let Ok(custom) = std::env::var("OLINE_CONFIG_DIR") {
+        let p = PathBuf::from(custom);
+        ensure_dir(&p);
+        return p;
+    }
+    let p = dirs::home_dir()
+        .expect("Cannot determine home directory")
+        .join(".oline");
+    ensure_dir(&p);
+    p
+}
+
+pub fn oline_env_path() -> PathBuf {
+    oline_config_dir().join("env")
+}
+
+pub fn oline_mnemonic_path() -> PathBuf {
+    oline_config_dir().join("mnemonic.enc")
+}
+
+pub fn oline_config_toml_path() -> PathBuf {
+    oline_config_dir().join("config.toml")
+}
+
+pub fn oline_deploy_config_path() -> PathBuf {
+    oline_config_dir().join("deploy-config.json")
+}
+
+pub fn oline_deployer_key_path() -> PathBuf {
+    oline_config_dir().join("deployer.key")
+}
+
+pub fn oline_authz_config_path() -> PathBuf {
+    oline_config_dir().join("authz.json")
+}
 
 // ── OLineConfig ──
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -80,7 +137,6 @@ impl OLineConfig {
     }
 }
 
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(untagged)]
 pub enum ConfigValue {
@@ -129,8 +185,9 @@ impl From<Vec<String>> for ConfigValue {
     }
 }
 
-pub fn load_dotenv(env_key: &str) {
-    let env_file = std::env::var("OLINE_ENV_FILE").unwrap_or_else(|_| ".env".into());
+pub fn load_dotenv() {
+    let env_file = std::env::var("OLINE_ENV_FILE")
+        .unwrap_or_else(|_| oline_env_path().to_string_lossy().into_owned());
     let env_path = Path::new(&env_file);
     if let Ok(contents) = fs::read_to_string(env_path) {
         for line in contents.lines() {
@@ -141,11 +198,6 @@ pub fn load_dotenv(env_key: &str) {
             if let Some((key, value)) = line.split_once('=') {
                 let key = key.trim();
                 let value = value.trim();
-                // Don't load the encrypted mnemonic as a regular env var
-                if key == env_key {
-                    continue;
-                }
-                // Don't override existing env vars
                 if std::env::var(key).is_err() {
                     std::env::set_var(key, value);
                 }
@@ -154,38 +206,61 @@ pub fn load_dotenv(env_key: &str) {
     }
 }
 
-pub fn read_encrypted_mnemonic_from_env() -> Result<String, Box<dyn Error>> {
-    let env_file = std::env::var("OLINE_ENV_FILE").unwrap_or_else(|_| ".env".into());
-    let env_path = Path::new(&env_file);
-    if !env_path.exists() {
-        return Err(format!("No {} file found. Run `oline encrypt` first to store your mnemonic.", env_file).into());
+pub fn read_encrypted_mnemonic() -> Result<String, Box<dyn Error>> {
+    let path = oline_mnemonic_path();
+    if !path.exists() {
+        return Err(format!(
+            "No encrypted mnemonic found at {}. Run `oline encrypt` first.",
+            path.display()
+        )
+        .into());
     }
-    let env_key =
-        std::env::var("OLINE_ENV_KEY_NAME").unwrap_or_else(|_| "OLINE_ENCRYPTED_MNEMONIC".into());
-    let contents = fs::read_to_string(env_path)?;
-    for line in contents.lines() {
-        let line = line.trim();
-        if line.starts_with('#') || line.is_empty() {
-            continue;
-        }
-        if let Some(value) = line.strip_prefix(&format!("{}=", env_key)) {
-            let value = value.trim();
-            if !value.is_empty() {
-                return Ok(value.to_string());
+    let blob = fs::read_to_string(&path)?.trim().to_string();
+    if blob.is_empty() {
+        return Err("Encrypted mnemonic file is empty. Run `oline encrypt` first.".into());
+    }
+    Ok(blob)
+}
+
+// ── Raw template substitution ──
+
+/// Raw text-based `${VAR}` substitution.
+pub fn substitute_template_raw(
+    template: &str,
+    variables: &HashMap<String, String>,
+) -> Result<String, Box<dyn Error>> {
+    let mut result = String::new();
+    let chars: Vec<char> = template.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '$' && i + 1 < chars.len() && chars[i + 1] == '{' {
+            i += 2; // skip ${
+            let start = i;
+            while i < chars.len() && chars[i] != '}' {
+                i += 1;
             }
+            if i >= chars.len() {
+                return Err("Unclosed ${...} placeholder in template".into());
+            }
+            let var_name: String = chars[start..i].iter().collect();
+            match variables.get(&var_name) {
+                Some(val) => result.push_str(val),
+                None => return Err(format!("Variable '{}' has no value", var_name).into()),
+            }
+            i += 1; // skip }
+        } else {
+            result.push(chars[i]);
+            i += 1;
         }
     }
 
-    Err(format!(
-        "No {} found in .env file. Run `oline encrypt` first.",
-        env_key
-    )
-    .into())
+    Ok(result)
 }
 
 /// Update or append `KEY=VALUE` in `.env`, preserving all other lines.
 pub fn upsert_env_key(key: &str, value: &str) -> Result<(), Box<dyn Error>> {
-    let env_path = Path::new(".env");
+    let env_path = oline_env_path();
+    let env_path = env_path.as_path();
     let new_entry = format!("{}={}", key, value);
     let prefix = format!("{}=", key);
 
@@ -212,32 +287,17 @@ pub fn upsert_env_key(key: &str, value: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub fn write_encrypted_mnemonic_to_env(blob: &str) -> Result<(), Box<dyn Error>> {
-    let env_path = Path::new(".env");
-    let env_key =
-        std::env::var("OLINE_ENV_KEY_NAME").unwrap_or_else(|_| "OLINE_ENCRYPTED_MNEMONIC".into());
-    let entry = format!("{}={}", env_key, blob);
-
-    if env_path.exists() {
-        let contents = fs::read_to_string(env_path)?;
-        let mut found = false;
-        let mut new_lines: Vec<String> = Vec::new();
-        for line in contents.lines() {
-            if line.trim().starts_with(&format!("{}=", env_key)) {
-                new_lines.push(entry.clone());
-                found = true;
-            } else {
-                new_lines.push(line.to_string());
-            }
-        }
-        if !found {
-            new_lines.push(entry);
-        }
-        fs::write(env_path, new_lines.join("\n") + "\n")?;
-    } else {
-        fs::write(env_path, format!("{}\n", entry))?;
+pub fn write_encrypted_mnemonic(blob: &str) -> Result<(), Box<dyn Error>> {
+    let path = oline_mnemonic_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
     }
-
+    fs::write(&path, format!("{}\n", blob))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    }
     Ok(())
 }
 
@@ -253,15 +313,29 @@ pub fn config_path() -> PathBuf {
 ///
 /// Loads `config.toml` if present, otherwise uses struct defaults.
 /// All fields are overridable via deterministic env vars: `OLINE_<PATH>`.
-pub fn build_config_from_env(mnemonic: String) -> OLineConfig {
-    let toml_cfg = if Path::new("config.toml").exists() {
-        match TomlConfig::load("config.toml") {
+pub fn build_config_from_env(mnemonic: String, profile: Option<&str>) -> OLineConfig {
+    let profile_name = profile.unwrap_or("mainnet");
+    // Prefer ~/.oline/config.toml; fall back to ./config.toml for legacy checkouts.
+    let home_cfg = oline_config_toml_path();
+    let cfg_path_opt: Option<PathBuf> = if home_cfg.exists() {
+        Some(home_cfg)
+    } else if Path::new("config.toml").exists() {
+        Some(PathBuf::from("config.toml"))
+    } else {
+        None
+    };
+    let toml_cfg = if let Some(cfg_path) = cfg_path_opt {
+        match TomlConfig::load_with_profile(cfg_path.to_string_lossy().as_ref(), Some(profile_name))
+        {
             Ok(t) => {
-                tracing::info!("  Loaded config.toml");
+                tracing::info!("  Loaded config.toml [profile: {}]", profile_name);
                 t
             }
             Err(e) => {
-                tracing::warn!("  Failed to parse config.toml: {} — using defaults + env", e);
+                tracing::warn!(
+                    "  Failed to parse config.toml: {} — using defaults + env",
+                    e
+                );
                 TomlConfig::from_defaults()
             }
         }
@@ -295,16 +369,27 @@ pub async fn collect_config(
     password: &str,
     mnemonic: String,
     lines: &mut io::Lines<impl io::BufRead>,
+    profile: Option<&str>,
 ) -> Result<OLineConfig, Box<dyn Error>> {
-    // Load TOML config as baseline
-    let mut toml_cfg = if Path::new("config.toml").exists() {
-        match TomlConfig::load("config.toml") {
+    // Load TOML config as baseline.
+    // Prefer ~/.oline/config.toml; fall back to ./config.toml for legacy checkouts.
+    let profile_name = profile.unwrap_or("mainnet");
+    let home_cfg = oline_config_toml_path();
+    let cfg_path: Option<String> = if home_cfg.exists() {
+        Some(home_cfg.to_string_lossy().into_owned())
+    } else if Path::new("config.toml").exists() {
+        Some("config.toml".into())
+    } else {
+        None
+    };
+    let mut toml_cfg = if let Some(ref path) = cfg_path {
+        match TomlConfig::load_with_profile(path, Some(profile_name)) {
             Ok(t) => {
-                tracing::info!("  Loaded config.toml");
+                tracing::info!("  Loaded {} [profile: {}]", path, profile_name);
                 t
             }
             Err(e) => {
-                tracing::warn!("  Failed to parse config.toml: {}", e);
+                tracing::warn!("  Failed to parse {}: {}", path, e);
                 TomlConfig::from_defaults()
             }
         }
@@ -312,42 +397,25 @@ pub async fn collect_config(
         TomlConfig::from_defaults()
     };
 
-    // Merge saved config values if available
-    if has_saved_config() {
-        tracing::info!("  Found saved config.");
-        if let Some(saved) = load_config(password) {
-            // Apply saved values as fallbacks for empty TOML fields
-            for field in CONFIG_FIELDS {
-                let env_var = crate::toml_config::env_key(field.path);
-                if toml_cfg.get_value(field.path).is_empty() {
-                    if let Some(saved_val) = saved.get_str(&env_var) {
-                        if !saved_val.is_empty() {
-                            toml_cfg.set_value(field.path, saved_val.to_string());
-                        }
-                    }
-                }
+    // Config comes from config.toml + profile + env overrides.
+    // Override prompt is opt-in via --override-config flag to avoid slowing down deploys.
+    #[cfg(feature = "config-override-prompt")]
+    {
+        let resolved: Vec<String> = CONFIG_FIELDS
+            .iter()
+            .map(|f| toml_cfg.get_value(f.path))
+            .collect();
+        print_config_table(&resolved);
+        let overrides = read_override_selection(lines)?;
+        for (i, field) in CONFIG_FIELDS.iter().enumerate() {
+            if overrides.contains(&i) {
+                let value = if field.is_secret {
+                    read_secret_input(field.description, Some(&resolved[i]))?
+                } else {
+                    read_input(lines, field.description, Some(&resolved[i]))?
+                };
+                toml_cfg.set_value(field.path, value);
             }
-        }
-    }
-
-    // Resolve current values for display
-    let resolved: Vec<String> = CONFIG_FIELDS
-        .iter()
-        .map(|f| toml_cfg.get_value(f.path))
-        .collect();
-
-    // Show table and let user pick overrides
-    print_config_table(&resolved);
-    let overrides = read_override_selection(lines)?;
-
-    for (i, field) in CONFIG_FIELDS.iter().enumerate() {
-        if overrides.contains(&i) {
-            let value = if field.is_secret {
-                read_secret_input(field.description, Some(&resolved[i]))?
-            } else {
-                read_input(lines, field.description, Some(&resolved[i]))?
-            };
-            toml_cfg.set_value(field.path, value);
         }
     }
 
@@ -418,41 +486,6 @@ impl DeployConfig {
         fs::write(path, serde_json::to_string_pretty(self)?)?;
         Ok(())
     }
-}
-
-// ── Raw template substitution ──
-
-/// Raw text-based `${VAR}` substitution.
-pub fn substitute_template_raw(
-    template: &str,
-    variables: &HashMap<String, String>,
-) -> Result<String, Box<dyn Error>> {
-    let mut result = String::new();
-    let chars: Vec<char> = template.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '$' && i + 1 < chars.len() && chars[i + 1] == '{' {
-            i += 2; // skip ${
-            let start = i;
-            while i < chars.len() && chars[i] != '}' {
-                i += 1;
-            }
-            if i >= chars.len() {
-                return Err("Unclosed ${...} placeholder in template".into());
-            }
-            let var_name: String = chars[start..i].iter().collect();
-            match variables.get(&var_name) {
-                Some(val) => result.push_str(val),
-                None => return Err(format!("Variable '{}' has no value", var_name).into()),
-            }
-            i += 1; // skip }
-        } else {
-            result.push(chars[i]);
-            i += 1;
-        }
-    }
-
-    Ok(result)
 }
 
 /// Inject `credentials:` blocks into rendered SDL for services whose `image:` matches

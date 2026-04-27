@@ -110,7 +110,7 @@ async fn cmd_sites_deploy() -> Result<(), Box<dyn Error>> {
     };
 
     // Load config
-    let config = collect_config(&password, mnemonic, &mut lines).await?;
+    let config = collect_config(&password, mnemonic, &mut lines, None).await?;
     drop(lines);
 
     // Build SDL vars

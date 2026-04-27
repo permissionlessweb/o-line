@@ -5,6 +5,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 
+use crate::log_persistence::PersistLine;
 use crate::providers::TrustedProviderStore;
 use crate::sessions::OLineSession;
 use crate::workflow::{
@@ -30,6 +31,10 @@ pub struct LogTarget {
     pub ws_url: String,
     /// JWT Bearer token for provider authentication.
     pub jwt: String,
+    /// Optional proxy URL for routing WS connections through the provider-proxy-node.
+    /// When set, connections go to `wss://{proxy_url}/proxy-ws?url={encoded_ws_url}`
+    /// instead of directly to the provider.
+    pub proxy_url: Option<String>,
 }
 
 /// A single log line delivered from a background collector task.
@@ -153,6 +158,7 @@ pub fn build_log_targets(ctx: &OLineContext) -> Vec<LogTarget> {
                 label: format!("{}:{}", letter, phase.key()),
                 ws_url,
                 jwt: jwt.clone(),
+                proxy_url: None,
             });
         } else {
             for svc in &service_names {
@@ -164,6 +170,7 @@ pub fn build_log_targets(ctx: &OLineContext) -> Vec<LogTarget> {
                     label: format!("{}:{}", letter, svc),
                     ws_url,
                     jwt: jwt.clone(),
+                    proxy_url: None,
                 });
             }
         }
@@ -206,6 +213,7 @@ pub fn make_log_target(
         label: label.to_string(),
         ws_url,
         jwt: jwt.to_string(),
+        proxy_url: None,
     }
 }
 
@@ -299,6 +307,7 @@ pub async fn build_log_targets_from_session<B: AkashBackend>(
                 label: format!("{}:{}", letter, dep.phase),
                 ws_url,
                 jwt: jwt.clone(),
+                proxy_url: None,
             });
         } else {
             for svc in &dep.services {
@@ -310,6 +319,7 @@ pub async fn build_log_targets_from_session<B: AkashBackend>(
                     label: format!("{}:{}", letter, svc),
                     ws_url,
                     jwt: jwt.clone(),
+                    proxy_url: None,
                 });
             }
         }
@@ -323,22 +333,26 @@ pub async fn build_log_targets_from_session<B: AkashBackend>(
 /// Spawn one background task per log target that streams WS messages into an mpsc channel.
 ///
 /// Returns the receiver and join handles (for cleanup).
+/// When `persist_tx` is provided, each log line is also sent to the persist channel.
 pub fn spawn_log_collectors(
     targets: &[LogTarget],
+    persist_tx: Option<mpsc::UnboundedSender<PersistLine>>,
 ) -> (mpsc::UnboundedReceiver<LogLine>, Vec<JoinHandle<()>>) {
     let (tx, rx) = mpsc::unbounded_channel();
     let mut handles = Vec::with_capacity(targets.len());
 
     for (idx, target) in targets.iter().enumerate() {
         let tx = tx.clone();
+        let persist_tx = persist_tx.clone();
         let ws_url = target.ws_url.clone();
         let jwt = target.jwt.clone();
         let label = target.label.clone();
+        let proxy_url = target.proxy_url.clone();
 
         let handle = tokio::spawn(async move {
             let mut retries = 0u32;
             loop {
-                match connect_and_stream(&ws_url, &jwt, idx, &tx).await {
+                match connect_and_stream_with_proxy(&ws_url, &jwt, idx, &tx, persist_tx.as_ref(), &label, proxy_url.as_deref()).await {
                     Ok(()) => break, // clean close
                     Err(e) => {
                         retries += 1;
@@ -367,12 +381,75 @@ pub fn spawn_log_collectors(
 
 /// Connect to a single WS endpoint, forward text messages to `tx`.
 /// Returns `Ok(())` on clean close, `Err` on error.
+///
+/// When `persist_tx` is provided, each cleaned line is also sent to the
+/// log persistence channel for writing to disk.
+///
+/// When `proxy_url` is provided (via the `LogTarget`), the connection is
+/// routed through the provider-proxy-node at
+/// `wss://{proxy_url}/proxy-ws?url={encoded_provider_ws_url}`.
+/// If the proxy connection fails, falls back to direct provider connection.
 pub async fn connect_and_stream(
     ws_url: &str,
     jwt: &str,
     service_index: usize,
     tx: &mpsc::UnboundedSender<LogLine>,
+    persist_tx: Option<&mpsc::UnboundedSender<PersistLine>>,
+    label: &str,
 ) -> Result<(), String> {
+    connect_and_stream_with_proxy(ws_url, jwt, service_index, tx, persist_tx, label, None).await
+}
+
+/// Connect to a WS endpoint with optional proxy routing.
+pub async fn connect_and_stream_with_proxy(
+    ws_url: &str,
+    jwt: &str,
+    service_index: usize,
+    tx: &mpsc::UnboundedSender<LogLine>,
+    persist_tx: Option<&mpsc::UnboundedSender<PersistLine>>,
+    label: &str,
+    proxy_url: Option<&str>,
+) -> Result<(), String> {
+    // Try proxy connection first if configured
+    if let Some(proxy) = proxy_url {
+        let encoded_ws = crate::cli::urlencoded(ws_url);
+        let proxy_host = proxy.trim_end_matches('/');
+        let proxy_ws = format!(
+            "{}/proxy-ws?url={}",
+            proxy_host.replace("https://", "wss://").replace("http://", "ws://"),
+            encoded_ws,
+        );
+
+        let mut req = proxy_ws
+            .as_str()
+            .into_client_request()
+            .map_err(|e| format!("bad proxy WS URL: {e}"))?;
+        req.headers_mut().insert(
+            "Authorization",
+            format!("Bearer {jwt}")
+                .parse()
+                .map_err(|e| format!("bad auth header: {e}"))?,
+        );
+
+        match tokio_tungstenite::connect_async(req).await {
+            Ok((ws, _)) => {
+                let _ = tx.send(LogLine {
+                    service_index,
+                    text: format!("[{}] connected via proxy", label),
+                });
+                return stream_ws_messages(ws, service_index, tx, persist_tx, label).await;
+            }
+            Err(e) => {
+                let _ = tx.send(LogLine {
+                    service_index,
+                    text: format!("[{}] proxy failed ({}), falling back to direct", label, e),
+                });
+                // Fall through to direct connection
+            }
+        }
+    }
+
+    // Direct connection (default path)
     let mut req = ws_url
         .into_client_request()
         .map_err(|e| format!("bad WS URL: {e}"))?;
@@ -387,6 +464,17 @@ pub async fn connect_and_stream(
         .await
         .map_err(|e| format!("WS connect: {e}"))?;
 
+    stream_ws_messages(ws, service_index, tx, persist_tx, label).await
+}
+
+/// Stream WebSocket messages from an already-connected WS into the log channel.
+async fn stream_ws_messages(
+    ws: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    service_index: usize,
+    tx: &mpsc::UnboundedSender<LogLine>,
+    persist_tx: Option<&mpsc::UnboundedSender<PersistLine>>,
+    label: &str,
+) -> Result<(), String> {
     let (_, mut read) = ws.split();
 
     while let Some(msg) = read.next().await {
@@ -395,6 +483,12 @@ pub async fn connect_and_stream(
                 // Akash log lines may contain embedded newlines; split them.
                 for l in line.lines() {
                     let cleaned = clean_log_line(l);
+                    if let Some(ptx) = persist_tx {
+                        let _ = ptx.send(PersistLine {
+                            service: label.to_string(),
+                            text: cleaned.clone(),
+                        });
+                    }
                     let _ = tx.send(LogLine {
                         service_index,
                         text: cleaned,

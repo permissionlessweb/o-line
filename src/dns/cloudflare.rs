@@ -696,3 +696,112 @@ pub async fn cloudflare_delete_by_name(
     }
     Ok(count)
 }
+
+
+// ── Web3 IPFS Gateway ─────────────────────────────────────────────────────────
+
+/// Create a Cloudflare Web3 IPFS gateway hostname.
+/// This tells Cloudflare to serve IPFS content for this domain via DNSLink.
+/// Free on all Cloudflare plans.
+///
+/// API: POST /zones/{zone_id}/web3/hostnames
+pub async fn cloudflare_create_web3_hostname(
+    cf_token: &str,
+    zone_id: &str,
+    hostname: &str,
+) -> Result<String, Box<dyn Error>> {
+    let url = format!(
+        "https://api.cloudflare.com/client/v4/zones/{}/web3/hostnames",
+        zone_id
+    );
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cf_token))
+        .json(&serde_json::json!({
+            "name": hostname,
+            "target": "ipfs",
+        }))
+        .send()
+        .await?;
+
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await?;
+
+    if status.is_success() {
+        let id = body["result"]["id"]
+            .as_str()
+            .unwrap_or("unknown")
+            .to_string();
+        tracing::info!("    Created Web3 IPFS gateway for {} (id: {})", hostname, id);
+        Ok(id)
+    } else {
+        let errors = &body["errors"];
+        // Check if already exists (code 8000007 or similar)
+        if let Some(arr) = errors.as_array() {
+            for err in arr {
+                let msg = err["message"].as_str().unwrap_or("");
+                if msg.contains("already exists") || msg.contains("duplicate") {
+                    tracing::info!("    Web3 IPFS gateway already exists for {}", hostname);
+                    return Ok("existing".to_string());
+                }
+            }
+        }
+        Err(format!(
+            "Cloudflare Web3 API error ({}): {}",
+            status,
+            serde_json::to_string_pretty(&body)?
+        )
+        .into())
+    }
+}
+
+/// List Web3 IPFS gateway hostnames for a zone.
+pub async fn cloudflare_list_web3_hostnames(
+    cf_token: &str,
+    zone_id: &str,
+) -> Result<Vec<(String, String, String)>, Box<dyn Error>> {
+    let url = format!(
+        "https://api.cloudflare.com/client/v4/zones/{}/web3/hostnames",
+        zone_id
+    );
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cf_token))
+        .send()
+        .await?;
+
+    let body: serde_json::Value = resp.json().await?;
+    let mut results = Vec::new();
+    if let Some(arr) = body["result"].as_array() {
+        for item in arr {
+            let id = item["id"].as_str().unwrap_or("").to_string();
+            let name = item["name"].as_str().unwrap_or("").to_string();
+            let status = item["status"].as_str().unwrap_or("").to_string();
+            results.push((id, name, status));
+        }
+    }
+    Ok(results)
+}
+
+/// Full IPFS site publish: create Web3 gateway + set DNSLink + set CNAME.
+/// One command to go from CID to live site.
+pub async fn cloudflare_publish_ipfs_site(
+    cf_token: &str,
+    zone_id: &str,
+    domain: &str,
+    cid: &str,
+) -> Result<(), Box<dyn Error>> {
+    // 1. Ensure Web3 gateway exists
+    tracing::info!("  Step 1/3: Creating Web3 IPFS gateway for {}", domain);
+    cloudflare_create_web3_hostname(cf_token, zone_id, domain).await?;
+
+    // 2. Set DNSLink TXT record
+    tracing::info!("  Step 2/3: Setting DNSLink TXT record");
+    cloudflare_set_dnslink(cf_token, zone_id, domain, cid).await?;
+
+    // 3. Done — CNAME is set by cloudflare_set_dnslink
+    tracing::info!("  Step 3/3: Published! https://{}/", domain);
+    Ok(())
+}

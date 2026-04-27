@@ -1,4 +1,4 @@
-use crate::config::substitute_template_raw;
+
 /// Parallel deployment path: all phases deployed before snapshot sync wait.
 ///
 /// The key improvement over the sequential path is that phases B (Tackles) and
@@ -288,28 +288,66 @@ async fn select_provider_for_phase(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Step 2: DeployAllUnits
+// Step 2: DeployAllUnits — types and helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Deploy all phases sequentially, storing state + endpoints before snapshot sync.
+/// Per-phase deployment metadata used to drive the data-driven deployment loop.
 ///
-/// Phases B and C are deployed with empty peer/statesync vars (`SNAPSHOT_MODE=sftp`).
-/// The entrypoint will wait for the deployer to push the snapshot archive before
-/// starting the chain process.  Peer injection happens in `inject_peers` after
-/// snapshot sync.
-pub async fn deploy_all_units(
+/// Instead of repeating A/B/C/E blocks, each active phase is described by a
+/// `PhaseSlot` that carries its SDL, vars, deployer index, labels, and service
+/// registration info. The deploy pipeline iterates over a `Vec<PhaseSlot>`.
+struct PhaseSlot {
+    /// Which workflow phase this slot represents.
+    phase: DeployPhase,
+    /// Short key for CLI `--select` flag (e.g. "a", "b", "c", "e").
+    select_key: &'static str,
+    /// Akash deployment label (e.g. "oline-phase-a").
+    label: &'static str,
+    /// Rendered SDL after variable substitution.
+    rendered_sdl: String,
+    /// SDL template variables.
+    vars: HashMap<String, String>,
+    /// Index into `OLineContext::units` for the deployer (0..3).
+    /// Falls back to master deployer when units are empty (direct mode).
+    unit_index: usize,
+    /// Session phase name (e.g. "special-teams", "tackles").
+    session_phase: &'static str,
+    /// Service names + labels for node registration.
+    /// Phase E derives these dynamically from endpoints, so this can be empty.
+    node_services: Vec<(&'static str, &'static str)>,
+    /// Phase letter for node registration (e.g. "A", "B", "C", "E").
+    phase_letter: &'static str,
+}
+
+/// Intermediate result after bid collection and provider selection.
+struct PhaseWithBids {
+    slot: PhaseSlot,
+    state: DeploymentState,
+    bids: Vec<Bid>,
+    provider_choice: ProviderChoice,
+}
+
+/// Fully leased phase ready for manifest send and endpoint collection.
+struct LeasedPhase {
+    slot: PhaseSlot,
+    state: DeploymentState,
+}
+
+// ── Phase selection prompts ─────────────────────────────────────────────────
+
+/// Prompt the operator for which phases to deploy. Phase A is required;
+/// B, C, E are optional. Returns `None` if the operator aborts, or
+/// `Some((run_b, run_c, run_e))` with the selection flags.
+fn prompt_phase_selection(
     w: &mut OLineWorkflow,
     lines: &mut Lines<impl BufRead>,
-) -> Result<StepResult, DeployError> {
-    tracing::info!("\n── Parallel: deploy all units (concurrent MsgCreateDeployment) ──");
-
-    // ── 1. Phase selection prompts (sequential stdin — must complete before parallel deploy) ──
+) -> Result<Option<(bool, bool, bool)>, DeployError> {
     if !prompt_continue(lines, "Deploy Phase A (Special Teams)?")
         .map_err(|e| DeployError::InvalidState(e.to_string()))?
     {
         tracing::info!("Aborted.");
         w.step = OLineStep::Complete;
-        return Ok(StepResult::Complete);
+        return Ok(None);
     }
     let run_b = prompt_continue(lines, "Deploy Phase B (Tackles)?")
         .map_err(|e| DeployError::InvalidState(e.to_string()))?;
@@ -332,319 +370,336 @@ pub async fn deploy_all_units(
         w.ctx
             .set_phase_result(DeployPhase::Relayer, PhaseResult::Skipped);
     }
+    Ok(Some((run_b, run_c, run_e)))
+}
 
-    // ── 2. Build all SDL vars (sequential — Phase A is async: SSH keygen) ─────
-    let secrets_path = var("SECRETS_PATH").unwrap_or_else(|_| ".".into());
-    let a_vars = build_phase_a_vars(&w.ctx.deployer.config, &secrets_path)
+// ── SDL var building + SSH key extraction ───────────────────────────────────
+
+/// Build SDL template variables for all phases and extract the shared SSH key.
+///
+/// Phase A generates the SSH keypair; B and C share the public key.
+/// Phase E generates its own key inside `build_phase_rly_vars`.
+async fn build_all_sdl_vars(
+    w: &mut OLineWorkflow,
+    run_b: bool,
+    run_c: bool,
+    run_e: bool,
+) -> Result<
+    (
+        HashMap<String, String>,
+        HashMap<String, String>,
+        HashMap<String, String>,
+        HashMap<String, String>,
+    ),
+    DeployError,
+> {
+    let secrets_path = crate::config::oline_config_dir().to_string_lossy().into_owned();
+    let a_vars = build_phase_a_vars(&w.ctx.deployer.config, &secrets_path, &w.ctx.deployer.password)
         .await
         .map_err(|e| DeployError::InvalidState(format!("build_phase_a_vars: {}", e)))?;
 
-    // SSH key was saved by ensure_ssh_key inside build_phase_a_vars.
-    {
-        let ssh_privkey_pem = a_vars
-            .get("SSH_PRIVKEY")
-            .ok_or_else(|| {
-                DeployError::InvalidState("SSH_PRIVKEY missing from phase-A vars".into())
-            })?
-            .clone();
-        let key_path: PathBuf = a_vars
-            .get("SSH_KEY_PATH")
-            .map(|p| PathBuf::from(p))
-            .unwrap_or_else(|| format!("{}/oline-parallel-key", secrets_path).into());
-        w.ctx.ssh_key_path = key_path;
-        w.ctx.ssh_privkey_pem = ssh_privkey_pem;
-        w.ctx.a_vars = a_vars.clone();
-    }
+    // Extract and store SSH key from Phase A.
+    let ssh_privkey_pem = a_vars
+        .get("SSH_PRIVKEY")
+        .ok_or_else(|| DeployError::InvalidState("SSH_PRIVKEY missing from phase-A vars".into()))?
+        .clone();
+    let key_path: PathBuf = a_vars
+        .get("SSH_KEY_PATH")
+        .map(|p| PathBuf::from(p))
+        .unwrap_or_else(|| format!("{}/oline-parallel-key", secrets_path).into());
+    w.ctx.ssh_key_path = key_path;
+    w.ctx.ssh_privkey_pem = ssh_privkey_pem;
+    w.ctx.a_vars = a_vars.clone();
 
-    // Share SSH pubkey from Phase A so the same key works across all units.
     let ssh_pubkey = a_vars.get("SSH_PUBKEY").cloned().unwrap_or_default();
 
-    let mut b_vars = build_phase_b_vars(&w.ctx.deployer.config, "", "");
-    b_vars.insert("SSH_PUBKEY".into(), ssh_pubkey.clone());
+    let b_vars = if run_b {
+        let mut v = build_phase_b_vars(&w.ctx.deployer.config, "", "");
+        v.insert("SSH_PUBKEY".into(), ssh_pubkey.clone());
+        v
+    } else {
+        HashMap::new()
+    };
 
-    let mut c_vars = build_phase_c_vars(&w.ctx.deployer.config, "", "", "", "", "");
-    c_vars.insert("SSH_PUBKEY".into(), ssh_pubkey.clone());
+    let c_vars = if run_c {
+        let mut v = build_phase_c_vars(&w.ctx.deployer.config, "", "", "", "", "");
+        v.insert("SSH_PUBKEY".into(), ssh_pubkey.clone());
+        v
+    } else {
+        HashMap::new()
+    };
 
-    let e_vars = build_phase_rly_vars(&w.ctx.deployer.config);
+    let e_vars = if run_e {
+        build_phase_rly_vars(&w.ctx.deployer.config)
+    } else {
+        HashMap::new()
+    };
 
-    // ── 3. Load SDL templates ─────────────────────────────────────────────────
+    Ok((a_vars, b_vars, c_vars, e_vars))
+}
+
+// ── SDL loading + rendering ─────────────────────────────────────────────────
+
+/// Build `PhaseSlot` entries for all active phases by loading SDL templates
+/// and rendering them with the corresponding vars.
+///
+/// Phase A is required; B/C/E are optional and marked as failed on SDL errors.
+fn build_phase_slots(
+    w: &mut OLineWorkflow,
+    run_b: bool,
+    run_c: bool,
+    run_e: bool,
+    a_vars: HashMap<String, String>,
+    b_vars: HashMap<String, String>,
+    c_vars: HashMap<String, String>,
+    e_vars: HashMap<String, String>,
+) -> Result<Vec<PhaseSlot>, DeployError> {
+    let mut slots = Vec::with_capacity(4);
+
+    // Phase A — required.
     let sdl_a = w
         .ctx
         .deployer
         .config
         .load_sdl("a.yml")
         .map_err(|e| DeployError::InvalidState(e.to_string()))?;
+    let rendered_a = akash_deploy_rs::substitute_partial(&sdl_a, &a_vars);
+    slots.push(PhaseSlot {
+        phase: DeployPhase::SpecialTeams,
+        select_key: "a",
+        label: "oline-phase-a",
+        rendered_sdl: rendered_a,
+        vars: a_vars,
+        unit_index: 0,
+        session_phase: "special-teams",
+        node_services: vec![
+            ("oline-a-snapshot", "Phase A - Snapshot"),
+            ("oline-a-seed", "Phase A - Seed"),
+            ("oline-a-minio-ipfs", "Phase A - MinIO"),
+        ],
+        phase_letter: "A",
+    });
 
-    let sdl_b: Option<String> = if run_b {
-        match w.ctx.deployer.config.load_sdl("b.yml") {
-            Ok(s) => Some(s),
-            Err(e) => {
-                tracing::warn!("  Phase B SDL error: {} — skipping.", e);
-                w.ctx
-                    .set_phase_result(DeployPhase::Tackles, PhaseResult::Failed(e.to_string()));
-                None
+    // Helper: try loading an optional phase SDL.
+    let mut try_load_optional =
+        |run: bool,
+         file: &str,
+         phase: DeployPhase,
+         vars: HashMap<String, String>,
+         select_key: &'static str,
+         label: &'static str,
+         unit_index: usize,
+         session_phase: &'static str,
+         node_services: Vec<(&'static str, &'static str)>,
+         phase_letter: &'static str| {
+            if !run {
+                return;
             }
-        }
-    } else {
-        None
-    };
-
-    let sdl_c: Option<String> = if run_c {
-        match w.ctx.deployer.config.load_sdl("c.yml") {
-            Ok(s) => Some(s),
-            Err(e) => {
-                tracing::warn!("  Phase C SDL error: {} — skipping.", e);
-                w.ctx
-                    .set_phase_result(DeployPhase::Forwards, PhaseResult::Failed(e.to_string()));
-                None
+            match w.ctx.deployer.config.load_sdl(file) {
+                Ok(sdl) => {
+                    let rendered = akash_deploy_rs::substitute_partial(&sdl, &vars);
+                    slots.push(PhaseSlot {
+                        phase,
+                        select_key,
+                        label,
+                        rendered_sdl: rendered,
+                        vars,
+                        unit_index,
+                        session_phase,
+                        node_services,
+                        phase_letter,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!("  Phase {} SDL error: {} — skipping.", phase_letter, e);
+                    w.ctx
+                        .set_phase_result(phase, PhaseResult::Failed(e.to_string()));
+                }
             }
-        }
-    } else {
-        None
-    };
+        };
 
-    let sdl_e: Option<String> = if run_e {
-        match w.ctx.deployer.config.load_sdl("e.yml") {
-            Ok(s) => Some(s),
-            Err(e) => {
-                tracing::warn!("  Phase E SDL error: {} — skipping.", e);
-                w.ctx
-                    .set_phase_result(DeployPhase::Relayer, PhaseResult::Failed(e.to_string()));
-                None
-            }
-        }
-    } else {
-        None
-    };
+    try_load_optional(
+        run_b,
+        "b.yml",
+        DeployPhase::Tackles,
+        b_vars,
+        "b",
+        "oline-phase-b",
+        1,
+        "tackles",
+        vec![
+            ("oline-b-left-node", "Phase B - Left Tackle"),
+            ("oline-b-right-node", "Phase B - Right Tackle"),
+        ],
+        "B",
+    );
+    try_load_optional(
+        run_c,
+        "c.yml",
+        DeployPhase::Forwards,
+        c_vars,
+        "c",
+        "oline-phase-c",
+        2,
+        "forwards",
+        vec![
+            ("oline-c-left-node", "Phase C - Left Forward"),
+            ("oline-c-right-node", "Phase C - Right Forward"),
+        ],
+        "C",
+    );
+    try_load_optional(
+        run_e,
+        "e.yml",
+        DeployPhase::Relayer,
+        e_vars,
+        "e",
+        "oline-phase-e",
+        3,
+        "relayer",
+        vec![], // Phase E derives service names dynamically from endpoints
+        "E",
+    );
 
-    // ── 4. Multi-signer batch deployment ────────────────────────────────────────
-    //
-    // All MsgCreateDeployment messages are assembled into a single multi-signer
-    // transaction.  Each child account signs its own messages offline, then all
-    // signatures are combined and broadcast atomically.  This reduces N+1 txs
-    // (funding + N deployments) to exactly 2 txs (funding + batch deploy).
-    tracing::info!("  Building multi-signer batch (1 tx for all MsgCreateDeployment)...");
+    Ok(slots)
+}
 
-    // Obtain deployer refs (immutable, from distinct UnitState objects).
-    let d0: &_ = w
-        .ctx
-        .units
-        .get(0)
+// ── Deployer ref resolution ─────────────────────────────────────────────────
+
+/// Resolve the deployer for a given unit index. Falls back to master when
+/// no child deployers exist (direct mode).
+fn deployer_for_index<'a>(
+    ctx: &'a crate::workflow::context::OLineContext,
+    idx: usize,
+) -> &'a OLineDeployer {
+    ctx.units
+        .get(idx)
         .map(|u| &u.deployer)
-        .unwrap_or(&w.ctx.deployer);
-    let d1: &_ = w
-        .ctx
-        .units
-        .get(1)
-        .map(|u| &u.deployer)
-        .unwrap_or(&w.ctx.deployer);
-    let d2: &_ = w
-        .ctx
-        .units
-        .get(2)
-        .map(|u| &u.deployer)
-        .unwrap_or(&w.ctx.deployer);
-    let d3: &_ = w
-        .ctx
-        .units
-        .get(3)
-        .map(|u| &u.deployer)
-        .unwrap_or(&w.ctx.deployer);
+        .unwrap_or(&ctx.deployer)
+}
 
-    // 4a. Render SDL templates for each active phase.
-    let rendered_a = substitute_template_raw(&sdl_a, &a_vars)
-        .map_err(|e| DeployError::Template(format!("Phase A template: {}", e)))?;
-    let rendered_b = sdl_b
-        .as_deref()
-        .map(|sdl| {
-            substitute_template_raw(sdl, &b_vars)
-                .map_err(|e| DeployError::Template(format!("Phase B template: {}", e)))
-        })
-        .transpose()?;
-    let rendered_c = sdl_c
-        .as_deref()
-        .map(|sdl| {
-            substitute_template_raw(sdl, &c_vars)
-                .map_err(|e| DeployError::Template(format!("Phase C template: {}", e)))
-        })
-        .transpose()?;
-    let rendered_e = sdl_e
-        .as_deref()
-        .map(|sdl| {
-            substitute_template_raw(sdl, &e_vars)
-                .map_err(|e| DeployError::Template(format!("Phase E template: {}", e)))
-        })
-        .transpose()?;
+// ── ACT balance + mint ──────────────────────────────────────────────────────
 
-    // 4b. Get block height for shared dseq across all deployments.
-    let querier = &d0.client.signing_client().querier;
-    let dseq: u64 = querier
-        .block_height()
+/// Ensure the master account has enough ACT for `num_deploys` deployment deposits.
+///
+/// BME mints ACT in the end-blocker, so the mint tx must confirm and the balance
+/// must be polled until sufficient. This is the one place where a >3s sleep is
+/// acceptable — we are waiting for blockchain block production (~6s/block).
+async fn ensure_act_for_deposits(
+    deployer: &OLineDeployer,
+    signer: &akash_deploy_rs::KeySigner,
+    deposit_amount: u64,
+    num_deploys: u64,
+) -> Result<(), DeployError> {
+    let total_act_needed = deposit_amount as u128 * num_deploys as u128;
+    let master_addr = deployer.client.address().to_string();
+    let act_balance = deployer
+        .client
+        .query_balance(&master_addr, "uact")
         .await
-        .map_err(|e| DeployError::Query(format!("block_height for dseq: {}", e)))?;
-    let deposit_amount: u64 = 5_000_000; // 0.5 ACT — Akash min_deposits minimum
-    let deposit_denom = "uact";
+        .unwrap_or(0);
 
-    tracing::info!(dseq, "  Base dseq for deployments");
-
-    // 4c. Build MsgCreateDeployment for each active phase.
-    // In Direct mode all deployments share the same owner, so each needs a unique
-    // dseq. We use dseq, dseq+1, dseq+2, ... In HD mode each child has a different
-    // owner so they can share the same dseq.
-    let is_direct = w.ctx.units.is_empty();
-    let mut dseq_offset: u64 = 0;
-    let msg_a = d0.client.build_create_deployment_msg(
-        &d0.client.address(),
-        &rendered_a,
-        deposit_amount,
-        deposit_denom,
-        dseq + dseq_offset,
-    )?;
-    if is_direct {
-        dseq_offset += 1;
+    if act_balance >= total_act_needed {
+        return Ok(());
     }
-    let msg_b = rendered_b
-        .as_deref()
-        .map(|sdl| {
-            d1.client.build_create_deployment_msg(
-                &d1.client.address(),
-                sdl,
-                deposit_amount,
-                deposit_denom,
-                dseq + dseq_offset,
-            )
-        })
-        .transpose()?;
-    if is_direct && msg_b.is_some() {
-        dseq_offset += 1;
+
+    const MIN_MINT_UAKT: u128 = 25_000_000; // BME minimum mint = 25 ACT
+    let shortfall = (total_act_needed - act_balance).max(MIN_MINT_UAKT);
+    tracing::info!(
+        total_act_needed,
+        act_balance,
+        shortfall,
+        "  Minting ACT (burn {} uakt -> uact) before deploy batch...",
+        shortfall
+    );
+    let mint_tx = deployer
+        .client
+        .broadcast_mint_act(signer, &master_addr, shortfall as u64)
+        .await
+        .map_err(|e| DeployError::InvalidState(format!("MsgMintACT failed: {}", e)))?;
+    if !mint_tx.is_success() {
+        return Err(DeployError::InvalidState(format!(
+            "MsgMintACT tx failed: {}",
+            mint_tx.raw_log
+        )));
     }
-    let msg_c = rendered_c
-        .as_deref()
-        .map(|sdl| {
-            d2.client.build_create_deployment_msg(
-                &d2.client.address(),
-                sdl,
-                deposit_amount,
-                deposit_denom,
-                dseq + dseq_offset,
-            )
-        })
-        .transpose()?;
-    if is_direct && msg_c.is_some() {
-        dseq_offset += 1;
-    }
-    let msg_e = rendered_e
-        .as_deref()
-        .map(|sdl| {
-            d3.client.build_create_deployment_msg(
-                &d3.client.address(),
-                sdl,
-                deposit_amount,
-                deposit_denom,
-                dseq + dseq_offset,
-            )
-        })
-        .transpose()?;
+    tracing::info!(tx_hash = %mint_tx.hash, "  MsgMintACT confirmed, waiting for end-blocker...");
 
-    // 4d. Build signer entries and broadcast batch.
-    //
-    // Direct mode (no child accounts): single master signer with all messages.
-    // HD mode: one SignerEntry per child signer (existing multi-signer path).
-    // Use the querier's chain_id (auto-detected from RPC /status) for tx signing.
-    // The o-line config "chain.chain_id" is the deployment network name, NOT the
-    // cosmos chain-id needed for SignDoc.
-    let chain_id = querier.chain_config.chain_id.as_str();
-
-    if is_direct {
-        // Single signer (master) — all MsgCreateDeployment in one tx.
-        // Avoids HD child derivation + uact bank_send (blocked by BME SendRestrictionFn).
-
-        let mut all_msgs = vec![msg_a];
-        if let Some(m) = msg_b {
-            all_msgs.push(m);
-        }
-        if let Some(m) = msg_c {
-            all_msgs.push(m);
-        }
-        if let Some(m) = msg_e {
-            all_msgs.push(m);
-        }
-
-        // ── Ensure sufficient ACT for deposits ──────────────────────────────
-        // BME mints ACT in the end-blocker, so the mint must be a separate tx
-        // that confirms before we broadcast the deploy batch.
-        let num_deploys = all_msgs.len() as u64;
-        let total_act_needed = deposit_amount as u128 * num_deploys as u128;
-        let master_addr = d0.client.address().to_string();
-        let act_balance = d0
+    // Poll until ACT balance covers the deposits.
+    // BME end-blocker processes mints — can take several blocks (~6s each).
+    let poll_start = std::time::Instant::now();
+    let poll_timeout = std::time::Duration::from_secs(120);
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+        let new_balance = deployer
             .client
             .query_balance(&master_addr, "uact")
             .await
             .unwrap_or(0);
-
-        if act_balance < total_act_needed {
-            const MIN_MINT_UAKT: u128 = 25_000_000; // BME minimum mint = 25 ACT
-            let shortfall = (total_act_needed - act_balance).max(MIN_MINT_UAKT);
-            tracing::info!(
-                total_act_needed,
-                act_balance,
-                shortfall,
-                "  Minting ACT (burn {} uakt → uact) before deploy batch...",
-                shortfall
-            );
-            let mint_tx = d0
-                .client
-                .broadcast_mint_act(&w.ctx.deployer.signer, &master_addr, shortfall as u64)
-                .await
-                .map_err(|e| DeployError::InvalidState(format!("MsgMintACT failed: {}", e)))?;
-            if !mint_tx.is_success() {
-                return Err(DeployError::InvalidState(format!(
-                    "MsgMintACT tx failed: {}",
-                    mint_tx.raw_log
-                )));
-            }
-            tracing::info!(tx_hash = %mint_tx.hash, "  MsgMintACT confirmed, waiting for end-blocker...");
-
-            // Poll until ACT balance covers the deposits.
-            // BME end-blocker processes mints — can take several blocks (~6s each).
-            let poll_start = std::time::Instant::now();
-            let poll_timeout = std::time::Duration::from_secs(120);
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(6)).await;
-                let new_balance = d0
-                    .client
-                    .query_balance(&master_addr, "uact")
-                    .await
-                    .unwrap_or(0);
-                if new_balance >= total_act_needed {
-                    tracing::info!(new_balance, total_act_needed, "  ACT balance sufficient");
-                    break;
-                }
-                let elapsed = poll_start.elapsed().as_secs();
-                if poll_start.elapsed() > poll_timeout {
-                    return Err(DeployError::InvalidState(format!(
-                        "Timed out waiting for ACT mint after {}s: balance {} < needed {}",
-                        elapsed, new_balance, total_act_needed,
-                    )));
-                }
-                tracing::info!(
-                    new_balance,
-                    total_act_needed,
-                    elapsed,
-                    "  Waiting for ACT mint (end-blocker)..."
-                );
-            }
+        if new_balance >= total_act_needed {
+            tracing::info!(new_balance, total_act_needed, "  ACT balance sufficient");
+            return Ok(());
         }
+        let elapsed = poll_start.elapsed().as_secs();
+        if poll_start.elapsed() > poll_timeout {
+            return Err(DeployError::InvalidState(format!(
+                "Timed out waiting for ACT mint after {}s: balance {} < needed {}",
+                elapsed, new_balance, total_act_needed,
+            )));
+        }
+        tracing::info!(
+            new_balance,
+            total_act_needed,
+            elapsed,
+            "  Waiting for ACT mint (end-blocker)..."
+        );
+    }
+}
 
-        // ── Broadcast deploy batch ──────────────────────────────────────────
-        // Re-query account after potential mint tx (sequence may have incremented).
+// ── Batch MsgCreateDeployment broadcast ─────────────────────────────────────
+
+/// Build MsgCreateDeployment messages for each slot, broadcast them atomically,
+/// and return the assigned dseq for each slot.
+///
+/// In direct mode (no child accounts): all messages go in a single tx with the
+/// master signer, each getting a unique dseq (dseq, dseq+1, ...).
+/// In HD mode: each child signer signs its own message, all combined atomically.
+async fn broadcast_create_deployments(
+    w: &OLineWorkflow,
+    slots: &[PhaseSlot],
+    base_dseq: u64,
+    deposit_amount: u64,
+    deposit_denom: &str,
+    is_direct: bool,
+) -> Result<Vec<u64>, DeployError> {
+    // Build messages and assign dseqs.
+    let dseqs = assign_dseqs(base_dseq, slots.len(), is_direct);
+    let mut messages = Vec::with_capacity(slots.len());
+    for (slot, &assigned_dseq) in slots.iter().zip(dseqs.iter()) {
+        let d = deployer_for_index(&w.ctx, slot.unit_index);
+        let msg = d.client.build_create_deployment_msg(
+            &d.client.address(),
+            &slot.rendered_sdl,
+            deposit_amount,
+            deposit_denom,
+            assigned_dseq,
+        )?;
+        messages.push(msg);
+    }
+
+    let d0 = deployer_for_index(&w.ctx, 0);
+    let querier = &d0.client.signing_client().querier;
+    let chain_id = querier.chain_config.chain_id.as_str();
+
+    if is_direct {
+        // Single signer (master) — all MsgCreateDeployment in one tx.
         let acct = querier
             .base_account(d0.client.address_ref())
             .await
             .map_err(|e| DeployError::Query(format!("base_account master: {}", e)))?;
 
         tracing::info!(
-            msgs = all_msgs.len(),
+            msgs = messages.len(),
             chain_id,
             "  Broadcasting single-signer MsgCreateDeployment batch..."
         );
@@ -653,7 +708,7 @@ pub async fn deploy_all_units(
             signer: &w.ctx.deployer.signer,
             account_number: acct.account_number,
             sequence: acct.sequence,
-            messages: all_msgs,
+            messages,
         }];
 
         let multi_tx = broadcast_multi_signer(
@@ -671,79 +726,39 @@ pub async fn deploy_all_units(
         );
     } else {
         // HD mode: one SignerEntry per child signer.
-        let acct_0 = querier
-            .base_account(d0.client.address_ref())
-            .await
-            .map_err(|e| DeployError::Query(format!("base_account d0: {}", e)))?;
-
         let mnemonic = &w.ctx.deployer.config.mnemonic;
-        let signer_0 = derive_child_signer(
-            mnemonic,
-            w.ctx.units.get(0).map(|u| u.hd_index).unwrap_or(0),
-        )?;
-        let mut signer_entries: Vec<SignerEntry<'_>> = vec![SignerEntry {
-            signer: &signer_0,
-            account_number: acct_0.account_number,
-            sequence: acct_0.sequence,
-            messages: vec![msg_a],
-        }];
-
-        let signer_1;
-        let acct_1;
-        if let Some(msg) = msg_b {
-            acct_1 = querier
-                .base_account(d1.client.address_ref())
+        let mut accounts = Vec::with_capacity(slots.len());
+        let mut signers = Vec::with_capacity(slots.len());
+        for (i, slot) in slots.iter().enumerate() {
+            let d = deployer_for_index(&w.ctx, slot.unit_index);
+            let acct = querier
+                .base_account(d.client.address_ref())
                 .await
-                .map_err(|e| DeployError::Query(format!("base_account d1: {}", e)))?;
-            signer_1 = derive_child_signer(
-                mnemonic,
-                w.ctx.units.get(1).map(|u| u.hd_index).unwrap_or(1),
-            )?;
-            signer_entries.push(SignerEntry {
-                signer: &signer_1,
-                account_number: acct_1.account_number,
-                sequence: acct_1.sequence,
-                messages: vec![msg],
-            });
+                .map_err(|e| {
+                    DeployError::Query(format!("base_account d{} for deploy: {}", i, e))
+                })?;
+            let hd_index = w
+                .ctx
+                .units
+                .get(slot.unit_index)
+                .map(|u| u.hd_index)
+                .unwrap_or(slot.unit_index as u32);
+            let signer = derive_child_signer(mnemonic, hd_index)?;
+            accounts.push(acct);
+            signers.push(signer);
         }
 
-        let signer_2;
-        let acct_2;
-        if let Some(msg) = msg_c {
-            acct_2 = querier
-                .base_account(d2.client.address_ref())
-                .await
-                .map_err(|e| DeployError::Query(format!("base_account d2: {}", e)))?;
-            signer_2 = derive_child_signer(
-                mnemonic,
-                w.ctx.units.get(2).map(|u| u.hd_index).unwrap_or(2),
-            )?;
-            signer_entries.push(SignerEntry {
-                signer: &signer_2,
-                account_number: acct_2.account_number,
-                sequence: acct_2.sequence,
+        let signer_entries: Vec<SignerEntry<'_>> = signers
+            .iter()
+            .zip(accounts.iter())
+            .zip(messages.into_iter())
+            .map(|((signer, acct), msg)| SignerEntry {
+                signer,
+                account_number: acct.account_number,
+                sequence: acct.sequence,
                 messages: vec![msg],
-            });
-        }
-
-        let signer_3;
-        let acct_3;
-        if let Some(msg) = msg_e {
-            acct_3 = querier
-                .base_account(d3.client.address_ref())
-                .await
-                .map_err(|e| DeployError::Query(format!("base_account d3: {}", e)))?;
-            signer_3 = derive_child_signer(
-                mnemonic,
-                w.ctx.units.get(3).map(|u| u.hd_index).unwrap_or(3),
-            )?;
-            signer_entries.push(SignerEntry {
-                signer: &signer_3,
-                account_number: acct_3.account_number,
-                sequence: acct_3.sequence,
-                messages: vec![msg],
-            });
-        }
+            })
+            .collect();
 
         tracing::info!(
             signers = signer_entries.len(),
@@ -766,347 +781,245 @@ pub async fn deploy_all_units(
         );
     }
 
-    // 4f. Create DeploymentState objects with per-deployment dseq.
-    // In Direct mode each deployment uses dseq, dseq+1, dseq+2, ... since they
-    // share the same owner and DeploymentID = (owner, dseq) must be unique.
-    let mut dseq_idx: u64 = 0;
-    let mut state_a = DeploymentState::new("oline-phase-a", d0.client.address())
-        .with_sdl(&rendered_a)
-        .with_label("oline-phase-a");
-    state_a.dseq = Some(dseq + dseq_idx);
-    if is_direct {
-        dseq_idx += 1;
+    Ok(dseqs)
+}
+
+// ── DeploymentState creation ────────────────────────────────────────────────
+
+/// Create a `DeploymentState` for each phase slot with the assigned dseq.
+fn create_deployment_states(
+    slots: &[PhaseSlot],
+    ctx: &crate::workflow::context::OLineContext,
+    dseqs: &[u64],
+) -> Vec<DeploymentState> {
+    slots
+        .iter()
+        .zip(dseqs.iter())
+        .map(|(slot, &assigned_dseq)| {
+            let d = deployer_for_index(ctx, slot.unit_index);
+            let mut state = DeploymentState::new(slot.label, d.client.address())
+                .with_sdl(&slot.rendered_sdl)
+                .with_label(slot.label);
+            state.dseq = Some(assigned_dseq);
+            state
+        })
+        .collect()
+}
+
+// ── Bid waiting ─────────────────────────────────────────────────────────────
+
+/// Wait for bids on all phases. Phase A (index 0) is required — its failure
+/// is fatal. Optional phases that fail to receive bids are silently dropped.
+async fn wait_for_all_bids(
+    ctx: &crate::workflow::context::OLineContext,
+    slots: Vec<PhaseSlot>,
+    states: &mut [DeploymentState],
+) -> Result<Vec<(PhaseSlot, DeploymentState, Vec<Bid>)>, DeployError> {
+    // Bid-waiting runs sequentially here because the futures are !Send (they
+    // hold references into the workflow context). The original code used
+    // tokio::join! which also runs on a single task — same concurrency model.
+    let mut results: Vec<Option<Result<Vec<Bid>, DeployError>>> =
+        slots.iter().map(|_| None).collect();
+
+    for i in 0..slots.len() {
+        let d = deployer_for_index(ctx, slots[i].unit_index);
+        results[i] = Some(d.wait_for_bids(&mut states[i], slots[i].label).await);
     }
 
-    let mut state_b_opt: Option<DeploymentState> = rendered_b.as_deref().map(|sdl| {
-        let mut s = DeploymentState::new("oline-phase-b", d1.client.address())
-            .with_sdl(sdl)
-            .with_label("oline-phase-b");
-        s.dseq = Some(dseq + dseq_idx);
-        s
-    });
-    if is_direct && state_b_opt.is_some() {
-        dseq_idx += 1;
+    // Phase A is required — propagate its error.
+    let bids_a = results[0].take().unwrap()?;
+
+    let mut collected = Vec::with_capacity(slots.len());
+    let mut slot_iter = slots.into_iter().enumerate();
+
+    // Phase A
+    let (_, slot_a) = slot_iter.next().unwrap();
+    let state_a = std::mem::replace(&mut states[0], DeploymentState::new("placeholder", ""));
+    collected.push((slot_a, state_a, bids_a));
+
+    // Optional phases
+    for (idx, slot) in slot_iter {
+        match results[idx].take().unwrap() {
+            Ok(bids) => {
+                let state =
+                    std::mem::replace(&mut states[idx], DeploymentState::new("placeholder", ""));
+                collected.push((slot, state, bids));
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "  Phase {} bid wait failed: {} — skipping.",
+                    slot.phase_letter,
+                    e
+                );
+            }
+        }
     }
 
-    let mut state_c_opt: Option<DeploymentState> = rendered_c.as_deref().map(|sdl| {
-        let mut s = DeploymentState::new("oline-phase-c", d2.client.address())
-            .with_sdl(sdl)
-            .with_label("oline-phase-c");
-        s.dseq = Some(dseq + dseq_idx);
-        s
-    });
-    if is_direct && state_c_opt.is_some() {
-        dseq_idx += 1;
-    }
+    Ok(collected)
+}
 
-    let mut state_e_opt: Option<DeploymentState> = rendered_e.as_deref().map(|sdl| {
-        let mut s = DeploymentState::new("oline-phase-e", d3.client.address())
-            .with_sdl(sdl)
-            .with_label("oline-phase-e");
-        s.dseq = Some(dseq + dseq_idx);
-        s
-    });
+// ── Provider selection ──────────────────────────────────────────────────────
 
-    // Wait for bids concurrently on all active phases.
-    type BidRes = Result<Vec<Bid>, DeployError>;
-    type OptBidRes = Result<Option<Vec<Bid>>, DeployError>;
-
-    let (bids_a_res, bids_b_res, bids_c_res, bids_e_res): (
-        BidRes,
-        OptBidRes,
-        OptBidRes,
-        OptBidRes,
-    ) = tokio::join!(
-        d0.wait_for_bids(&mut state_a, "oline-phase-a"),
-        async {
-            match state_b_opt.as_mut() {
-                Some(s) => d1.wait_for_bids(s, "oline-phase-b").await.map(Some),
-                None => Ok(None),
-            }
-        },
-        async {
-            match state_c_opt.as_mut() {
-                Some(s) => d2.wait_for_bids(s, "oline-phase-c").await.map(Some),
-                None => Ok(None),
-            }
-        },
-        async {
-            match state_e_opt.as_mut() {
-                Some(s) => d3.wait_for_bids(s, "oline-phase-e").await.map(Some),
-                None => Ok(None),
-            }
-        },
+/// Print structured bid output for one phase (used in two-step non-interactive flow).
+async fn print_phase_bids_output(
+    deployer: &OLineDeployer,
+    phase: &str,
+    dseq: u64,
+    bids: &[Bid],
+    auto_selected: Option<&str>,
+) {
+    println!(
+        "PHASE_{} DSEQ={} BIDS={}",
+        phase.to_uppercase(),
+        dseq,
+        bids.len()
     );
-    // d0..d3 borrows end here
+    for (i, bid) in bids.iter().enumerate() {
+        let price_akt = bid.price as f64 / 1_000_000.0;
+        let info = deployer
+            .client
+            .query_provider_info(&bid.provider)
+            .await
+            .ok()
+            .flatten();
+        let host = info
+            .as_ref()
+            .map(|i| i.host_uri.as_str())
+            .unwrap_or("unknown");
+        let email = info.as_ref().map(|i| i.email.as_str()).unwrap_or("");
+        let website = info.as_ref().map(|i| i.website.as_str()).unwrap_or("");
+        println!(
+            "  BID[{}] provider={} price={} price_akt={:.6} host={} email={} website={}",
+            i, bid.provider, bid.price, price_akt, host, email, website
+        );
+    }
+    if let Some(addr) = auto_selected {
+        println!("  AUTO_SELECTED={} (trusted)", addr);
+    } else {
+        println!("  NEEDS_SELECTION=true");
+    }
+}
 
-    // Unpack bid results.  Phase A is required; B/C/E are non-fatal.
-    let bids_a = bids_a_res?;
-
-    let (mut state_b, bids_b) = match bids_b_res {
-        Ok(Some(b)) => (state_b_opt, Some(b)),
-        Ok(None) => (None, None),
-        Err(e) => {
-            tracing::warn!("  Phase B bid wait failed: {} — skipping.", e);
-            w.ctx
-                .set_phase_result(DeployPhase::Tackles, PhaseResult::Failed(e.to_string()));
-            (None, None)
-        }
-    };
-    let (mut state_c, bids_c) = match bids_c_res {
-        Ok(Some(b)) => (state_c_opt, Some(b)),
-        Ok(None) => (None, None),
-        Err(e) => {
-            tracing::warn!("  Phase C bid wait failed: {} — skipping.", e);
-            w.ctx
-                .set_phase_result(DeployPhase::Forwards, PhaseResult::Failed(e.to_string()));
-            (None, None)
-        }
-    };
-    let (mut state_e, bids_e) = match bids_e_res {
-        Ok(Some(b)) => (state_e_opt, Some(b)),
-        Ok(None) => (None, None),
-        Err(e) => {
-            tracing::warn!("  Phase E bid wait failed: {} — skipping.", e);
-            w.ctx
-                .set_phase_result(DeployPhase::Relayer, PhaseResult::Failed(e.to_string()));
-            (None, None)
-        }
-    };
-
-    // ── 5. Phase 2: Provider selection ─────────────────────────────────────────
-    //
-    // For each phase that received bids:
-    //   1. Pre-selected provider (from --select a=<addr> b=<addr>) → use it
-    //   2. Trusted provider bidding → auto-select (cheapest among trusted)
-    //   3. Non-interactive mode, no match → print bids + exit (two-step flow)
-    //   4. Interactive mode → show prompt and let operator choose
-    tracing::info!("  ── Provider selection ──");
+/// Select providers for all phases. Returns the phases with their chosen providers,
+/// or prints bids and returns `None` if any phase needs manual selection (two-step flow).
+async fn select_providers_for_all(
+    w: &mut OLineWorkflow,
+    lines: &mut Lines<impl BufRead>,
+    phases: Vec<(PhaseSlot, DeploymentState, Vec<Bid>)>,
+) -> Result<Option<Vec<PhaseWithBids>>, DeployError> {
+    tracing::info!("  -- Provider selection --");
     let trusted_store = TrustedProviderStore::open(TrustedProviderStore::default_path());
     let non_interactive = std::env::var("OLINE_NON_INTERACTIVE").is_ok()
         || std::env::var("OLINE_AUTO_SELECT").is_ok();
     let selections = &w.ctx.provider_selections;
 
-    // Helper: print structured bid output for one phase
-    async fn print_phase_bids(deployer: &OLineDeployer, phase: &str, dseq: u64, bids: &[Bid], auto_selected: Option<&str>) {
-        println!("PHASE_{} DSEQ={} BIDS={}", phase.to_uppercase(), dseq, bids.len());
-        for (i, bid) in bids.iter().enumerate() {
-            let price_akt = bid.price as f64 / 1_000_000.0;
-            let info = deployer.client.query_provider_info(&bid.provider).await.ok().flatten();
-            let host = info.as_ref().map(|i| i.host_uri.as_str()).unwrap_or("unknown");
-            let email = info.as_ref().map(|i| i.email.as_str()).unwrap_or("");
-            let website = info.as_ref().map(|i| i.website.as_str()).unwrap_or("");
-            println!("  BID[{}] provider={} price={} price_akt={:.6} host={} email={} website={}",
-                i, bid.provider, bid.price, price_akt, host, email, website);
+    let mut with_choices: Vec<PhaseWithBids> = Vec::with_capacity(phases.len());
+    let mut any_needs_selection = false;
+
+    for (slot, state, bids) in phases {
+        let choice = select_provider_for_phase(
+            &w.ctx.deployer,
+            &bids,
+            slot.label,
+            lines,
+            &trusted_store,
+            non_interactive,
+            selections.get(slot.select_key).map(|s| s.as_str()),
+        )
+        .await?;
+
+        if matches!(&choice, ProviderChoice::NeedsSelection) {
+            any_needs_selection = true;
         }
-        if let Some(addr) = auto_selected {
-            println!("  AUTO_SELECTED={} (trusted)", addr);
-        } else {
-            println!("  NEEDS_SELECTION=true");
-        }
+
+        with_choices.push(PhaseWithBids {
+            slot,
+            state,
+            bids,
+            provider_choice: choice,
+        });
     }
 
-    // Collect choices — track which phases need manual selection
-    let mut needs_selection = false;
+    if !any_needs_selection {
+        return Ok(Some(with_choices));
+    }
 
-    // Phase A — required
-    let choice_a = select_provider_for_phase(
-        &w.ctx.deployer,
-        &bids_a,
-        "oline-phase-a",
-        lines,
-        &trusted_store,
-        non_interactive,
-        selections.get("a").map(|s| s.as_str()),
-    )
-    .await?;
+    // Two-step flow: print all bids and exit with --select instructions.
+    tracing::info!("  Some phases need manual provider selection. Printing bids...");
+    println!();
 
-    // Phase B
-    let choice_b = if let Some(ref bids) = bids_b {
-        Some(select_provider_for_phase(
-            &w.ctx.deployer,
-            bids,
-            "oline-phase-b",
-            lines,
-            &trusted_store,
-            non_interactive,
-            selections.get("b").map(|s| s.as_str()),
-        )
-        .await?)
-    } else { None };
-
-    // Phase C
-    let choice_c = if let Some(ref bids) = bids_c {
-        Some(select_provider_for_phase(
-            &w.ctx.deployer,
-            bids,
-            "oline-phase-c",
-            lines,
-            &trusted_store,
-            non_interactive,
-            selections.get("c").map(|s| s.as_str()),
-        )
-        .await?)
-    } else { None };
-
-    // Phase E
-    let choice_e = if let Some(ref bids) = bids_e {
-        Some(select_provider_for_phase(
-            &w.ctx.deployer,
-            bids,
-            "oline-phase-e",
-            lines,
-            &trusted_store,
-            non_interactive,
-            selections.get("e").map(|s| s.as_str()),
-        )
-        .await?)
-    } else { None };
-
-    // Check if any phase needs manual selection
-    if matches!(&choice_a, ProviderChoice::NeedsSelection) { needs_selection = true; }
-    if matches!(&choice_b, Some(ProviderChoice::NeedsSelection)) { needs_selection = true; }
-    if matches!(&choice_c, Some(ProviderChoice::NeedsSelection)) { needs_selection = true; }
-    if matches!(&choice_e, Some(ProviderChoice::NeedsSelection)) { needs_selection = true; }
-
-    // If any phase needs selection, print ALL bids and exit with --select instructions.
-    if needs_selection {
-        tracing::info!("  Some phases need manual provider selection. Printing bids...");
-        println!();
-
-        let auto_a = match &choice_a {
+    let mut select_parts: Vec<String> = Vec::new();
+    for phase in &with_choices {
+        let auto = match &phase.provider_choice {
             ProviderChoice::Selected(p) => Some(p.as_str()),
-            _ => None,
+            ProviderChoice::NeedsSelection => None,
         };
-        print_phase_bids(&w.ctx.deployer, "a", state_a.dseq.unwrap_or(0), &bids_a, auto_a).await;
-
-        if let Some(ref bids) = bids_b {
-            let auto_b = match &choice_b {
-                Some(ProviderChoice::Selected(p)) => Some(p.as_str()),
-                _ => None,
-            };
-            print_phase_bids(&w.ctx.deployer, "b", state_b.as_ref().and_then(|s| s.dseq).unwrap_or(0), bids, auto_b).await;
+        print_phase_bids_output(
+            &w.ctx.deployer,
+            phase.slot.select_key,
+            phase.state.dseq.unwrap_or(0),
+            &phase.bids,
+            auto,
+        )
+        .await;
+        if matches!(&phase.provider_choice, ProviderChoice::NeedsSelection) {
+            select_parts.push(format!("{}=<PROVIDER>", phase.slot.select_key));
         }
-        if let Some(ref bids) = bids_c {
-            let auto_c = match &choice_c {
-                Some(ProviderChoice::Selected(p)) => Some(p.as_str()),
-                _ => None,
-            };
-            print_phase_bids(&w.ctx.deployer, "c", state_c.as_ref().and_then(|s| s.dseq).unwrap_or(0), bids, auto_c).await;
-        }
-        if let Some(ref bids) = bids_e {
-            let auto_e = match &choice_e {
-                Some(ProviderChoice::Selected(p)) => Some(p.as_str()),
-                _ => None,
-            };
-            print_phase_bids(&w.ctx.deployer, "e", state_e.as_ref().and_then(|s| s.dseq).unwrap_or(0), bids, auto_e).await;
-        }
-
-        // Build the --select command
-        let mut select_parts: Vec<String> = Vec::new();
-        if matches!(&choice_a, ProviderChoice::NeedsSelection) {
-            select_parts.push("a=<PROVIDER>".to_string());
-        }
-        if matches!(&choice_b, Some(ProviderChoice::NeedsSelection)) {
-            select_parts.push("b=<PROVIDER>".to_string());
-        }
-        if matches!(&choice_c, Some(ProviderChoice::NeedsSelection)) {
-            select_parts.push("c=<PROVIDER>".to_string());
-        }
-        if matches!(&choice_e, Some(ProviderChoice::NeedsSelection)) {
-            select_parts.push("e=<PROVIDER>".to_string());
-        }
-        println!();
-        println!("To complete deployment, run:");
-        println!("  oline deploy --parallel --select {}", select_parts.join(" "));
-        println!();
-        println!("WAITING_FOR_SELECTION=true");
-
-        // Store DSEQs in session for resumption
-        w.step = OLineStep::Complete;
-        return Ok(StepResult::Continue);
     }
 
-    // All phases have providers — apply selections
-    match choice_a {
-        ProviderChoice::Selected(ref p) => {
-            DeploymentWorkflow::<AkashClient>::select_provider(&mut state_a, p)?;
-        }
-        _ => unreachable!(),
-    }
-    if let (Some(ProviderChoice::Selected(ref p)), Some(ref mut state)) = (&choice_b, &mut state_b) {
-        DeploymentWorkflow::<AkashClient>::select_provider(state, p)?;
-    }
-    if let (Some(ProviderChoice::Selected(ref p)), Some(ref mut state)) = (&choice_c, &mut state_c) {
-        DeploymentWorkflow::<AkashClient>::select_provider(state, p)?;
-    }
-    if let (Some(ProviderChoice::Selected(ref p)), Some(ref mut state)) = (&choice_e, &mut state_e) {
-        DeploymentWorkflow::<AkashClient>::select_provider(state, p)?;
-    }
-
-    // ── 6. Batch CreateLease (all phases in one tx) ────────────────────────
-
-    // Build MsgCreateLease for each active phase.
-    let mut lease_msgs: Vec<_> = Vec::new();
-
-    // Phase A (required)
-    let bid_a = find_bid_for_provider(&bids_a, state_a.selected_provider.as_ref().unwrap())?;
-    let bid_id_a = BidId::from_bid(
-        &state_a.owner,
-        state_a.dseq.unwrap(),
-        state_a.gseq,
-        state_a.oseq,
-        &bid_a,
+    println!();
+    println!("To complete deployment, run:");
+    println!(
+        "  oline deploy --parallel --select {}",
+        select_parts.join(" ")
     );
-    lease_msgs.push(build_create_lease_msg(&bid_id_a));
+    println!();
+    println!("WAITING_FOR_SELECTION=true");
 
-    // Phase B (optional)
-    let bid_id_b = if let (Some(ref bids), Some(ref state)) = (&bids_b, &state_b) {
-        let bid = find_bid_for_provider(bids, state.selected_provider.as_ref().unwrap())?;
+    w.step = OLineStep::Complete;
+    Ok(None)
+}
+
+// ── Batch CreateLease ───────────────────────────────────────────────────────
+
+/// Apply provider selections to states, build MsgCreateLease for each phase,
+/// and broadcast them in a single transaction. Returns leased phases.
+async fn create_leases_batch(
+    w: &OLineWorkflow,
+    phases: Vec<PhaseWithBids>,
+    is_direct: bool,
+) -> Result<Vec<LeasedPhase>, DeployError> {
+    // Apply provider selections and build bid IDs.
+    let mut selected: Vec<(PhaseSlot, DeploymentState, BidId)> =
+        Vec::with_capacity(phases.len());
+
+    for mut phase in phases {
+        let provider = match phase.provider_choice {
+            ProviderChoice::Selected(p) => p,
+            ProviderChoice::NeedsSelection => {
+                unreachable!("all phases have providers at this point")
+            }
+        };
+        DeploymentWorkflow::<AkashClient>::select_provider(&mut phase.state, &provider)?;
+
+        let bid = find_bid_for_provider(
+            &phase.bids,
+            phase.state.selected_provider.as_ref().unwrap(),
+        )?;
         let bid_id = BidId::from_bid(
-            &state.owner,
-            state.dseq.unwrap(),
-            state.gseq,
-            state.oseq,
+            &phase.state.owner,
+            phase.state.dseq.unwrap(),
+            phase.state.gseq,
+            phase.state.oseq,
             &bid,
         );
-        lease_msgs.push(build_create_lease_msg(&bid_id));
-        Some(bid_id)
-    } else {
-        None
-    };
+        selected.push((phase.slot, phase.state, bid_id));
+    }
 
-    // Phase C (optional)
-    let bid_id_c = if let (Some(ref bids), Some(ref state)) = (&bids_c, &state_c) {
-        let bid = find_bid_for_provider(bids, state.selected_provider.as_ref().unwrap())?;
-        let bid_id = BidId::from_bid(
-            &state.owner,
-            state.dseq.unwrap(),
-            state.gseq,
-            state.oseq,
-            &bid,
-        );
-        lease_msgs.push(build_create_lease_msg(&bid_id));
-        Some(bid_id)
-    } else {
-        None
-    };
-
-    // Phase E (optional)
-    let bid_id_e = if let (Some(ref bids), Some(ref state)) = (&bids_e, &state_e) {
-        let bid = find_bid_for_provider(bids, state.selected_provider.as_ref().unwrap())?;
-        let bid_id = BidId::from_bid(
-            &state.owner,
-            state.dseq.unwrap(),
-            state.gseq,
-            state.oseq,
-            &bid,
-        );
-        lease_msgs.push(build_create_lease_msg(&bid_id));
-        Some(bid_id)
-    } else {
-        None
-    };
+    let lease_msgs: Vec<_> = selected
+        .iter()
+        .map(|(_, _, bid_id)| build_create_lease_msg(bid_id))
+        .collect();
 
     tracing::info!(
         msgs = lease_msgs.len(),
@@ -1114,41 +1027,17 @@ pub async fn deploy_all_units(
         lease_msgs.len()
     );
 
-    // Obtain deployer refs for signer access.
-    let d0: &_ = w
-        .ctx
-        .units
-        .get(0)
-        .map(|u| &u.deployer)
-        .unwrap_or(&w.ctx.deployer);
-    let d1: &_ = w
-        .ctx
-        .units
-        .get(1)
-        .map(|u| &u.deployer)
-        .unwrap_or(&w.ctx.deployer);
-    let d2: &_ = w
-        .ctx
-        .units
-        .get(2)
-        .map(|u| &u.deployer)
-        .unwrap_or(&w.ctx.deployer);
-    let d3: &_ = w
-        .ctx
-        .units
-        .get(3)
-        .map(|u| &u.deployer)
-        .unwrap_or(&w.ctx.deployer);
-
+    let d0 = deployer_for_index(&w.ctx, 0);
     let querier = &d0.client.signing_client().querier;
     let chain_id = querier.chain_config.chain_id.as_str();
 
     if is_direct {
-        // Single signer (master) — all MsgCreateLease in one tx.
         let acct = querier
             .base_account(d0.client.address_ref())
             .await
-            .map_err(|e| DeployError::Query(format!("base_account master for lease: {}", e)))?;
+            .map_err(|e| {
+                DeployError::Query(format!("base_account master for lease: {}", e))
+            })?;
 
         let signer_entries = vec![SignerEntry {
             signer: &w.ctx.deployer.signer,
@@ -1171,101 +1060,51 @@ pub async fn deploy_all_units(
             "  Batch lease tx confirmed (direct mode)"
         );
 
-        // Record on all states and transition to SendManifest.
-        state_a.record_tx(&batch_tx.hash);
-        state_a.lease_id = Some(bid_id_a.into());
-        state_a.transition(Step::SendManifest);
-
-        if let (Some(bid_id), Some(ref mut s)) = (bid_id_b.as_ref(), &mut state_b) {
-            s.record_tx(&batch_tx.hash);
-            s.lease_id = Some(bid_id.clone().into());
-            s.transition(Step::SendManifest);
-        }
-        if let (Some(bid_id), Some(ref mut s)) = (bid_id_c.as_ref(), &mut state_c) {
-            s.record_tx(&batch_tx.hash);
-            s.lease_id = Some(bid_id.clone().into());
-            s.transition(Step::SendManifest);
-        }
-        if let (Some(bid_id), Some(ref mut s)) = (bid_id_e.as_ref(), &mut state_e) {
-            s.record_tx(&batch_tx.hash);
-            s.lease_id = Some(bid_id.clone().into());
-            s.transition(Step::SendManifest);
-        }
+        Ok(selected
+            .into_iter()
+            .map(|(slot, mut state, bid_id)| {
+                state.record_tx(&batch_tx.hash);
+                state.lease_id = Some(bid_id.into());
+                state.transition(Step::SendManifest);
+                LeasedPhase { slot, state }
+            })
+            .collect())
     } else {
-        // HD mode: one SignerEntry per child signer (same pattern as CreateDeployment batch).
+        // HD mode: one SignerEntry per child signer.
         let mnemonic = &w.ctx.deployer.config.mnemonic;
+        let mut accounts = Vec::with_capacity(selected.len());
+        let mut signers = Vec::with_capacity(selected.len());
 
-        let acct_0 = querier
-            .base_account(d0.client.address_ref())
-            .await
-            .map_err(|e| DeployError::Query(format!("base_account d0 for lease: {}", e)))?;
-        let signer_0 = derive_child_signer(
-            mnemonic,
-            w.ctx.units.get(0).map(|u| u.hd_index).unwrap_or(0),
-        )?;
-        let mut signer_entries: Vec<SignerEntry<'_>> = vec![SignerEntry {
-            signer: &signer_0,
-            account_number: acct_0.account_number,
-            sequence: acct_0.sequence,
-            messages: vec![build_create_lease_msg(&bid_id_a)],
-        }];
-
-        let signer_1;
-        let acct_1;
-        if let Some(ref bid_id) = bid_id_b {
-            acct_1 = querier
-                .base_account(d1.client.address_ref())
+        for (i, (slot, _, _)) in selected.iter().enumerate() {
+            let d = deployer_for_index(&w.ctx, slot.unit_index);
+            let acct = querier
+                .base_account(d.client.address_ref())
                 .await
-                .map_err(|e| DeployError::Query(format!("base_account d1 for lease: {}", e)))?;
-            signer_1 = derive_child_signer(
-                mnemonic,
-                w.ctx.units.get(1).map(|u| u.hd_index).unwrap_or(1),
-            )?;
-            signer_entries.push(SignerEntry {
-                signer: &signer_1,
-                account_number: acct_1.account_number,
-                sequence: acct_1.sequence,
-                messages: vec![build_create_lease_msg(bid_id)],
-            });
+                .map_err(|e| {
+                    DeployError::Query(format!("base_account d{} for lease: {}", i, e))
+                })?;
+            let hd_index = w
+                .ctx
+                .units
+                .get(slot.unit_index)
+                .map(|u| u.hd_index)
+                .unwrap_or(slot.unit_index as u32);
+            let signer = derive_child_signer(mnemonic, hd_index)?;
+            accounts.push(acct);
+            signers.push(signer);
         }
 
-        let signer_2;
-        let acct_2;
-        if let Some(ref bid_id) = bid_id_c {
-            acct_2 = querier
-                .base_account(d2.client.address_ref())
-                .await
-                .map_err(|e| DeployError::Query(format!("base_account d2 for lease: {}", e)))?;
-            signer_2 = derive_child_signer(
-                mnemonic,
-                w.ctx.units.get(2).map(|u| u.hd_index).unwrap_or(2),
-            )?;
-            signer_entries.push(SignerEntry {
-                signer: &signer_2,
-                account_number: acct_2.account_number,
-                sequence: acct_2.sequence,
+        let signer_entries: Vec<SignerEntry<'_>> = signers
+            .iter()
+            .zip(accounts.iter())
+            .zip(selected.iter().map(|(_, _, bid_id)| bid_id))
+            .map(|((signer, acct), bid_id)| SignerEntry {
+                signer,
+                account_number: acct.account_number,
+                sequence: acct.sequence,
                 messages: vec![build_create_lease_msg(bid_id)],
-            });
-        }
-
-        let signer_3;
-        let acct_3;
-        if let Some(ref bid_id) = bid_id_e {
-            acct_3 = querier
-                .base_account(d3.client.address_ref())
-                .await
-                .map_err(|e| DeployError::Query(format!("base_account d3 for lease: {}", e)))?;
-            signer_3 = derive_child_signer(
-                mnemonic,
-                w.ctx.units.get(3).map(|u| u.hd_index).unwrap_or(3),
-            )?;
-            signer_entries.push(SignerEntry {
-                signer: &signer_3,
-                account_number: acct_3.account_number,
-                sequence: acct_3.sequence,
-                messages: vec![build_create_lease_msg(bid_id)],
-            });
-        }
+            })
+            .collect();
 
         let batch_tx = broadcast_multi_signer(
             querier,
@@ -1281,29 +1120,27 @@ pub async fn deploy_all_units(
             "  Batch lease tx confirmed (HD mode)"
         );
 
-        // Record on all states and transition to SendManifest.
-        state_a.record_tx(&batch_tx.hash);
-        state_a.lease_id = Some(bid_id_a.into());
-        state_a.transition(Step::SendManifest);
-
-        if let (Some(bid_id), Some(ref mut s)) = (bid_id_b, &mut state_b) {
-            s.record_tx(&batch_tx.hash);
-            s.lease_id = Some(bid_id.into());
-            s.transition(Step::SendManifest);
-        }
-        if let (Some(bid_id), Some(ref mut s)) = (bid_id_c, &mut state_c) {
-            s.record_tx(&batch_tx.hash);
-            s.lease_id = Some(bid_id.into());
-            s.transition(Step::SendManifest);
-        }
-        if let (Some(bid_id), Some(ref mut s)) = (bid_id_e, &mut state_e) {
-            s.record_tx(&batch_tx.hash);
-            s.lease_id = Some(bid_id.into());
-            s.transition(Step::SendManifest);
-        }
+        Ok(selected
+            .into_iter()
+            .map(|(slot, mut state, bid_id)| {
+                state.record_tx(&batch_tx.hash);
+                state.lease_id = Some(bid_id.into());
+                state.transition(Step::SendManifest);
+                LeasedPhase { slot, state }
+            })
+            .collect())
     }
+}
 
-    // Generate JWT for provider auth (shared across all phases).
+// ── JWT + SendManifest + WaitForEndpoints ───────────────────────────────────
+
+/// Generate a JWT and complete deployment (SendManifest + WaitForEndpoints)
+/// for all leased phases. Returns each phase index paired with its endpoint result.
+async fn complete_manifests(
+    w: &OLineWorkflow,
+    phases: &mut [LeasedPhase],
+    is_direct: bool,
+) -> Result<Vec<(usize, Result<Vec<ServiceEndpoint>, DeployError>)>, DeployError> {
     let jwt_token = w
         .ctx
         .deployer
@@ -1311,94 +1148,549 @@ pub async fn deploy_all_units(
         .generate_jwt(&w.ctx.deployer.client.address())
         .await
         .map_err(|e| DeployError::InvalidState(format!("JWT generation failed: {}", e)))?;
-    state_a.jwt_token = Some(jwt_token.clone());
-    if let Some(ref mut s) = state_b {
-        s.jwt_token = Some(jwt_token.clone());
-    }
-    if let Some(ref mut s) = state_c {
-        s.jwt_token = Some(jwt_token.clone());
-    }
-    if let Some(ref mut s) = state_e {
-        s.jwt_token = Some(jwt_token);
+
+    for phase in phases.iter_mut() {
+        phase.state.jwt_token = Some(jwt_token.clone());
     }
 
-    // Complete remaining steps (SendManifest + WaitForEndpoints) — CreateLease already done.
-    type EpsRes = Result<Vec<ServiceEndpoint>, DeployError>;
-    type OptEpsRes = Result<Option<Vec<ServiceEndpoint>>, DeployError>;
-
-    let (eps_a, eps_b, eps_c, eps_e): (EpsRes, OptEpsRes, OptEpsRes, OptEpsRes);
+    let mut results: Vec<(usize, Result<Vec<ServiceEndpoint>, DeployError>)> =
+        Vec::with_capacity(phases.len());
 
     if is_direct {
         tracing::info!("  Completing deployments sequentially (SendManifest + endpoints)...");
         let d = &w.ctx.deployer;
-        eps_a = d.deploy_phase_complete(&mut state_a, "oline-phase-a").await;
-        eps_b = match state_b.as_mut() {
-            Some(s) => d.deploy_phase_complete(s, "oline-phase-b").await.map(Some),
-            None => Ok(None),
-        };
-        eps_c = match state_c.as_mut() {
-            Some(s) => d.deploy_phase_complete(s, "oline-phase-c").await.map(Some),
-            None => Ok(None),
-        };
-        eps_e = match state_e.as_mut() {
-            Some(s) => d.deploy_phase_complete(s, "oline-phase-e").await.map(Some),
-            None => Ok(None),
-        };
+        for (i, phase) in phases.iter_mut().enumerate() {
+            let res = d
+                .deploy_phase_complete(&mut phase.state, phase.slot.label)
+                .await;
+            results.push((i, res));
+        }
     } else {
         tracing::info!("  Completing deployments in parallel (SendManifest + endpoints)...");
+        for (i, phase) in phases.iter_mut().enumerate() {
+            let d = deployer_for_index(&w.ctx, phase.slot.unit_index);
+            let res = d
+                .deploy_phase_complete(&mut phase.state, phase.slot.label)
+                .await;
+            results.push((i, res));
+        }
+    }
 
-        // Re-borrow deployers for manifest sends.
-        let d0: &_ = w
-            .ctx
-            .units
-            .get(0)
-            .map(|u| &u.deployer)
-            .unwrap_or(&w.ctx.deployer);
-        let d1: &_ = w
-            .ctx
-            .units
-            .get(1)
-            .map(|u| &u.deployer)
-            .unwrap_or(&w.ctx.deployer);
-        let d2: &_ = w
-            .ctx
-            .units
-            .get(2)
-            .map(|u| &u.deployer)
-            .unwrap_or(&w.ctx.deployer);
-        let d3: &_ = w
-            .ctx
-            .units
-            .get(3)
-            .map(|u| &u.deployer)
-            .unwrap_or(&w.ctx.deployer);
+    Ok(results)
+}
 
-        (eps_a, eps_b, eps_c, eps_e) = tokio::join!(
-            d0.deploy_phase_complete(&mut state_a, "oline-phase-a"),
-            async {
-                match state_b.as_mut() {
-                    Some(s) => d1.deploy_phase_complete(s, "oline-phase-b").await.map(Some),
-                    None => Ok(None),
-                }
-            },
-            async {
-                match state_c.as_mut() {
-                    Some(s) => d2.deploy_phase_complete(s, "oline-phase-c").await.map(Some),
-                    None => Ok(None),
-                }
-            },
-            async {
-                match state_e.as_mut() {
-                    Some(s) => d3.deploy_phase_complete(s, "oline-phase-e").await.map(Some),
-                    None => Ok(None),
-                }
-            },
+// ── Phase result recording ──────────────────────────────────────────────────
+
+/// Extract unique service names from endpoints (preserving insertion order).
+fn unique_services(endpoints: &[ServiceEndpoint]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    endpoints
+        .iter()
+        .filter_map(|e| {
+            if seen.insert(e.service.clone()) {
+                Some(e.service.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Record a successfully deployed phase into session state, deployment store,
+/// and node registry. Handles Phase E's special SSH key separately.
+async fn record_deployed_phase(
+    w: &mut OLineWorkflow,
+    slot: &PhaseSlot,
+    state: &DeploymentState,
+    endpoints: &[ServiceEndpoint],
+    key_name: &str,
+    password: &str,
+    ssh_port_internal: u16,
+) -> Result<(), DeployError> {
+    let dseq = state.dseq.unwrap_or(0);
+    tracing::info!(
+        "  [Phase {}] Deployed. DSEQ: {}",
+        slot.phase_letter,
+        dseq
+    );
+
+    w.ctx
+        .deployer
+        .deployment_store
+        .save(
+            &DeploymentRecord::from_state(state, &w.ctx.deployer.password)
+                .map_err(|e| DeployError::InvalidState(e.to_string()))?,
+        )
+        .await
+        .ok();
+
+    // Node registration — Phase E has dynamic service names.
+    if slot.phase == DeployPhase::Relayer {
+        register_phase_e_nodes(
+            w,
+            &slot.vars,
+            state,
+            endpoints,
+            password,
+            ssh_port_internal,
+        );
+    } else {
+        register_phase_nodes(
+            endpoints,
+            dseq,
+            &slot.node_services,
+            key_name,
+            slot.phase_letter,
+            password,
+            ssh_port_internal,
         );
     }
 
-    let a_endpoints = eps_a?;
+    let account_index = w
+        .ctx
+        .units
+        .get(slot.unit_index)
+        .map(|u| u.hd_index)
+        .unwrap_or(0);
 
-    // ── Node registration setup ────────────────────────────────────────────
+    w.ctx.session.deployments.push(DeploymentEntry {
+        phase: slot.session_phase.into(),
+        dseq,
+        account_index,
+        label: slot.label.into(),
+        provider: state.selected_provider.clone(),
+        endpoints: endpoints
+            .iter()
+            .map(|e| format!("{}:{}", e.service, e.port))
+            .collect(),
+        gseq: state.gseq,
+        oseq: state.oseq,
+        services: unique_services(endpoints),
+    });
+
+    w.ctx
+        .set_phase_result(slot.phase.clone(), PhaseResult::Deployed);
+    w.ctx.session_store.save(&w.ctx.session).ok();
+    Ok(())
+}
+
+/// Handle Phase E's special SSH key and dynamic service registration.
+fn register_phase_e_nodes(
+    _w: &OLineWorkflow,
+    e_vars: &HashMap<String, String>,
+    state: &DeploymentState,
+    endpoints: &[ServiceEndpoint],
+    password: &str,
+    ssh_port_internal: u16,
+) {
+    let Some(privkey_pem) = e_vars.get("SSH_PRIVKEY") else {
+        return;
+    };
+    let e_key_name = format!("oline-phase-e-key-{}", state.dseq.unwrap_or(0));
+    let e_key_path = crate::config::oline_config_dir().join(&e_key_name);
+    match ssh_key::PrivateKey::from_openssh(privkey_pem.as_bytes()) {
+        Ok(k) => {
+            if let Err(e) = crate::crypto::save_ssh_key_encrypted(&k, &e_key_path, password) {
+                tracing::warn!("  [Phase E] Failed to save SSH key: {}", e);
+                return;
+            }
+            let e_services: Vec<String> = endpoints
+                .iter()
+                .filter(|ep| ep.internal_port == ssh_port_internal)
+                .map(|ep| ep.service.clone())
+                .collect();
+            let e_svc_pairs: Vec<(&str, String)> = e_services
+                .iter()
+                .map(|svc| (svc.as_str(), format!("Phase E - {}", svc)))
+                .collect();
+            let e_svc_refs: Vec<(&str, &str)> = e_svc_pairs
+                .iter()
+                .map(|(s, l)| (*s, l.as_str()))
+                .collect();
+            register_phase_nodes(
+                endpoints,
+                state.dseq.unwrap_or(0),
+                &e_svc_refs,
+                &e_key_name,
+                "E",
+                password,
+                ssh_port_internal,
+            );
+        }
+        Err(e) => tracing::warn!("  [Phase E] Invalid SSH key: {}", e),
+    }
+}
+
+// ── Statesync RPC extraction ────────────────────────────────────────────────
+
+/// Extract statesync RPC addresses from Phase A endpoints (snapshot + seed).
+fn extract_statesync_rpc(endpoints: &[ServiceEndpoint]) -> String {
+    let snap_rpc =
+        OLineDeployer::find_endpoint_by_internal_port(endpoints, "oline-a-snapshot", 26657)
+            .map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port))
+            .unwrap_or_default();
+    let seed_rpc =
+        OLineDeployer::find_endpoint_by_internal_port(endpoints, "oline-a-seed", 26657)
+            .map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port))
+            .unwrap_or_default();
+    match (snap_rpc.is_empty(), seed_rpc.is_empty()) {
+        (false, false) => format!("{},{}", snap_rpc, seed_rpc),
+        (false, true) => snap_rpc,
+        (true, false) => seed_rpc,
+        (true, true) => String::new(),
+    }
+}
+
+// ── DNS updates ─────────────────────────────────────────────────────────────
+
+/// Update Cloudflare DNS for all deployed phases (accept domains + P2P domains).
+async fn update_dns_after_deploy(w: &OLineWorkflow) {
+    let cf_token = w.ctx.deployer.config.val("OLINE_CF_API_TOKEN");
+    let cf_zone = w.ctx.deployer.config.val("OLINE_CF_ZONE_ID");
+    if cf_token.is_empty() || cf_zone.is_empty() {
+        return;
+    }
+
+    // HTTP/HTTPS accept domains (proxied through Cloudflare).
+    for phase in DeployPhase::ALL {
+        if let Some(state) = w.ctx.state(phase.clone()) {
+            if let Some(ref sdl) = state.sdl_content {
+                let eps = w.ctx.endpoints(phase).to_vec();
+                if !eps.is_empty() {
+                    cloudflare_update_accept_domains(sdl, &eps, &cf_token, &cf_zone).await;
+                }
+            }
+        }
+    }
+
+    // P2P domains: DNS-only A records (NOT proxied — raw TCP for CometBFT P2P).
+    let cfg = &w.ctx.deployer.config;
+    let val = |k: &str| {
+        let v = cfg.val(k);
+        if v.is_empty() {
+            String::new()
+        } else {
+            v
+        }
+    };
+
+    let a_eps = w.ctx.endpoints(DeployPhase::SpecialTeams).to_vec();
+    if !a_eps.is_empty() {
+        let snap_p2p: u16 = val("P2P_P_SNAP").parse().unwrap_or(26656);
+        let seed_p2p: u16 = val("P2P_P_SEED").parse().unwrap_or(26656);
+        let d_snap = val("P2P_D_SNAP");
+        let d_seed = val("P2P_D_SEED");
+        let entries = [
+            (d_snap.as_str(), snap_p2p, "oline-a-snapshot"),
+            (d_seed.as_str(), seed_p2p, "oline-a-seed"),
+        ];
+        cloudflare_update_p2p_domains(&entries, &a_eps, &cf_token, &cf_zone).await;
+    }
+
+    let b_eps = w.ctx.endpoints(DeployPhase::Tackles).to_vec();
+    if !b_eps.is_empty() {
+        let tl_p2p: u16 = val("P2P_P_TL").parse().unwrap_or(26656);
+        let tr_p2p: u16 = val("P2P_P_TR").parse().unwrap_or(26656);
+        let d_tl = val("P2P_D_TL");
+        let d_tr = val("P2P_D_TR");
+        let entries = [
+            (d_tl.as_str(), tl_p2p, "oline-b-left-tackle"),
+            (d_tr.as_str(), tr_p2p, "oline-b-right-tackle"),
+        ];
+        cloudflare_update_p2p_domains(&entries, &b_eps, &cf_token, &cf_zone).await;
+    }
+
+    let c_eps = w.ctx.endpoints(DeployPhase::Forwards).to_vec();
+    if !c_eps.is_empty() {
+        let fl_p2p: u16 = val("P2P_P_FL").parse().unwrap_or(26656);
+        let fr_p2p: u16 = val("P2P_P_FR").parse().unwrap_or(26656);
+        let d_fl = val("P2P_D_FL");
+        let d_fr = val("P2P_D_FR");
+        let entries = [
+            (d_fl.as_str(), fl_p2p, "oline-c-left-forward"),
+            (d_fr.as_str(), fr_p2p, "oline-c-right-forward"),
+        ];
+        cloudflare_update_p2p_domains(&entries, &c_eps, &cf_token, &cf_zone).await;
+    }
+}
+
+// ── SSH init: push scripts and signal Phase A ───────────────────────────────
+
+/// Push scripts to the snapshot node with retry, then signal it to start syncing.
+/// Returns `true` if the signal succeeded (snapshot is bootstrapping).
+async fn push_and_signal_snapshot(
+    w: &OLineWorkflow,
+    scripts_path: &str,
+    nginx_path: &str,
+) -> bool {
+    let snapshot_eps = w
+        .ctx
+        .service_endpoints(DeployPhase::SpecialTeams, "oline-a-snapshot");
+    if snapshot_eps.is_empty() {
+        return false;
+    }
+
+    tracing::info!("  [init] Pushing scripts to snapshot node...");
+    let mut attempt = 0u32;
+    let pushed = loop {
+        match push_scripts_sftp(
+            "init-snapshot",
+            &snapshot_eps,
+            &w.ctx.ssh_key_path,
+            scripts_path,
+            Some(nginx_path),
+        )
+        .await
+        {
+            Ok(_) => break true,
+            Err(e) => {
+                attempt += 1;
+                if attempt >= MAX_RETRIES as u32 {
+                    tracing::warn!(
+                        "  [init] Script push to snapshot failed after {}: {}",
+                        attempt,
+                        e
+                    );
+                    break false;
+                }
+                tracing::info!(
+                    "  [init] SSH not ready yet ({}/{}): {} — retrying in 5s",
+                    attempt,
+                    MAX_RETRIES,
+                    e
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        }
+    };
+
+    if !pushed {
+        return false;
+    }
+
+    let mut snap_refresh = node_refresh_vars(&w.ctx.a_vars, "SNAP");
+    inject_p2p_nodeport(&mut snap_refresh, &snapshot_eps, "oline-a-snapshot");
+    match verify_files_and_signal_start(
+        "init-snapshot",
+        &snapshot_eps,
+        &w.ctx.ssh_key_path,
+        &[],
+        &snap_refresh,
+    )
+    .await
+    {
+        Ok(_) => {
+            tracing::info!("  [init] Snapshot signaled — sync started.");
+            true
+        }
+        Err(e) => {
+            tracing::warn!(
+                "  [init] Snapshot signal failed: {} — will retry in WaitSnapshotReady.",
+                e
+            );
+            false
+        }
+    }
+}
+
+/// Push scripts to seed and minio nodes (Phase A), and sentry nodes (B/C).
+async fn push_scripts_to_remaining_nodes(
+    w: &OLineWorkflow,
+    scripts_path: &str,
+    nginx_path: &str,
+) {
+    // Phase A: seed node
+    let seed_eps = w
+        .ctx
+        .service_endpoints(DeployPhase::SpecialTeams, "oline-a-seed");
+    if !seed_eps.is_empty() {
+        tracing::info!("  [init] Pushing scripts to seed node...");
+        let _ = push_scripts_sftp(
+            "init-seed",
+            &seed_eps,
+            &w.ctx.ssh_key_path,
+            scripts_path,
+            Some(nginx_path),
+        )
+        .await;
+        let mut seed_refresh = node_refresh_vars(&w.ctx.a_vars, "SEED");
+        inject_p2p_nodeport(&mut seed_refresh, &seed_eps, "oline-a-seed");
+        let _ = verify_files_and_signal_start(
+            "init-seed",
+            &seed_eps,
+            &w.ctx.ssh_key_path,
+            &[],
+            &seed_refresh,
+        )
+        .await;
+    }
+
+    // Phase A: minio node
+    let minio_eps = w
+        .ctx
+        .service_endpoints(DeployPhase::SpecialTeams, "oline-a-minio-ipfs");
+    if !minio_eps.is_empty() {
+        tracing::info!("  [init] Pushing scripts to minio node...");
+        let _ = push_scripts_sftp(
+            "init-minio",
+            &minio_eps,
+            &w.ctx.ssh_key_path,
+            scripts_path,
+            None,
+        )
+        .await;
+    }
+
+    // Phase B: tackle nodes (push only; signal comes in SignalAllNodes)
+    push_scripts_to_sentry_services(w, DeployPhase::Tackles, scripts_path).await;
+
+    // Phase C: forward nodes (push only; signal + peers come in InjectPeers)
+    push_scripts_to_sentry_services(w, DeployPhase::Forwards, scripts_path).await;
+}
+
+/// Push scripts to all sentry services in a phase (no signal — just file delivery).
+async fn push_scripts_to_sentry_services(
+    w: &OLineWorkflow,
+    phase: DeployPhase,
+    scripts_path: &str,
+) {
+    let services: &[&str] = match phase {
+        DeployPhase::Tackles => &["oline-b-left-node", "oline-b-right-node"],
+        DeployPhase::Forwards => &["oline-c-left-node", "oline-c-right-node"],
+        _ => return,
+    };
+    let all_eps = w.ctx.endpoints(phase).to_vec();
+    for svc in services {
+        let eps: Vec<_> = all_eps
+            .iter()
+            .filter(|e| e.service == *svc)
+            .cloned()
+            .collect();
+        if !eps.is_empty() {
+            tracing::info!("  [init] Pushing scripts to {}...", svc);
+            let _ =
+                push_scripts_sftp(svc, &eps, &w.ctx.ssh_key_path, scripts_path, None).await;
+        }
+    }
+}
+
+/// Detect whether a pre-start snapshot exists (for testing).
+fn has_pre_start_snapshot() -> bool {
+    let snap_env =
+        std::env::var("E2E_SNAP_PATH").or_else(|_| std::env::var("OLINE_PRE_START_SNAP"));
+    tracing::info!("  [debug] OLINE_PRE_START_SNAP env = {:?}", snap_env);
+    if let Ok(ref p) = snap_env {
+        tracing::info!(
+            "  [debug] file exists? {}",
+            std::path::Path::new(p).exists()
+        );
+    }
+    std::env::var("E2E_SNAP_PATH")
+        .or_else(|_| std::env::var("OLINE_PRE_START_SNAP"))
+        .ok()
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.exists())
+        .is_some()
+}
+
+/// Push scripts to all nodes and signal Phase A to start syncing.
+async fn ssh_init_all_nodes(w: &mut OLineWorkflow) {
+    let scripts_path = var("OLINE_SCRIPTS_PATH").unwrap_or_else(|_| "plays/audible".into());
+    let nginx_path =
+        var("OLINE_NGINX_PATH").unwrap_or_else(|_| "plays/flea-flicker/nginx".into());
+
+    if !has_pre_start_snapshot() {
+        if push_and_signal_snapshot(w, &scripts_path, &nginx_path).await {
+            w.ctx.phase_a_bootstrapped = true;
+        }
+        push_scripts_to_remaining_nodes(w, &scripts_path, &nginx_path).await;
+    } else {
+        tracing::info!(
+            "  [init] Pre-start snapshot detected — deferring Phase A signal to WaitSnapshotReady."
+        );
+        // Still push scripts to B/C sentry nodes.
+        push_scripts_to_sentry_services(w, DeployPhase::Tackles, &scripts_path).await;
+        push_scripts_to_sentry_services(w, DeployPhase::Forwards, &scripts_path).await;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Step 2: DeployAllUnits — orchestrator
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Deploy all phases, storing state + endpoints before snapshot sync.
+///
+/// Phases B and C are deployed with empty peer/statesync vars (`SNAPSHOT_MODE=sftp`).
+/// The entrypoint will wait for the deployer to push the snapshot archive before
+/// starting the chain process. Peer injection happens in `inject_peers` after
+/// snapshot sync.
+pub async fn deploy_all_units(
+    w: &mut OLineWorkflow,
+    lines: &mut Lines<impl BufRead>,
+) -> Result<StepResult, DeployError> {
+    tracing::info!("\n-- Parallel: deploy all units (concurrent MsgCreateDeployment) --");
+
+    // 1. Phase selection prompts.
+    let (run_b, run_c, run_e) = match prompt_phase_selection(w, lines)? {
+        Some(flags) => flags,
+        None => return Ok(StepResult::Complete),
+    };
+
+    // 2. Build SDL template variables for all active phases.
+    let (a_vars, b_vars, c_vars, e_vars) =
+        build_all_sdl_vars(w, run_b, run_c, run_e).await?;
+
+    // 3. Load SDL templates, render with vars, and build PhaseSlot descriptors.
+    let slots =
+        build_phase_slots(w, run_b, run_c, run_e, a_vars, b_vars, c_vars, e_vars.clone())?;
+
+    // 4. Build and broadcast MsgCreateDeployment batch.
+    tracing::info!("  Building multi-signer batch (1 tx for all MsgCreateDeployment)...");
+    let is_direct = w.ctx.units.is_empty();
+    let d0 = deployer_for_index(&w.ctx, 0);
+    let querier = &d0.client.signing_client().querier;
+    let base_dseq: u64 = querier
+        .block_height()
+        .await
+        .map_err(|e| DeployError::Query(format!("block_height for dseq: {}", e)))?;
+    let deposit_amount: u64 = 5_000_000; // 0.5 ACT
+    let deposit_denom = "uact";
+    tracing::info!(base_dseq, "  Base dseq for deployments");
+
+    if is_direct {
+        ensure_act_for_deposits(
+            &w.ctx.deployer,
+            &w.ctx.deployer.signer,
+            deposit_amount,
+            slots.len() as u64,
+        )
+        .await?;
+    }
+
+    let dseqs = broadcast_create_deployments(
+        w, &slots, base_dseq, deposit_amount, deposit_denom, is_direct,
+    )
+    .await?;
+
+    // 5. Create DeploymentState objects with assigned dseqs.
+    let mut states = create_deployment_states(&slots, &w.ctx, &dseqs);
+
+    // 6. Wait for bids on all active phases.
+    let phases_with_bids = wait_for_all_bids(&w.ctx, slots, &mut states).await?;
+
+    // 7. Provider selection (interactive or two-step non-interactive flow).
+    let phases_selected = match select_providers_for_all(w, lines, phases_with_bids).await? {
+        Some(p) => p,
+        None => return Ok(StepResult::Continue), // two-step: waiting for --select
+    };
+
+    // 8. Batch CreateLease for all phases in one transaction.
+    let mut leased_phases = create_leases_batch(w, phases_selected, is_direct).await?;
+
+    // 9. JWT + SendManifest + WaitForEndpoints for all phases.
+    let manifest_results = complete_manifests(w, &mut leased_phases, is_direct).await?;
+
+    // 10. Record results, register nodes, update session state.
     let ssh_port_internal: u16 = var("SSH_P")
         .unwrap_or_else(|_| "22".into())
         .parse()
@@ -1411,525 +1703,69 @@ pub async fn deploy_all_units(
         .unwrap_or_else(|| "oline-parallel-key".into());
     let password = w.ctx.deployer.password.clone();
 
-    // ── 7. Process Phase A result (required) ─────────────────────────────────
-
-    tracing::info!("  [Phase A] Deployed. DSEQ: {}", state_a.dseq.unwrap_or(0));
-    w.ctx
-        .deployer
-        .deployment_store
-        .save(
-            &DeploymentRecord::from_state(&state_a, &w.ctx.deployer.password)
-                .map_err(|e| DeployError::InvalidState(e.to_string()))?,
-        )
-        .await
-        .ok();
-
-    register_phase_nodes(
-        &a_endpoints,
-        state_a.dseq.unwrap_or(0),
-        &[
-            ("oline-a-snapshot", "Phase A - Snapshot"),
-            ("oline-a-seed", "Phase A - Seed"),
-            ("oline-a-minio-ipfs", "Phase A - MinIO"),
-        ],
-        &key_name,
-        "A",
-        &password,
-        ssh_port_internal,
-    );
-
-    let snap_rpc_ep =
-        OLineDeployer::find_endpoint_by_internal_port(&a_endpoints, "oline-a-snapshot", 26657);
-    let seed_rpc_ep =
-        OLineDeployer::find_endpoint_by_internal_port(&a_endpoints, "oline-a-seed", 26657);
-    let statesync_rpc = {
-        let s = snap_rpc_ep
-            .map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port))
-            .unwrap_or_default();
-        let sd = seed_rpc_ep
-            .map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port))
-            .unwrap_or_default();
-        match (s.is_empty(), sd.is_empty()) {
-            (false, false) => format!("{},{}", s, sd),
-            (false, true) => s,
-            (true, false) => sd,
-            (true, true) => String::new(),
-        }
-    };
-    w.ctx.statesync_rpc = statesync_rpc;
-
-    let a_account_index = w.ctx.units.get(0).map(|u| u.hd_index).unwrap_or(0);
-    w.ctx.session.deployments.push(DeploymentEntry {
-        phase: "special-teams".into(),
-        dseq: state_a.dseq.unwrap_or(0),
-        account_index: a_account_index,
-        label: "oline-phase-a".into(),
-        provider: state_a.selected_provider.clone(),
-        endpoints: a_endpoints
-            .iter()
-            .map(|e| format!("{}:{}", e.service, e.port))
-            .collect(),
-        gseq: state_a.gseq,
-        oseq: state_a.oseq,
-        services: {
-            let mut seen = std::collections::HashSet::new();
-            a_endpoints.iter().filter_map(|e| {
-                if seen.insert(e.service.clone()) { Some(e.service.clone()) } else { None }
-            }).collect()
-        },
-    });
-    w.ctx.set_endpoints(DeployPhase::SpecialTeams, a_endpoints);
-    w.ctx.set_state(DeployPhase::SpecialTeams, state_a);
-    w.ctx
-        .set_phase_result(DeployPhase::SpecialTeams, PhaseResult::Deployed);
-    w.ctx.session_store.save(&w.ctx.session).ok();
-
-    // ── 8. Process Phase B result ─────────────────────────────────────────────
-    let eps_b_ok = match eps_b {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!("  Phase B completion failed: {} — skipping.", e);
-            w.ctx
-                .set_phase_result(DeployPhase::Tackles, PhaseResult::Failed(e.to_string()));
-            None
-        }
-    };
-    match (state_b, eps_b_ok) {
-        (Some(b_state), Some(b_endpoints)) => {
-            tracing::info!("  [Phase B] Deployed. DSEQ: {}", b_state.dseq.unwrap_or(0));
-            w.ctx
-                .deployer
-                .deployment_store
-                .save(
-                    &DeploymentRecord::from_state(&b_state, &w.ctx.deployer.password)
-                        .map_err(|e| DeployError::InvalidState(e.to_string()))?,
-                )
-                .await
-                .ok();
-
-            register_phase_nodes(
-                &b_endpoints,
-                b_state.dseq.unwrap_or(0),
-                &[
-                    ("oline-b-left-node", "Phase B - Left Tackle"),
-                    ("oline-b-right-node", "Phase B - Right Tackle"),
-                ],
-                &key_name,
-                "B",
-                &password,
-                ssh_port_internal,
-            );
-
-            let b_account_index = w.ctx.units.get(1).map(|u| u.hd_index).unwrap_or(0);
-            w.ctx.session.deployments.push(DeploymentEntry {
-                phase: "tackles".into(),
-                dseq: b_state.dseq.unwrap_or(0),
-                account_index: b_account_index,
-                label: "oline-phase-b".into(),
-                provider: b_state.selected_provider.clone(),
-                endpoints: b_endpoints
-                    .iter()
-                    .map(|e| format!("{}:{}", e.service, e.port))
-                    .collect(),
-                gseq: b_state.gseq,
-                oseq: b_state.oseq,
-                services: {
-                    let mut seen = std::collections::HashSet::new();
-                    b_endpoints.iter().filter_map(|e| {
-                        if seen.insert(e.service.clone()) { Some(e.service.clone()) } else { None }
-                    }).collect()
-                },
-            });
-            w.ctx.set_endpoints(DeployPhase::Tackles, b_endpoints);
-            w.ctx.set_state(DeployPhase::Tackles, b_state);
-            w.ctx
-                .set_phase_result(DeployPhase::Tackles, PhaseResult::Deployed);
-            w.ctx.session_store.save(&w.ctx.session).ok();
-        }
-        _ => {} // skipped or failed in bid collection
-    }
-
-    // ── 9. Process Phase C result ─────────────────────────────────────────────
-    let eps_c_ok = match eps_c {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!("  Phase C completion failed: {} — skipping.", e);
-            w.ctx
-                .set_phase_result(DeployPhase::Forwards, PhaseResult::Failed(e.to_string()));
-            None
-        }
-    };
-    match (state_c, eps_c_ok) {
-        (Some(c_state), Some(c_endpoints)) => {
-            tracing::info!("  [Phase C] Deployed. DSEQ: {}", c_state.dseq.unwrap_or(0));
-            w.ctx
-                .deployer
-                .deployment_store
-                .save(
-                    &DeploymentRecord::from_state(&c_state, &w.ctx.deployer.password)
-                        .map_err(|e| DeployError::InvalidState(e.to_string()))?,
-                )
-                .await
-                .ok();
-
-            register_phase_nodes(
-                &c_endpoints,
-                c_state.dseq.unwrap_or(0),
-                &[
-                    ("oline-c-left-node", "Phase C - Left Forward"),
-                    ("oline-c-right-node", "Phase C - Right Forward"),
-                ],
-                &key_name,
-                "C",
-                &password,
-                ssh_port_internal,
-            );
-
-            let c_account_index = w.ctx.units.get(2).map(|u| u.hd_index).unwrap_or(0);
-            w.ctx.session.deployments.push(DeploymentEntry {
-                phase: "forwards".into(),
-                dseq: c_state.dseq.unwrap_or(0),
-                account_index: c_account_index,
-                label: "oline-phase-c".into(),
-                provider: c_state.selected_provider.clone(),
-                endpoints: c_endpoints
-                    .iter()
-                    .map(|e| format!("{}:{}", e.service, e.port))
-                    .collect(),
-                gseq: c_state.gseq,
-                oseq: c_state.oseq,
-                services: {
-                    let mut seen = std::collections::HashSet::new();
-                    c_endpoints.iter().filter_map(|e| {
-                        if seen.insert(e.service.clone()) { Some(e.service.clone()) } else { None }
-                    }).collect()
-                },
-            });
-            w.ctx.set_endpoints(DeployPhase::Forwards, c_endpoints);
-            w.ctx.set_state(DeployPhase::Forwards, c_state);
-            w.ctx
-                .set_phase_result(DeployPhase::Forwards, PhaseResult::Deployed);
-            w.ctx.session_store.save(&w.ctx.session).ok();
-        }
-        _ => {} // skipped or failed
-    }
-
-    // ── 10. Process Phase E result ────────────────────────────────────────────
-    let eps_e_ok = match eps_e {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!("  Phase E completion failed: {} — skipping.", e);
-            w.ctx
-                .set_phase_result(DeployPhase::Relayer, PhaseResult::Failed(e.to_string()));
-            None
-        }
-    };
-    match (state_e, eps_e_ok) {
-        (Some(e_state), Some(e_endpoints)) => {
-            tracing::info!("  [Phase E] Deployed. DSEQ: {}", e_state.dseq.unwrap_or(0));
-            w.ctx
-                .deployer
-                .deployment_store
-                .save(
-                    &DeploymentRecord::from_state(&e_state, &w.ctx.deployer.password)
-                        .map_err(|e| DeployError::InvalidState(e.to_string()))?,
-                )
-                .await
-                .ok();
-
-            // Phase E uses its own SSH key (generated in build_phase_rly_vars),
-            // not the shared parallel key. Save it to disk for node registration.
-            if let Some(privkey_pem) = e_vars.get("SSH_PRIVKEY") {
-                let e_key_name = format!("oline-phase-e-key-{}", e_state.dseq.unwrap_or(0));
-                let secrets_dir = var("SECRETS_PATH").unwrap_or_else(|_| ".".into());
-                let e_key_path = PathBuf::from(&secrets_dir).join(&e_key_name);
-                match ssh_key::PrivateKey::from_openssh(privkey_pem.as_bytes()) {
-                    Ok(k) => {
-                        if let Err(e) = crate::crypto::save_ssh_key(&k, &e_key_path) {
-                            tracing::warn!("  [Phase E] Failed to save SSH key: {}", e);
-                        } else {
-                            // Derive service names from endpoints (Phase E SDL varies).
-                            let e_services: Vec<String> = e_endpoints
-                                .iter()
-                                .filter(|ep| ep.internal_port == ssh_port_internal)
-                                .map(|ep| ep.service.clone())
-                                .collect();
-                            let e_svc_pairs: Vec<(&str, String)> = e_services
-                                .iter()
-                                .map(|svc| (svc.as_str(), format!("Phase E - {}", svc)))
-                                .collect();
-                            let e_svc_refs: Vec<(&str, &str)> = e_svc_pairs
-                                .iter()
-                                .map(|(s, l)| (*s, l.as_str()))
-                                .collect();
-                            register_phase_nodes(
-                                &e_endpoints,
-                                e_state.dseq.unwrap_or(0),
-                                &e_svc_refs,
-                                &e_key_name,
-                                "E",
-                                &password,
-                                ssh_port_internal,
-                            );
-                        }
-                    }
-                    Err(e) => tracing::warn!("  [Phase E] Invalid SSH key: {}", e),
-                }
-            }
-
-            let e_account_index = w.ctx.units.get(3).map(|u| u.hd_index).unwrap_or(0);
-            w.ctx.session.deployments.push(DeploymentEntry {
-                phase: "relayer".into(),
-                dseq: e_state.dseq.unwrap_or(0),
-                account_index: e_account_index,
-                label: "oline-phase-e".into(),
-                provider: e_state.selected_provider.clone(),
-                endpoints: e_endpoints
-                    .iter()
-                    .map(|e| format!("{}:{}", e.service, e.port))
-                    .collect(),
-                gseq: e_state.gseq,
-                oseq: e_state.oseq,
-                services: {
-                    let mut seen = std::collections::HashSet::new();
-                    e_endpoints.iter().filter_map(|e| {
-                        if seen.insert(e.service.clone()) { Some(e.service.clone()) } else { None }
-                    }).collect()
-                },
-            });
-            w.ctx.set_endpoints(DeployPhase::Relayer, e_endpoints);
-            w.ctx.set_state(DeployPhase::Relayer, e_state);
-            w.ctx
-                .set_phase_result(DeployPhase::Relayer, PhaseResult::Deployed);
-            w.ctx.session_store.save(&w.ctx.session).ok();
-        }
-        _ => {} // skipped or failed
-    }
-
-    // ── 11. DNS updates — all phases concurrently ─────────────────────────────
-    let cf_token = w.ctx.deployer.config.val("OLINE_CF_API_TOKEN");
-    let cf_zone = w.ctx.deployer.config.val("OLINE_CF_ZONE_ID");
-    if !cf_token.is_empty() && !cf_zone.is_empty() {
-        // HTTP/HTTPS accept domains (proxied through Cloudflare)
-        macro_rules! dns_phase {
-            ($phase:expr) => {{
-                let sdl_opt = w.ctx.state($phase).and_then(|s| s.sdl_content.clone());
-                let eps = w.ctx.endpoints($phase).to_vec();
-                if let Some(sdl) = sdl_opt {
-                    if !eps.is_empty() {
-                        cloudflare_update_accept_domains(&sdl, &eps, &cf_token, &cf_zone).await;
-                    }
-                }
-            }};
-        }
-        dns_phase!(DeployPhase::SpecialTeams);
-        dns_phase!(DeployPhase::Tackles);
-        dns_phase!(DeployPhase::Forwards);
-        dns_phase!(DeployPhase::Relayer);
-
-        // P2P domains: DNS-only A records (NOT proxied — raw TCP for CometBFT P2P)
-        {
-            let cfg = &w.ctx.deployer.config;
-            let val = |k: &str| {
-                let v = cfg.val(k);
-                if v.is_empty() { String::new() } else { v }
-            };
-
-            // Phase A: Snapshot + Seed
-            let a_eps = w.ctx.endpoints(DeployPhase::SpecialTeams).to_vec();
-            if !a_eps.is_empty() {
-                let snap_p2p: u16 = val("P2P_P_SNAP").parse().unwrap_or(26656);
-                let seed_p2p: u16 = val("P2P_P_SEED").parse().unwrap_or(26656);
-                let d_snap = val("P2P_D_SNAP");
-                let d_seed = val("P2P_D_SEED");
-                let entries = [
-                    (d_snap.as_str(), snap_p2p, "oline-a-snapshot"),
-                    (d_seed.as_str(), seed_p2p, "oline-a-seed"),
-                ];
-                cloudflare_update_p2p_domains(&entries, &a_eps, &cf_token, &cf_zone).await;
-            }
-
-            // Phase B: Tackles
-            let b_eps = w.ctx.endpoints(DeployPhase::Tackles).to_vec();
-            if !b_eps.is_empty() {
-                let tl_p2p: u16 = val("P2P_P_TL").parse().unwrap_or(26656);
-                let tr_p2p: u16 = val("P2P_P_TR").parse().unwrap_or(26656);
-                let d_tl = val("P2P_D_TL");
-                let d_tr = val("P2P_D_TR");
-                let entries = [
-                    (d_tl.as_str(), tl_p2p, "oline-b-left-tackle"),
-                    (d_tr.as_str(), tr_p2p, "oline-b-right-tackle"),
-                ];
-                cloudflare_update_p2p_domains(&entries, &b_eps, &cf_token, &cf_zone).await;
-            }
-
-            // Phase C: Forwards
-            let c_eps = w.ctx.endpoints(DeployPhase::Forwards).to_vec();
-            if !c_eps.is_empty() {
-                let fl_p2p: u16 = val("P2P_P_FL").parse().unwrap_or(26656);
-                let fr_p2p: u16 = val("P2P_P_FR").parse().unwrap_or(26656);
-                let d_fl = val("P2P_D_FL");
-                let d_fr = val("P2P_D_FR");
-                let entries = [
-                    (d_fl.as_str(), fl_p2p, "oline-c-left-forward"),
-                    (d_fr.as_str(), fr_p2p, "oline-c-right-forward"),
-                ];
-                cloudflare_update_p2p_domains(&entries, &c_eps, &cf_token, &cf_zone).await;
-            }
-        }
-    }
-
-    // ── 12. Immediate SSH init — push scripts to all nodes; signal Phase A ────
-    //
-    // All phases are deployed and DNS is propagating. We can now SSH into every
-    // node immediately. Phase A (snapshot + seed) are signaled to start syncing;
-    // Phase B/C scripts are pushed so nodes have them when peers arrive.
-    {
-        let scripts_path = var("OLINE_SCRIPTS_PATH").unwrap_or_else(|_| "plays/audible".into());
-        let nginx_path =
-            var("OLINE_NGINX_PATH").unwrap_or_else(|_| "plays/flea-flicker/nginx".into());
-
-        let has_pre_start = std::env::var("E2E_SNAP_PATH")
-            .or_else(|_| std::env::var("OLINE_PRE_START_SNAP"))
-            .ok()
-            .map(std::path::PathBuf::from)
-            .filter(|p| p.exists())
-            .is_some();
-
-        if !has_pre_start {
-            // ── Phase A: snapshot node ────────────────────────────────────────
-            let snapshot_eps = w
-                .ctx
-                .service_endpoints(DeployPhase::SpecialTeams, "oline-a-snapshot");
-            if !snapshot_eps.is_empty() {
-                tracing::info!("  [init] Pushing scripts to snapshot node...");
-                let mut attempt = 0u32;
-                let pushed = loop {
-                    match push_scripts_sftp(
-                        "init-snapshot",
-                        &snapshot_eps,
-                        &w.ctx.ssh_key_path,
-                        &scripts_path,
-                        Some(&nginx_path),
-                    )
-                    .await
-                    {
-                        Ok(_) => break true,
-                        Err(e) => {
-                            attempt += 1;
-                            if attempt >= MAX_RETRIES as u32 {
-                                tracing::warn!(
-                                    "  [init] Script push to snapshot failed after {}: {}",
-                                    attempt,
-                                    e
-                                );
-                                break false;
-                            }
-                            tracing::info!(
-                                "  [init] SSH not ready yet ({}/{}): {} — retrying in 5s",
-                                attempt,
-                                MAX_RETRIES,
-                                e
-                            );
-                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                        }
-                    }
+    for (idx, result) in manifest_results {
+        let phase = &leased_phases[idx];
+        match result {
+            Ok(endpoints) => {
+                // Build a slot reference with the correct vars (Phase E needs its own).
+                let slot_ref = PhaseSlot {
+                    phase: phase.slot.phase.clone(),
+                    select_key: phase.slot.select_key,
+                    label: phase.slot.label,
+                    rendered_sdl: String::new(), // not needed for recording
+                    vars: if phase.slot.phase == DeployPhase::Relayer {
+                        e_vars.clone()
+                    } else {
+                        phase.slot.vars.clone()
+                    },
+                    unit_index: phase.slot.unit_index,
+                    session_phase: phase.slot.session_phase,
+                    node_services: phase.slot.node_services.clone(),
+                    phase_letter: phase.slot.phase_letter,
                 };
-                if pushed {
-                    let mut snap_refresh = node_refresh_vars(&w.ctx.a_vars, "SNAP");
-                    inject_p2p_nodeport(&mut snap_refresh, &snapshot_eps, "oline-a-snapshot");
-                    match verify_files_and_signal_start(
-                        "init-snapshot",
-                        &snapshot_eps,
-                        &w.ctx.ssh_key_path,
-                        &[],
-                        &snap_refresh,
-                    )
-                    .await
-                    {
-                        Ok(_) => {
-                            tracing::info!("  [init] Snapshot signaled — sync started.");
-                            w.ctx.phase_a_bootstrapped = true;
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "  [init] Snapshot signal failed: {} — will retry in WaitSnapshotReady.",
-                                e
-                            );
-                        }
-                    }
+
+                record_deployed_phase(
+                    w,
+                    &slot_ref,
+                    &phase.state,
+                    &endpoints,
+                    &key_name,
+                    &password,
+                    ssh_port_internal,
+                )
+                .await?;
+
+                if phase.slot.phase == DeployPhase::SpecialTeams {
+                    w.ctx.statesync_rpc = extract_statesync_rpc(&endpoints);
                 }
-            }
 
-            // ── Phase A: seed node ────────────────────────────────────────────
-            let seed_eps = w
-                .ctx
-                .service_endpoints(DeployPhase::SpecialTeams, "oline-a-seed");
-            if !seed_eps.is_empty() {
-                tracing::info!("  [init] Pushing scripts to seed node...");
-                let _ = push_scripts_sftp(
-                    "init-seed",
-                    &seed_eps,
-                    &w.ctx.ssh_key_path,
-                    &scripts_path,
-                    Some(&nginx_path),
-                )
-                .await;
-                let mut seed_refresh = node_refresh_vars(&w.ctx.a_vars, "SEED");
-                inject_p2p_nodeport(&mut seed_refresh, &seed_eps, "oline-a-seed");
-                let _ = verify_files_and_signal_start(
-                    "init-seed",
-                    &seed_eps,
-                    &w.ctx.ssh_key_path,
-                    &[],
-                    &seed_refresh,
-                )
-                .await;
+                w.ctx
+                    .set_endpoints(phase.slot.phase.clone(), endpoints);
+                w.ctx
+                    .set_state(phase.slot.phase.clone(), phase.state.clone());
             }
-
-            // ── Phase A: minio node ───────────────────────────────────────────
-            let minio_eps = w
-                .ctx
-                .service_endpoints(DeployPhase::SpecialTeams, "oline-a-minio-ipfs");
-            if !minio_eps.is_empty() {
-                tracing::info!("  [init] Pushing scripts to minio node...");
-                let _ = push_scripts_sftp(
-                    "init-minio",
-                    &minio_eps,
-                    &w.ctx.ssh_key_path,
-                    &scripts_path,
-                    None,
-                )
-                .await;
-            }
-        } else {
-            tracing::info!(
-                "  [init] Pre-start snapshot detected — deferring Phase A signal to WaitSnapshotReady."
-            );
-        }
-
-        // ── Phase B: tackle nodes (push only; signal comes in SignalAllNodes) ─
-        let b_eps = w.ctx.endpoints(DeployPhase::Tackles).to_vec();
-        for svc in ["oline-b-left-node", "oline-b-right-node"] {
-            let eps: Vec<_> = b_eps.iter().filter(|e| e.service == svc).cloned().collect();
-            if !eps.is_empty() {
-                tracing::info!("  [init] Pushing scripts to {}...", svc);
-                let _ =
-                    push_scripts_sftp(svc, &eps, &w.ctx.ssh_key_path, &scripts_path, None).await;
-            }
-        }
-
-        // ── Phase C: forward nodes (push only; signal + peers come in InjectPeers) ─
-        let c_eps = w.ctx.endpoints(DeployPhase::Forwards).to_vec();
-        for svc in ["oline-c-left-node", "oline-c-right-node"] {
-            let eps: Vec<_> = c_eps.iter().filter(|e| e.service == svc).cloned().collect();
-            if !eps.is_empty() {
-                tracing::info!("  [init] Pushing scripts to {}...", svc);
-                let _ =
-                    push_scripts_sftp(svc, &eps, &w.ctx.ssh_key_path, &scripts_path, None).await;
+            Err(e) => {
+                if phase.slot.phase == DeployPhase::SpecialTeams {
+                    return Err(e); // Phase A is required
+                }
+                tracing::warn!(
+                    "  Phase {} completion failed: {} — skipping.",
+                    phase.slot.phase_letter,
+                    e
+                );
+                w.ctx.set_phase_result(
+                    phase.slot.phase.clone(),
+                    PhaseResult::Failed(e.to_string()),
+                );
             }
         }
     }
+
+    // 11. DNS updates for all deployed phases.
+    update_dns_after_deploy(w).await;
+
+    // 12. SSH init — push scripts to all nodes; signal Phase A.
+    ssh_init_all_nodes(w).await;
 
     w.step = OLineStep::SelectAllProviders;
     Ok(StepResult::Continue)
@@ -2703,4 +2539,82 @@ pub async fn wait_all_peers(
 
     w.step = OLineStep::Summary;
     Ok(StepResult::Continue)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pure dseq assignment logic (extracted for testability)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Compute the dseq to assign to each slot.
+///
+/// - Direct mode (`is_direct = true`): each slot gets a unique dseq starting at
+///   `base_dseq` and incrementing by 1. All deployments share one Akash account,
+///   so unique dseqs are required to avoid conflicts.
+/// - HD mode (`is_direct = false`): all slots get the same `base_dseq` because
+///   each slot deploys from a distinct child account — dseq namespaces are
+///   per-owner, so reuse is safe.
+///
+/// Returns a `Vec<u64>` of length `num_slots`.
+fn assign_dseqs(base_dseq: u64, num_slots: usize, is_direct: bool) -> Vec<u64> {
+    (0..num_slots)
+        .map(|i| {
+            if is_direct {
+                base_dseq + i as u64
+            } else {
+                base_dseq
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::assign_dseqs;
+
+    #[test]
+    fn test_dseq_assignment_direct_mode() {
+        // 4 phases in direct mode — each should get base, base+1, base+2, base+3.
+        let base: u64 = 1_000;
+        let dseqs = assign_dseqs(base, 4, true);
+        assert_eq!(dseqs, vec![1_000, 1_001, 1_002, 1_003]);
+    }
+
+    #[test]
+    fn test_dseq_assignment_hd_mode() {
+        // 4 phases in HD mode — all should share the same base dseq.
+        let base: u64 = 5_500;
+        let dseqs = assign_dseqs(base, 4, false);
+        assert_eq!(dseqs, vec![5_500, 5_500, 5_500, 5_500]);
+    }
+
+    #[test]
+    fn test_dseq_assignment_partial_phases() {
+        // Only 2 phases active (A + B) in direct mode.
+        let base: u64 = 42;
+        let dseqs = assign_dseqs(base, 2, true);
+        assert_eq!(dseqs, vec![42, 43]);
+    }
+
+    #[test]
+    fn test_dseq_assignment_single_phase_direct() {
+        // Single phase — offset never increments, result is just base.
+        let base: u64 = 9_999;
+        let dseqs = assign_dseqs(base, 1, true);
+        assert_eq!(dseqs, vec![9_999]);
+    }
+
+    #[test]
+    fn test_dseq_assignment_single_phase_hd() {
+        // Single phase HD — same behaviour as direct for 1 slot.
+        let base: u64 = 9_999;
+        let dseqs = assign_dseqs(base, 1, false);
+        assert_eq!(dseqs, vec![9_999]);
+    }
+
+    #[test]
+    fn test_dseq_assignment_zero_slots() {
+        // Edge case: no slots — should return empty vec.
+        let dseqs = assign_dseqs(100, 0, true);
+        assert!(dseqs.is_empty());
+    }
 }

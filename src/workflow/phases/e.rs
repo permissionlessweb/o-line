@@ -71,11 +71,10 @@ pub async fn deploy_relayer(
             .parse()
             .unwrap_or(22);
         let e_key_name = format!("oline-phase-e-key-{}", e_state.dseq.unwrap_or(0));
-        let secrets_dir = std::env::var("SECRETS_PATH").unwrap_or_else(|_| ".".into());
-        let e_key_path = PathBuf::from(&secrets_dir).join(&e_key_name);
+        let e_key_path = crate::config::oline_config_dir().join(&e_key_name);
         match ssh_key::PrivateKey::from_openssh(privkey_pem.as_bytes()) {
             Ok(k) => {
-                if let Err(e) = crate::crypto::save_ssh_key(&k, &e_key_path) {
+                if let Err(e) = crate::crypto::save_ssh_key_encrypted(&k, &e_key_path, &w.ctx.deployer.password) {
                     tracing::warn!("  [Phase E] Failed to save SSH key: {}", e);
                 } else {
                     let e_services: Vec<String> = e_endpoints
