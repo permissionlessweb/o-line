@@ -34,7 +34,7 @@ from typing import Any
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).parent
-REPO_ROOT = SCRIPT_DIR.parent.parent
+REPO_ROOT = SCRIPT_DIR.parent.parent.parent
 
 # Import parsing functions from gen-tools.py (hyphenated name, use importlib)
 _spec = importlib.util.spec_from_file_location("gen_tools", SCRIPT_DIR / "gen-tools.py")

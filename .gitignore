@@ -26,3 +26,12 @@ tools/*
 data
 plays/coach
 docs
+
+# Belt-and-suspenders: never commit local-override copies of oline config.
+# Canonical home is ~/.oline/ — these entries catch stale repo-root copies.
+.env
+config.toml
+*.enc
+oline-testnet-key
+config.toml
+memory

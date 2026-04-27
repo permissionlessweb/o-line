@@ -1,4 +1,29 @@
 services:
+  headscale:
+    image: docker.io/headscale/headscale:0.25.1-debug
+    container_name: pfsense-headscale
+    hostname: headscale
+    entrypoint: ["/busybox/sh", "-c"]
+    command:
+      - |
+        mkdir -p /var/lib/headscale /etc/headscale
+        cp /mnt/config.yaml /etc/headscale/config.yaml
+        exec /ko-app/headscale serve
+    volumes:
+      - ./headscale/config.yaml:/mnt/config.yaml:ro
+    ports:
+      - "8080:8080"
+      - "50443:50443"
+    networks:
+      pfsense-wan:
+        ipv4_address: $PFSENSE_IPV4
+    healthcheck:
+      test: ["CMD-SHELL", "/busybox/wget -q --spider http://127.0.0.1:8080/health || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
   pfsense-mock:
     build: ./pfsense
     container_name: pfsense-mock
@@ -13,14 +38,18 @@ services:
       - "8880:8880"
     networks:
       pfsense-lan:
-        ipv4_address: 10.99.1.2
+        ipv4_address: $PFSENSE_LAN_IPV4
       pfsense-wan:
-        ipv4_address: 10.99.2.168
+        ipv4_address: $PFSENSE_WAN_IPV4
+    depends_on:
+      headscale:
+        condition: service_healthy
     environment:
       ADMIN_USER: admin
       ADMIN_PASS: pfsense
-      WAN_IP: "10.99.2.168"
-      LAN_IP: "10.99.1.2"
+      HEADSCALE_URL: "http://$PFSENSE_IPV4:$PFSENSE_PORT"
+      WAN_IP: "$PFSENSE_WAN_IPV4"
+      LAN_IP: "$PFSENSE_LAN_IPV4"
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1',22)); s.close()\""]
       interval: 2s

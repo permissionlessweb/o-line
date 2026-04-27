@@ -9,6 +9,13 @@ RUN apt-get update && \
         jq \
         sudo \
         wireguard-tools \
+        curl \
+        gnupg \
+        lsb-release \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.noarmor.gpg > /usr/share/keyrings/tailscale-archive-keyring.gpg \
+    && curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.tailscale-keyring.list > /etc/apt/sources.list.d/tailscale.list \
+    && apt-get update && apt-get install -y tailscale \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /run/sshd /etc/wireguard /usr/local/etc/wireguard \
     && chmod 700 /etc/wireguard /usr/local/etc/wireguard

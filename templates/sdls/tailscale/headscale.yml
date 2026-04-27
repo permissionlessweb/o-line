@@ -1,0 +1,195 @@
+---
+# ── Headscale VPN Authentication Server ──────────────────────────────────────
+# Self-hosted Tailscale-compatible control plane deployed on Akash.
+#
+# Services:
+#   headscale — Headscale server with embedded DERP relay + SQLite.
+#               Akash ingress terminates TLS on port 80 (accept domain).
+#               STUN exposed on UDP/3478 for NAT traversal.
+#
+# Image:
+#   Uses the -debug variant because the standard headscale image is distroless
+#   (no shell). The debug image adds Busybox (sh, wget) so we can generate
+#   config.yaml from env vars at startup. Binary location: /ko-app/headscale
+#
+# TLS:
+#   Akash provider ingress terminates TLS for the accept domain. Headscale
+#   listens on plain HTTP internally (listen_addr: 0.0.0.0:8080) but advertises
+#   its server_url as https://${HEADSCALE_DOMAIN}. Tailscale clients connect
+#   via HTTPS through the Akash ingress.
+#
+# Storage:
+#   /var/lib/headscale is persistent — holds SQLite DB, noise keys, and ACLs.
+#   First deploy auto-generates keys; subsequent deploys reuse them.
+# ─────────────────────────────────────────────────────────────────────────────
+version: "2.0"
+services:
+    headscale:
+        image: docker.io/headscale/headscale:0.25.1-debug
+        command:
+            - sh
+        args:
+            - -c
+            - |
+                set -e
+
+                CONFIG_DIR=/etc/headscale
+                DATA_DIR=/var/lib/headscale
+                CONFIG_FILE=${CONFIG_DIR}/config.yaml
+
+                mkdir -p ${CONFIG_DIR} ${DATA_DIR}/run
+
+                # ── Generate config.yaml from env vars ────────────────────────────
+                cat > ${CONFIG_FILE} << 'CFGEOF'
+                server_url: https://${HEADSCALE_DOMAIN}
+                listen_addr: 0.0.0.0:8080
+                metrics_listen_addr: 0.0.0.0:9090
+                grpc_listen_addr: 0.0.0.0:50443
+                grpc_allow_insecure: true
+                noise:
+                  private_key_path: /var/lib/headscale/noise_private.key
+                prefixes:
+                  v4: ${HEADSCALE_IPV4_PREFIX}
+                  v6: ${HEADSCALE_IPV6_PREFIX}
+                  allocation: sequential
+                derp:
+                  server:
+                    enabled: ${HEADSCALE_DERP_ENABLED}
+                    region_id: 999
+                    region_code: akash
+                    region_name: Akash DERP
+                    stun_listen_addr: 0.0.0.0:3478
+                    private_key_path: /var/lib/headscale/derp_server_private.key
+                    automatically_add_embedded_derp_region: true
+                    verify_clients: true
+                  urls:
+                    - https://controlplane.tailscale.com/derpmap/default
+                  paths: []
+                  auto_update_enabled: true
+                  update_frequency: 24h
+                disable_check_updates: true
+                ephemeral_node_inactivity_timeout: 30m
+                database:
+                  type: sqlite
+                  sqlite:
+                    path: /var/lib/headscale/db.sqlite
+                    write_ahead_log: true
+                dns:
+                  magic_dns: true
+                  base_domain: ${HEADSCALE_BASE_DOMAIN}
+                  nameservers:
+                    global:
+                      - 1.1.1.1
+                      - 1.0.0.1
+                unix_socket: /var/run/headscale/headscale.sock
+                unix_socket_permission: "0770"
+                log:
+                  level: info
+                policy:
+                  mode: database
+                  path: ""
+                CFGEOF
+
+                echo "=== Headscale config generated ==="
+                cat ${CONFIG_FILE}
+                echo "=== Starting headscale ==="
+
+                # Create run directory for unix socket
+                mkdir -p /var/run/headscale
+
+                # Start headscale in background, wait for ready, then bootstrap
+                /ko-app/headscale serve &
+                HEADSCALE_PID=$!
+
+                # Wait for headscale to be ready
+                for i in $(seq 1 30); do
+                  if wget -q -O /dev/null http://127.0.0.1:8080/health 2>/dev/null; then
+                    echo "=== Headscale is ready ==="
+                    break
+                  fi
+                  sleep 1
+                done
+
+                # Bootstrap: create user and preauth key if not already present
+                if ! /ko-app/headscale users list 2>/dev/null | grep -q "admin"; then
+                  echo "=== Creating admin user ==="
+                  /ko-app/headscale users create admin
+                  echo "=== Creating preauth key (reusable, 10yr expiry) ==="
+                  /ko-app/headscale preauthkeys create --user admin --reusable --expiration 87600h
+                fi
+
+                echo "=== Existing users ==="
+                /ko-app/headscale users list
+                echo "=== API key for remote management ==="
+                /ko-app/headscale apikeys create --expiration 87600h
+                echo "=== Preauth keys ==="
+                /ko-app/headscale preauthkeys list --user admin
+
+                # Wait for headscale process
+                wait $HEADSCALE_PID
+        expose:
+            # HTTPS control plane — Akash ingress terminates TLS, routes to 8080
+            - port: 8080
+              as: 80
+              to:
+                  - global: true
+              accept:
+                  - ${HEADSCALE_DOMAIN}
+            # STUN for embedded DERP relay — UDP, globally reachable for NAT traversal
+            - port: 3478
+              as: 3478
+              proto: udp
+              to:
+                  - global: true
+            # gRPC API — remote control via headscale CLI from another machine
+            - port: 50443
+              as: 50443
+              to:
+                  - global: true
+            # Metrics — internal only, expose if monitoring is needed
+            - port: 9090
+              as: 9090
+              to:
+                  - global: true
+        env:
+            - HEADSCALE_DOMAIN=${HEADSCALE_DOMAIN}
+            - HEADSCALE_BASE_DOMAIN=${HEADSCALE_BASE_DOMAIN}
+            - HEADSCALE_IPV4_PREFIX=${HEADSCALE_IPV4_PREFIX}
+            - HEADSCALE_IPV6_PREFIX=${HEADSCALE_IPV6_PREFIX}
+            - HEADSCALE_DERP_ENABLED=${HEADSCALE_DERP_ENABLED}
+        params:
+            storage:
+                headscale-data:
+                    mount: /var/lib/headscale
+                    readOnly: false
+profiles:
+    compute:
+        headscale:
+            resources:
+                cpu:
+                    units: 1
+                memory:
+                    size: 512Mi
+                storage:
+                    - size: 1Gi
+                    - name: headscale-data
+                      size: 2Gi
+                      attributes:
+                          persistent: true
+                          class: beta3
+    placement:
+        dcloud:
+            pricing:
+                headscale:
+                    denom: uact
+                    amount: 500
+            signedBy:
+                anyOf:
+                    - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
+            attributes:
+                host: akash
+deployment:
+    headscale:
+        dcloud:
+            profile: headscale
+            count: 1

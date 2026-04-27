@@ -1,0 +1,61 @@
+---
+version: "2.0"
+services:
+  ${VALIDATOR_SVC}:
+    image: ${LOCALTERP_IMAGE}
+    expose:
+      - port: 26656
+        as: 26656
+        to:
+          - global: true
+      - port: 26657
+        as: 26657
+        to:
+          - global: true
+      - port: 5000
+        as: 5000
+        to:
+          - global: true
+      - port: 1317
+        as: 1317
+        to:
+          - global: true
+      - port: 9090
+        as: 9090
+        to:
+          - global: true
+      - port: 5000
+        as: 80
+        to:
+          - global: true
+        accept:
+${VALIDATOR_80_ACCEPTS}
+    env:
+      - CHAINID=${TESTNET_CHAIN_ID}
+      - FAST_BLOCKS=${TESTNET_FAST_BLOCKS}
+profiles:
+  compute:
+    ${VALIDATOR_SVC}:
+      resources:
+        cpu:
+          units: 2
+        memory:
+          size: 4Gi
+        storage:
+          - size: 10Gi
+  placement:
+    dcloud:
+      pricing:
+        ${VALIDATOR_SVC}:
+          denom: uact
+          amount: 1000
+      signedBy:
+        anyOf:
+          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
+      attributes:
+        host: akash
+deployment:
+  ${VALIDATOR_SVC}:
+    dcloud:
+      profile: ${VALIDATOR_SVC}
+      count: 1

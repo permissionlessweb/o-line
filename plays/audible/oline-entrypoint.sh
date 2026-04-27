@@ -201,15 +201,23 @@ if [ -f /tmp/tls-setup.sh ]; then
   echo "Running TLS setup (pre-uploaded)..."
   sh /tmp/tls-setup.sh
   echo "=== TLS setup complete ==="
-  nginx -s reload 2>/dev/null || nginx
-  echo "=== nginx started ==="
-elif [ -n "$TLS_CONFIG_URL" ]; then
+  if command -v nginx >/dev/null 2>&1; then
+    nginx -s reload 2>/dev/null || nginx
+    echo "=== nginx started ==="
+  else
+    echo "[oline] nginx not available — skipping (behind LB or no TLS needed)"
+  fi
+elif [ -n "${TLS_CONFIG_URL:-}" ]; then
   echo "Running TLS setup (downloading from $TLS_CONFIG_URL)..."
   curl -fsSL "$TLS_CONFIG_URL" -o /tmp/tls-setup.sh
   sh /tmp/tls-setup.sh
   echo "=== TLS setup complete ==="
-  nginx -s reload 2>/dev/null || nginx
-  echo "=== nginx started ==="
+  if command -v nginx >/dev/null 2>&1; then
+    nginx -s reload 2>/dev/null || nginx
+    echo "=== nginx started ==="
+  else
+    echo "[oline] nginx not available — skipping (behind LB or no TLS needed)"
+  fi
 fi
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -313,9 +321,13 @@ if [ "$OLINE_NODE_MODE" = "native" ]; then
     BOOTSTRAP_ARGS=$(echo "$BOOTSTRAP_ARGS" | sed 's/--snapshot-url [^ ]*//g')
   fi
 
-  # ── Snapshot export node: setup-only, then wrap with snapshot.sh ──
+  # ── Snapshot export node: setup, then wrap with snapshot.sh ──
   if [ -n "$SNAPSHOT_PATH" ]; then
-    terpd bootstrap --setup-only $BOOTSTRAP_ARGS >>/proc/1/fd/1 2>&1
+    if terpd bootstrap --help 2>&1 | grep -q "\-\-setup-only"; then
+      terpd bootstrap --setup-only $BOOTSTRAP_ARGS >>/proc/1/fd/1 2>&1
+    else
+      terpd bootstrap $BOOTSTRAP_ARGS >>/proc/1/fd/1 2>&1 || true
+    fi
     # Use pre-uploaded snapshot.sh if available, otherwise try download
     if [ -f /tmp/snapshot.sh ]; then
       cp /tmp/snapshot.sh /usr/local/bin/snapshot.sh
@@ -340,8 +352,21 @@ if [ "$OLINE_NODE_MODE" = "native" ]; then
     fi
   fi
 
-  # ── Non-snapshot node: setup-only, patch endpoints, then start ──
-  terpd bootstrap --setup-only $BOOTSTRAP_ARGS >>/proc/1/fd/1 2>&1
+  # ── Non-snapshot node: setup, patch endpoints, then start ──
+  # --setup-only is not available in all terpd versions; fall back to manual init
+  if terpd bootstrap --help 2>&1 | grep -q "\-\-setup-only"; then
+    terpd bootstrap --setup-only $BOOTSTRAP_ARGS >>/proc/1/fd/1 2>&1
+  else
+    # Manual init: terpd init + genesis download (bootstrap without --setup-only starts the node)
+    echo "[oline] --setup-only not supported — using manual init"
+    terpd init "${MONIKER:-oline}" --chain-id "${CHAIN_ID:-morocco-1}" --home "${PROJECT_ROOT}" >>/proc/1/fd/1 2>&1 || true
+    # Install genesis
+    if [ -f /tmp/genesis.json ]; then
+      cp /tmp/genesis.json "${PROJECT_ROOT}/config/genesis.json"
+    elif [ -n "${GENESIS_URL:-}" ]; then
+      curl -fsSL "${GENESIS_URL}" -o "${PROJECT_ROOT}/config/genesis.json" 2>/dev/null || true
+    fi
+  fi
   # Restore pre-fetched genesis if bootstrap overwrote it with a default
   if [ -f /tmp/genesis.json ]; then
     cp /tmp/genesis.json "${PROJECT_ROOT:-/root/.terpd}/config/genesis.json"
@@ -353,6 +378,22 @@ if [ "$OLINE_NODE_MODE" = "native" ]; then
     curl -fsSL "${NODE_CONFIG_SCRIPT}" -o "$NODE_SCRIPT" 2>/dev/null || true
   fi
   [ -f "$NODE_SCRIPT" ] && { sh "$NODE_SCRIPT" 2>&1 || echo "[oline] config-node-endpoints non-fatal"; }
+
+  # ── Bind RPC/API/gRPC to 0.0.0.0 so LB and inter-service routing work ──
+  # config-node-endpoints.sh binds to 127.0.0.1 (for same-host nginx), but
+  # testnet sentries behind a separate LB container need 0.0.0.0.
+  _cfg="${PROJECT_ROOT:-/root/.terpd}/config"
+  if [ -f "${_cfg}/config.toml" ]; then
+    sed -i '/^\[rpc\]$/,/^\[/ s|^laddr *=.*|laddr = "tcp://0.0.0.0:26657"|' "${_cfg}/config.toml"
+    echo "[oline] RPC bound to 0.0.0.0:26657"
+  fi
+  if [ -f "${_cfg}/app.toml" ]; then
+    sed -i '/^\[api\]$/,/^\[/ s/^enable *=.*/enable = true/' "${_cfg}/app.toml"
+    sed -i '/^\[api\]$/,/^\[/ s|^address *=.*|address = "tcp://0.0.0.0:1317"|' "${_cfg}/app.toml"
+    sed -i '/^\[grpc\]$/,/^\[/ s/^enable *=.*/enable = true/' "${_cfg}/app.toml"
+    sed -i '/^\[grpc\]$/,/^\[/ s|^address *=.*|address = "0.0.0.0:9090"|' "${_cfg}/app.toml"
+    echo "[oline] API bound to 0.0.0.0:1317, gRPC to 0.0.0.0:9090"
+  fi
 
   # ── P2P routing: LB mode or direct tunnel ─────────────────────────────
   # If TERPD_P2P_PERSISTENT_PEERS already contains a service name (e.g. lb:36656),
@@ -390,6 +431,24 @@ if [ "$OLINE_NODE_MODE" = "native" ]; then
     _peer_patch "persistent_peers"    "${TERPD_P2P_PERSISTENT_PEERS:-}"
     _peer_patch "private_peer_ids"    "${TERPD_P2P_PRIVATE_PEER_IDS:-}"
     unset -f _peer_patch
+  fi
+
+  # ── Faucet setup (native mode) ──────────────────────────────────────────
+  if [ -n "${FAUCET_KEY_MNEMONIC:-}" ]; then
+    echo "[oline] Importing faucet key from FAUCET_KEY_MNEMONIC"
+    echo "$FAUCET_KEY_MNEMONIC" | terpd keys add faucet \
+        --recover --keyring-backend os >>/proc/1/fd/1 2>&1 || \
+    echo "$FAUCET_KEY_MNEMONIC" | terpd keys add faucet \
+        --recover --keyring-backend test >>/proc/1/fd/1 2>&1 || \
+    echo "[oline] WARNING: faucet key import failed — faucet may not sign txs"
+  fi
+  if [ "${TERPD_FAUCET_ENABLE:-false}" = "true" ]; then
+    _app_toml="${PROJECT_ROOT:-/root/.terpd}/config/app.toml"
+    if [ -f "$_app_toml" ]; then
+      sed -i '/^\[faucet\]/,/^\[/{s/^enable = false/enable = true/}' "$_app_toml"
+      echo "[oline] Faucet enabled in app.toml"
+    fi
+    unset _app_toml
   fi
 
   [ -n "$TLS_CONFIG_URL" ] && { nginx -s reload 2>/dev/null || nginx; }

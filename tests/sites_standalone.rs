@@ -38,7 +38,7 @@
 use o_line_sdl::sites::{SiteRecord, SiteStore};
 use o_line_sdl::snapshots::s3_request;
 use o_line_sdl::testing::docker::{run_container, ContainerPort, ContainerSpec};
-use o_line_sdl::testing::IctAkashNetwork;
+
 use std::{collections::HashMap, env, path::PathBuf, process::Command, time::Duration};
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
@@ -220,10 +220,7 @@ async fn test_minio_ipfs_dual_use() {
         "S3 PUT index.html returned HTTP {}",
         resp.status()
     );
-    eprintln!(
-        "  Uploaded index.html to S3 ({} bytes)",
-        html_content.len()
-    );
+    eprintln!("  Uploaded index.html to S3 ({} bytes)", html_content.len());
 
     // ── Wait for autopin → IPFS ──────────────────────────────────────────
     eprintln!("  Waiting for autopin to detect index.html (up to 90s)...");
@@ -330,7 +327,7 @@ async fn test_sites_deploy_to_akash() {
 
     // ── Start local Akash network ────────────────────────────────────────
     eprintln!("=== Starting IctAkashNetwork for Sites deploy ===");
-    let net = IctAkashNetwork::start("sites-deploy")
+    let net = o_line_sdl::testing::IctAkashNetwork::start("sites-deploy")
         .await
         .expect("IctAkashNetwork::start");
     eprintln!(
@@ -392,10 +389,7 @@ async fn test_sites_deploy_to_akash() {
         .env("OLINE_MAX_BID_WAIT", "20")
         .env("OLINE_TEST_STOP_AFTER_DEPLOY", "1")
         // Logging
-        .env(
-            "RUST_LOG",
-            "info,akash_deploy_rs=debug,test_provider=debug",
-        )
+        .env("RUST_LOG", "info,akash_deploy_rs=debug,test_provider=debug")
         .output()
         .expect("failed to spawn oline");
 

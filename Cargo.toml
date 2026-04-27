@@ -21,12 +21,16 @@ interface = ["dep:cw-orch"]
 aes-gcm = "0.10"
 #akash-deploy-rs = { git = "https://github.com/permissionlessweb/akash-deploy-rs", branch = "feat/client-improvement", features = ["default-client", "sdl-templates", "file-storage"] }
 akash-deploy-rs = { path = "../akash-deploy-rs", features = ["default-client", "sdl-templates", "file-storage", "log-streaming"] }
+headscale-proto = { path = "proto", features = ["rpc"] }
+layer-climb-address = { path = "../climb/packages/layer-climb-address" }
 argon2 = "0.5"
 axum = "0.7"
 base64 = "0.22"
 bech32 = "0.9"
 bip32 = { version = "0.5", features = ["alloc"] }
 bollard = "0.18"
+coins-bip39 = "0.8"
+chrono = "0.4"
 clap = { version = "4", features = ["derive", "env"] }
 cloudflare = { version = "0.14.0", default-features = false, features = ["rustls-tls"] }
 container-registry = "0.3.1"
@@ -37,13 +41,13 @@ dotenvy = "0.15"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 hex = "0.4"
 hmac = "0.12"
-ict-rs = { path = "../../terp-rs/crates/public/ict-rs/ict-rs", features = ["docker", "testing", "akash"], optional = true }
+ict-rs = { path = "../../ict-rs/ict-rs", features = ["docker", "testing", "akash"], optional = true }
 openssh = { version = "0.11", features = ["native-mux"] }
 openssh-sftp-client  = { version = "0.15", features = ["openssh"] }
 rand = "0.8"
 ratatui = "0.29"
 rcgen = { version = "0.13", features = ["pem"] }
-reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", features = ["rustls-tls", "json", "blocking"] }
 ripemd = "0.1"
 rpassword = "7"
 rustls = { version = "0.23", features = ["ring"] }
@@ -63,8 +67,8 @@ tonic = "0.14"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
+tracing-error = "0.2.1"
 
 [dev-dependencies]
 o-line-sdl = { path = ".", features = ["testing"] }
 tempfile = "3"
-

@@ -4,6 +4,21 @@ Automated deployment orchestrator for Terp Network sentry node arrays on [Akash 
 
 Deploys a full validator protection stack — snapshot node, seed node, MinIO snapshot storage, left/right tackle sentries, and left/right forward (public RPC/API/gRPC) nodes — all coordinated by a single `oline deploy` command.
 
+## Features
+
+## Quick SDL Template Generation
+## Quick Deployment Creation Lifecycles
+## Native JWT & MTLS key generations
+## Session State Persistence And Recall
+## IPFS pinned S3 Buckets
+## Cosmos Sentry Node Arrays
+## Cosmos Test Network Bootstrapping
+## Native Cloudflare API support
+## Native Pfsense API Support
+## Native FireWall Configuration Support
+## Native VPN Configuration  Support
+
+
 
 ## Topology
 

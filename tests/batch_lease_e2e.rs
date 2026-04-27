@@ -29,10 +29,9 @@ use akash_deploy_rs::{
     broadcast_multi_signer, build_create_lease_msg, AkashBackend, AkashClient, Bid, BidId,
     DeployError, DeploymentState, DeploymentWorkflow, SignerEntry, Step,
 };
+use o_line_sdl::config::substitute_template_raw;
 use o_line_sdl::{
-    config::{build_config_from_env, substitute_template_raw},
-    deployer::OLineDeployer,
-    testing::AkashLocalNetwork,
+    config::build_config_from_env, deployer::OLineDeployer, testing::AkashLocalNetwork,
 };
 use std::collections::HashMap;
 
@@ -79,7 +78,7 @@ async fn test_batch_lease_3_msgs_in_1_tx() {
     // Stop before manifest send — no real provider.
     std::env::set_var("OLINE_TEST_STOP_AFTER_DEPLOY", "1");
 
-    let config = build_config_from_env(net.deployer_mnemonic.clone());
+    let config = build_config_from_env(net.deployer_mnemonic.clone(), None);
     let deployer = OLineDeployer::new(config.clone(), "test-password".into())
         .await
         .expect("create deployer");
@@ -98,10 +97,7 @@ async fn test_batch_lease_3_msgs_in_1_tx() {
 
     // ── 4. Batch CreateDeployment (3 in 1 tx) ────────────────────────────────
     let querier = &deployer.client.signing_client().querier;
-    let dseq: u64 = querier
-        .block_height()
-        .await
-        .expect("block_height for dseq");
+    let dseq: u64 = querier.block_height().await.expect("block_height for dseq");
     let deposit_amount: u64 = 5_000_000;
     let deposit_denom = "uact";
 
@@ -109,13 +105,7 @@ async fn test_batch_lease_3_msgs_in_1_tx() {
 
     let msg_a = deployer
         .client
-        .build_create_deployment_msg(
-            &deployer_addr,
-            &sdl_a,
-            deposit_amount,
-            deposit_denom,
-            dseq,
-        )
+        .build_create_deployment_msg(&deployer_addr, &sdl_a, deposit_amount, deposit_denom, dseq)
         .expect("build deploy msg A");
     let msg_b = deployer
         .client
@@ -248,9 +238,27 @@ async fn test_batch_lease_3_msgs_in_1_tx() {
     let bid_b = find_bid_for_provider(&bids_b, &provider_b).expect("bid B");
     let bid_c = find_bid_for_provider(&bids_c, &provider_c).expect("bid C");
 
-    let bid_id_a = BidId::from_bid(&owner, state_a.dseq.unwrap(), state_a.gseq, state_a.oseq, &bid_a);
-    let bid_id_b = BidId::from_bid(&owner, state_b.dseq.unwrap(), state_b.gseq, state_b.oseq, &bid_b);
-    let bid_id_c = BidId::from_bid(&owner, state_c.dseq.unwrap(), state_c.gseq, state_c.oseq, &bid_c);
+    let bid_id_a = BidId::from_bid(
+        &owner,
+        state_a.dseq.unwrap(),
+        state_a.gseq,
+        state_a.oseq,
+        &bid_a,
+    );
+    let bid_id_b = BidId::from_bid(
+        &owner,
+        state_b.dseq.unwrap(),
+        state_b.gseq,
+        state_b.oseq,
+        &bid_b,
+    );
+    let bid_id_c = BidId::from_bid(
+        &owner,
+        state_c.dseq.unwrap(),
+        state_c.gseq,
+        state_c.oseq,
+        &bid_c,
+    );
 
     let lease_msgs = vec![
         build_create_lease_msg(&bid_id_a),
@@ -352,10 +360,7 @@ async fn test_batch_lease_3_msgs_in_1_tx() {
         "Lease tx hash mismatch: B={} vs C={}",
         hash_b, hash_c
     );
-    eprintln!(
-        "[batch-lease] All 3 leases share tx hash: {}",
-        hash_a
-    );
+    eprintln!("[batch-lease] All 3 leases share tx hash: {}", hash_a);
 
     // All 3 states must have a lease_id.
     assert!(state_a.lease_id.is_some(), "State A must have lease_id");
@@ -377,11 +382,7 @@ async fn test_batch_lease_3_msgs_in_1_tx() {
         .build()
         .unwrap();
 
-    let tx_url = format!(
-        "{}/cosmos/tx/v1beta1/txs/{}",
-        net.rest(),
-        batch_tx.hash
-    );
+    let tx_url = format!("{}/cosmos/tx/v1beta1/txs/{}", net.rest(), batch_tx.hash);
 
     match http.get(&tx_url).send().await {
         Ok(r) if r.status().is_success() => {
@@ -394,10 +395,7 @@ async fn test_batch_lease_3_msgs_in_1_tx() {
                 .map(|a| a.len())
                 .unwrap_or(0);
 
-            eprintln!(
-                "[batch-lease] On-chain tx has {} messages",
-                msg_count
-            );
+            eprintln!("[batch-lease] On-chain tx has {} messages", msg_count);
 
             assert_eq!(
                 msg_count, 3,
@@ -414,10 +412,7 @@ async fn test_batch_lease_3_msgs_in_1_tx() {
                         .or_else(|| msg.get("type_url"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    eprintln!(
-                        "[batch-lease]   msg[{}] type: {}",
-                        i, type_url
-                    );
+                    eprintln!("[batch-lease]   msg[{}] type: {}", i, type_url);
                     assert!(
                         type_url.contains("MsgCreateLease"),
                         "msg[{}] should be MsgCreateLease, got: {}",
@@ -472,13 +467,19 @@ async fn test_batch_lease_3_msgs_in_1_tx() {
             .broadcast_close_deployment(&deployer.signer, &deployer_addr, d)
             .await
         {
-            Ok(tx) => eprintln!("[batch-lease]   closed {} DSEQ {} (tx={})", label, d, tx.hash),
+            Ok(tx) => eprintln!(
+                "[batch-lease]   closed {} DSEQ {} (tx={})",
+                label, d, tx.hash
+            ),
             Err(e) => eprintln!("[batch-lease]   close {} DSEQ {} failed: {}", label, d, e),
         }
     }
 
     eprintln!("\n[batch-lease] ALL ASSERTIONS PASSED");
-    eprintln!("[batch-lease]   3 MsgCreateLease in 1 tx: {}", batch_tx.hash);
+    eprintln!(
+        "[batch-lease]   3 MsgCreateLease in 1 tx: {}",
+        batch_tx.hash
+    );
     eprintln!("[batch-lease]   All states at SendManifest with shared tx hash");
     eprintln!("[batch-lease]   On-chain verification: 3 messages confirmed");
 }

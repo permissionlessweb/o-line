@@ -46,7 +46,7 @@ use akash_deploy_rs::{
 };
 use o_line_sdl::{
     accounts::{child_address, derive_child_signer},
-    config::{build_config_from_env, substitute_template_raw},
+    config::build_config_from_env,
     deployer::OLineDeployer,
     testing::AkashLocalNetwork,
 };
@@ -127,7 +127,7 @@ fn render_test_sdl(svc_name: &str, label: &str) -> Result<String, Box<dyn std::e
     let mut vars = HashMap::new();
     vars.insert("SVC_NAME".into(), svc_name.into());
     vars.insert("DEPLOY_LABEL".into(), label.into());
-    substitute_template_raw(template, &vars).map_err(Into::into)
+    o_line_sdl::config::substitute_template_raw(template, &vars).map_err(Into::into)
 }
 
 #[tokio::test]
@@ -164,7 +164,7 @@ async fn test_concurrent_child_deploys() {
     std::env::set_var("OLINE_NON_INTERACTIVE", "1");
     std::env::set_var("OLINE_AUTO_SELECT", "1");
 
-    let config = build_config_from_env(net.deployer_mnemonic.clone());
+    let config = build_config_from_env(net.deployer_mnemonic.clone(), None);
 
     // ── 4. Create master deployer + fund 3 children ──────────────────────────
     let master = OLineDeployer::new(config.clone(), "test-password".into())

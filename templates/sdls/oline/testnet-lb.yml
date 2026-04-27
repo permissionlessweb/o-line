@@ -7,7 +7,17 @@ services:
       - sh
     args:
       - -c
-      - "while [ ! -f /tmp/lb-init.sh ]; do sleep 2; done; sh /tmp/lb-init.sh"
+      - |
+        rm -f /etc/nginx/conf.d/default.conf;
+        printf "upstream rpc_pool {\n" > /etc/nginx/conf.d/upstreams.conf;
+        echo "$UPSTREAM_RPC" | tr "," "\n" | while read s; do [ -n "$s" ] && printf "  server %s max_fails=1 fail_timeout=10s;\n" "$s" >> /etc/nginx/conf.d/upstreams.conf; done;
+        printf "}\nupstream api_pool {\n" >> /etc/nginx/conf.d/upstreams.conf;
+        echo "$UPSTREAM_API" | tr "," "\n" | while read s; do [ -n "$s" ] && printf "  server %s max_fails=1 fail_timeout=10s;\n" "$s" >> /etc/nginx/conf.d/upstreams.conf; done;
+        printf "}\n" >> /etc/nginx/conf.d/upstreams.conf;
+        if [ -n "$RPC_DOMAIN" ]; then printf "server {\n  listen 80;\n  server_name %s;\n  location /websocket { proxy_pass http://rpc_pool/websocket; proxy_http_version 1.1; proxy_set_header Upgrade \$http_upgrade; proxy_set_header Connection upgrade; proxy_set_header Host \$host; }\n  location = /net_info { return 403; }\n  location / { proxy_pass http://rpc_pool; proxy_http_version 1.1; proxy_set_header Host \$host; proxy_set_header Upgrade \$http_upgrade; proxy_set_header Connection upgrade; add_header Access-Control-Allow-Origin *; proxy_next_upstream error timeout http_502 http_503; }\n}\n" "$RPC_DOMAIN" > /etc/nginx/conf.d/rpc.conf; fi;
+        if [ -n "$API_DOMAIN" ]; then printf "server {\n  listen 80;\n  server_name %s;\n  location / { proxy_pass http://api_pool; proxy_set_header Host \$host; add_header Access-Control-Allow-Origin *; proxy_next_upstream error timeout http_502 http_503; }\n}\n" "$API_DOMAIN" > /etc/nginx/conf.d/api.conf; fi;
+        echo "[lb] starting nginx RPC=$RPC_DOMAIN API=$API_DOMAIN";
+        nginx -t && exec nginx -g "daemon off;"
     expose:
       - port: 80
         as: 80
@@ -28,7 +38,7 @@ ${LB_80_ACCEPTS}
       - UPSTREAM_API=${SENTRY_A_SVC}:1317,${SENTRY_B_SVC}:1317
       - UPSTREAM_GRPC=${SENTRY_A_SVC}:9090,${SENTRY_B_SVC}:9090
   ${SENTRY_A_SVC}:
-    image: ${OMNIBUS_IMAGE}
+    image: ${TESTNET_SENTRY_IMAGE}
     command:
       - sh
     args:
@@ -38,6 +48,7 @@ ${LB_80_ACCEPTS}
       - port: 26656
         as: 26656
         to:
+          - global: true
           - service: ${LB_SVC}
           - service: ${SENTRY_B_SVC}
       - port: 26657
@@ -65,13 +76,13 @@ ${LB_80_ACCEPTS}
       - FASTSYNC_VERSION=v0
       - PRUNING=nothing
       - STATESYNC_SNAP_INTERVAL=500
+      - SNAPSHOT_RETAIN=0
       - TERPD_P2P_PEX=true
-      - TERPD_P2P_PERSISTENT_PEERS=${VALIDATOR_PEER}
-      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${VALIDATOR_PEER_ID}
-      - TERPD_P2P_PRIVATE_PEER_IDS=${VALIDATOR_PEER_ID}
+      - TERPD_FAUCET_ENABLE=true
+      - FAUCET_KEY_MNEMONIC=${SENTRY_A_FAUCET_MNEMONIC}
       - SSH_PUBKEY=${SSH_PUBKEY}
   ${SENTRY_B_SVC}:
-    image: ${OMNIBUS_IMAGE}
+    image: ${TESTNET_SENTRY_IMAGE}
     command:
       - sh
     args:
@@ -81,6 +92,7 @@ ${LB_80_ACCEPTS}
       - port: 26656
         as: 26656
         to:
+          - global: true
           - service: ${LB_SVC}
           - service: ${SENTRY_A_SVC}
       - port: 26657
@@ -107,10 +119,10 @@ ${LB_80_ACCEPTS}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - FASTSYNC_VERSION=v0
       - PRUNING=default
+      - SNAPSHOT_RETAIN=0
       - TERPD_P2P_PEX=true
-      - TERPD_P2P_PERSISTENT_PEERS=${VALIDATOR_PEER}
-      - TERPD_P2P_UNCONDITIONAL_PEER_IDS=${VALIDATOR_PEER_ID}
-      - TERPD_P2P_PRIVATE_PEER_IDS=${VALIDATOR_PEER_ID}
+      - TERPD_FAUCET_ENABLE=true
+      - FAUCET_KEY_MNEMONIC=${SENTRY_B_FAUCET_MNEMONIC}
       - SSH_PUBKEY=${SSH_PUBKEY}
 profiles:
   compute:

@@ -6,8 +6,8 @@ use std::{
 };
 
 use crate::{
-    config::{days_to_date, read_encrypted_mnemonic_from_env},
-    crypto::decrypt_mnemonic,
+    config::{days_to_date, has_saved_config, load_config, read_encrypted_mnemonic, write_encrypted_mnemonic},
+    crypto::{decrypt_mnemonic, encrypt_mnemonic},
     toml_config::{TomlConfig, CONFIG_FIELDS},
 };
 
@@ -128,11 +128,28 @@ pub fn get_password(prompt: &str) -> Result<String, Box<dyn Error>> {
 }
 
 pub fn unlock_mnemonic() -> Result<(String, String), Box<dyn Error>> {
-    let blob = read_encrypted_mnemonic_from_env()?;
-    let password = get_password("Enter password: ")?;
-    let mnemonic = decrypt_mnemonic(&blob, &password)?;
-    tracing::info!("Mnemonic decrypted successfully.\n");
-    Ok((mnemonic, password))
+    // Fast path: new flat-file format.
+    if let Ok(blob) = read_encrypted_mnemonic() {
+        let password = get_password("Enter password: ")?;
+        let mnemonic = decrypt_mnemonic(&blob, &password)?;
+        tracing::info!("Mnemonic decrypted successfully.\n");
+        return Ok((mnemonic, password));
+    }
+
+    // Migration: config.enc stores the full OLineConfig as encrypted JSON.
+    // Extract the mnemonic and re-save it to the new mnemonic.enc path.
+    if has_saved_config() {
+        tracing::info!("Migrating mnemonic from config.enc → mnemonic.enc …");
+        let password = get_password("Enter password: ")?;
+        let cfg = load_config(&password)
+            .ok_or("Failed to decrypt config.enc — wrong password?")?;
+        let blob = encrypt_mnemonic(&cfg.mnemonic, &password)?;
+        write_encrypted_mnemonic(&blob)?;
+        tracing::info!("Migration complete. mnemonic.enc written.\n");
+        return Ok((cfg.mnemonic, password));
+    }
+
+    Err("No encrypted mnemonic found at ~/.oline/mnemonic.enc. Run `oline encrypt` first.".into())
 }
 
 /// Print config fields as a numbered table.

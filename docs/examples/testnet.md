@@ -105,7 +105,27 @@ OLINE_PASSWORD=<password> oline manage sync
 OLINE_PASSWORD=<password> oline manage close <DSEQ_1> <DSEQ_2>
 ```
 
-## Step-by-step: Terp Network testnet (120u-1)
+## Step-by-step: local validator (120u-1)
+
+When the validator is already running locally (e.g. via Docker), the sentries
+deploy on Akash and sync from genesis independently. After they're up, the
+validator dials OUT to the sentries as `persistent_peers` — no inbound ports
+needed on the validator machine.
+
+### Step 0 — Verify local validator is running
+
+```bash
+# Start the validator if not already running
+./scripts/sh/run-testnet-validator.sh 120u-1
+
+# Confirm it's synced and producing blocks
+curl -s http://127.0.0.1:36657/status | jq '.result.sync_info.catching_up'
+# → false
+
+# Get the validator node ID (needed later for peering)
+docker exec testnet-validator terpd tendermint show-node-id
+# → 1e93e6926530871e9480ec1b2c430c40a28ce9e8
+```
 
 ### Step 1 — Pass 1: create deployment
 
@@ -113,44 +133,18 @@ OLINE_PASSWORD=<password> oline manage close <DSEQ_1> <DSEQ_2>
 OLINE_PASSWORD=welcometest RUST_LOG=info oline testnet-deploy \
   --chain-id 120u-1 \
   --profile testnet \
-  --validator-rpc https://rpc-validator-testnet.terp.network \
-  --validator-peer 02f9f5d13e67e4f1d4fbf645fc467032060d9ee7@192.168.1.104:36656 \
+  --validator-rpc http://127.0.0.1:36657 \
   --non-interactive
 ```
 
-Expected output:
-```
-=== O-Line Testnet Deploy ===
-  Chain ID:       120u-1
-  Validator height: 42381
-
-── Creating LB deployment (LB + 2 sentries) ──
-  LB: 3 bid(s), dseq=19284710
-
-══════════════════════════════════════════════════════════════
-  BIDS RECEIVED — review and re-run with --resume
-══════════════════════════════════════════════════════════════
-
-  ── LB (dseq=19284710) — 3 bid(s) ──
-    [1] 0.000823 AKT/block (823 uakt)
-        address: akash1qfqlnj3ef5h6tn8ygp4e6nkwf5dglmms5qrslc
-        host:    https://provider.europlots.com:8443
-    [2] ...
-
-── Resume command ──
-  oline testnet-deploy \
-    --profile testnet \
-    --chain-id 120u-1 \
-    --validator-rpc https://rpc-validator-testnet.terp.network \
-    --validator-peer 02f9f5d1...@192.168.1.104:36656 \
-    --resume \
-    --provider-a <PROVIDER_ADDRESS>
-```
+This creates the Akash deployment (LB + 2 sentries), waits for provider bids,
+saves state, and exits with a resume command. No `--validator-peer` needed —
+the sentries sync from genesis with `pex=true`.
 
 ### Step 2 — Review bids and choose a provider
 
-Pick a provider from the list. Prefer providers with low latency and known
-uptime. The `host:` URL tells you who operates the provider.
+Pick a provider from the printed bid list. Prefer providers with low latency
+and known uptime. The `host:` URL tells you who operates the provider.
 
 ### Step 3 — Pass 2: accept lease, bootstrap nodes
 
@@ -158,88 +152,92 @@ uptime. The `host:` URL tells you who operates the provider.
 OLINE_PASSWORD=welcometest RUST_LOG=info oline testnet-deploy \
   --chain-id 120u-1 \
   --profile testnet \
-  --validator-rpc https://rpc-validator-testnet.terp.network \
-  --validator-peer 02f9f5d13e67e4f1d4fbf645fc467032060d9ee7@192.168.1.104:36656 \
+  --validator-rpc http://127.0.0.1:36657 \
   --non-interactive --resume \
-  --provider-a akash1qfqlnj3ef5h6tn8ygp4e6nkwf5dglmms5qrslc
+  --provider-a <PROVIDER_ADDRESS>
 ```
 
-Expected output (abbreviated):
-```
-── Resuming LB deployment ──
-  LB: dseq=19284710
+After the lease is created, oline sends the manifest and bootstraps the
+sentries via SFTP. Output includes all service endpoints.
 
-── Lease acceptance ──
-  Lease tx: hash=A3F9..., height=12483021
+### Step 4 — Wire the local validator to sentries
 
-── Sending manifest ──
-
-── Bootstrapping LB + sentries ──
-  [testnet-lb] Pushing genesis + scripts...
-  [testnet-lb] Signaled — node starting.
-  [testnet-sentry-a] Pushing genesis + scripts...
-  [testnet-sentry-a] Signaled — node starting.
-  [testnet-sentry-b] Pushing genesis + scripts...
-  [testnet-sentry-b] Signaled — node starting.
-
-══════════════════════════════════════════════════════════════
-  TESTNET DEPLOYED SUCCESSFULLY (LB mode)
-══════════════════════════════════════════════════════════════
-  Chain ID:       120u-1
-  Validator Peer: 02f9f5d1...@192.168.1.104:36656
-  Genesis URL:    https://rpc-validator-testnet.terp.network/genesis
-
-  ── LB Endpoints ──
-    testnet-lb:80       → provider.europlots.com:32145
-    testnet-lb:22022    → provider.europlots.com:31876
-    testnet-sentry-a:22022 → provider.europlots.com:30012
-    testnet-sentry-b:22022 → provider.europlots.com:31543
-```
-
-### Step 4 — Verify sentries are syncing
+After sentries are deployed, get their node IDs and wire the validator:
 
 ```bash
-curl -s https://rpc-testnet.terp.network/status | jq '.result.sync_info'
+# Get sentry node IDs from the SSH endpoints printed by oline
+ssh -i ~/.oline/oline-testnet-key root@<PROVIDER_HOST> -p <SENTRY_A_SSH_PORT> \
+  terpd tendermint show-node-id
+ssh -i ~/.oline/oline-testnet-key root@<PROVIDER_HOST> -p <SENTRY_B_SSH_PORT> \
+  terpd tendermint show-node-id
+
+# Wire validator to dial out to both sentries
+docker exec testnet-validator sh -c \
+  "sed -i 's/persistent_peers = .*/persistent_peers = \"<A_ID>@<A_HOST>:<A_P2P_PORT>,<B_ID>@<B_HOST>:<B_P2P_PORT>\"/' ~/.terpd/config/config.toml"
+docker restart testnet-validator
 ```
 
-Expected: `catching_up: false` once fully synced.
+The validator connects outbound — no firewall changes needed.
 
-### Step 5 — Check DNS
+### Step 5 — Set up DNS (Cloudflare)
 
-The LB's `accept:` rules route by `Host` header. DNS A records should point
-to the provider's IP with Cloudflare proxy enabled.
+Point DNS A records to the provider's IP (from lease endpoints):
 
 ```bash
-# Check current DNS
+# Use oline's DNS command or set manually in Cloudflare:
+#   rpc-testnet.terp.network → <PROVIDER_IP> (proxied)
+#   api-testnet.terp.network → <PROVIDER_IP> (proxied)
+
+oline dns set --profile testnet
+```
+
+### Step 6 — Verify RPC DNS endpoints
+
+```bash
+# Check DNS resolution
 dig +short rpc-testnet.terp.network
 dig +short api-testnet.terp.network
 
-# Verify end-to-end
+# Verify end-to-end: chain ID matches
 curl -s https://rpc-testnet.terp.network/status | jq '.result.node_info.network'
 # → "120u-1"
 
+# Verify block height advancing
 curl -s https://api-testnet.terp.network/cosmos/base/tendermint/v1beta1/blocks/latest \
   | jq '.block.header.height'
 ```
 
-If the DNS records point to an old provider, update the Cloudflare A record
-to the provider IP shown in the lease endpoints above.
-
-### Step 6 — SSH access
+### Step 7 — SSH access
 
 Each service gets a globally-exposed SSH port. Use the SSH key generated
 during deployment:
 
 ```bash
 # LB container
-ssh -i secrets/oline-testnet-key root@provider.europlots.com -p 31876
+ssh -i ~/.oline/oline-testnet-key root@<PROVIDER_HOST> -p <LB_SSH_PORT>
 
 # Sentry A
-ssh -i secrets/oline-testnet-key root@provider.europlots.com -p 30012
+ssh -i ~/.oline/oline-testnet-key root@<PROVIDER_HOST> -p <SENTRY_A_SSH_PORT>
 
 # Sentry B
-ssh -i secrets/oline-testnet-key root@provider.europlots.com -p 31543
+ssh -i ~/.oline/oline-testnet-key root@<PROVIDER_HOST> -p <SENTRY_B_SSH_PORT>
 ```
+
+## Step-by-step: remote validator
+
+If the validator is hosted externally (not localhost), use `--validator-rpc`
+and `--validator-peer` to point the sentries at it:
+
+```bash
+OLINE_PASSWORD=<password> RUST_LOG=info oline testnet-deploy \
+  --chain-id 120u-1 \
+  --profile testnet \
+  --validator-rpc https://rpc-validator-testnet.terp.network \
+  --validator-peer <node_id>@<host>:<port> \
+  --non-interactive
+```
+
+The rest of the flow (Pass 2, DNS, verification) is the same as above.
 
 ## Scaling sentries
 

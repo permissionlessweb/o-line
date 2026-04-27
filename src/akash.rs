@@ -12,7 +12,7 @@
 //!   2. Reference `${fd.ev}` in the SDL template.
 //!   Done — no code change needed here.
 use crate::config::OLineConfig;
-use crate::crypto::{ensure_ssh_key, gen_ssh_key, generate_credential, S3_KEY, S3_SECRET};
+use crate::crypto::{ensure_ssh_key_encrypted, gen_ssh_key, generate_credential, S3_KEY, S3_SECRET};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -173,6 +173,7 @@ pub fn inject_p2p_nodeport(
 pub async fn build_phase_a_vars(
     config: &OLineConfig,
     secrets_path: &str,
+    password: &str,
 ) -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
     let mut vars = config.to_sdl_vars();
 
@@ -186,9 +187,9 @@ pub async fn build_phase_a_vars(
     vars.insert("SEED_MONIKER".into(), generate_credential(12));
 
     // ── SSH keypair (shared by snapshot + seed + minio for SFTP cert delivery) ─
-    // Reuse existing key if present; generate fresh otherwise.
+    // Reuse existing key if present; generate fresh otherwise. Stored encrypted.
     let key_path: PathBuf = format!("{}/oline-parallel-key", secrets_path).into();
-    let ssh_key = ensure_ssh_key(&key_path)?;
+    let ssh_key = ensure_ssh_key_encrypted(&key_path, password)?;
     vars.insert("SSH_PUBKEY".into(), ssh_key.public_key().to_string());
     vars.insert(
         "SSH_PRIVKEY".into(),

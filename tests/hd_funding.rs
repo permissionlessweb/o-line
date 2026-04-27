@@ -65,7 +65,7 @@ async fn test_hd_fund_child_accounts() {
     std::env::set_var("OLINE_CHAIN_ID", net.chain_id());
     std::env::set_var("OLINE_NON_INTERACTIVE", "1");
 
-    let config = build_config_from_env(net.deployer_mnemonic.clone());
+    let config = build_config_from_env(net.deployer_mnemonic.clone(), None);
 
     // ── 4. Create deployer + workflow with HD funding ─────────────────────────
     let deployer = OLineDeployer::new(config, "test-password".into())

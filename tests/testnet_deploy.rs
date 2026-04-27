@@ -26,7 +26,7 @@
 /// just test testnet deploy            # full Akash deploy (requires infra)
 /// just test testnet all               # everything
 /// ```
-use o_line_sdl::config::{build_config_from_env, substitute_template_raw, OLineConfig};
+use o_line_sdl::config::{build_config_from_env, OLineConfig};
 use std::collections::HashMap;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -39,7 +39,7 @@ fn test_config() -> OLineConfig {
     std::env::set_var("OLINE_BINARY", "terpd");
     std::env::set_var("OLINE_CHAIN_ID", "morocco-1");
     std::env::set_var("OLINE_CHAIN_JSON", "https://example.com/chain.json");
-    build_config_from_env("test mnemonic words here".into())
+    build_config_from_env("test mnemonic words here".into(), None)
 }
 
 /// Build testnet Phase A vars (subset of what build_testnet_a_vars does, without SSH keygen).
@@ -64,6 +64,18 @@ fn test_a_vars(config: &OLineConfig) -> HashMap<String, String> {
     vars.insert("TERPD_P2P_PRIVATE_PEER_IDS".into(), String::new());
     vars.insert("SNAPSHOT_80_ACCEPTS".into(), String::new());
     vars.insert("SEED_80_ACCEPTS".into(), String::new());
+    vars.insert("VALIDATOR_80_ACCEPTS".into(), String::new());
+    // Port/domain vars normally from TOML config
+    for suffix in ["SNAP", "SEED"] {
+        vars.insert(format!("P2P_P_{}", suffix), "26656".into());
+        vars.insert(format!("P2P_D_{}", suffix), "p2p.test.local".into());
+        vars.insert(format!("RPC_P_{}", suffix), "26657".into());
+        vars.insert(format!("RPC_D_{}", suffix), "rpc.test.local".into());
+        vars.insert(format!("API_P_{}", suffix), "1317".into());
+        vars.insert(format!("API_D_{}", suffix), "api.test.local".into());
+        vars.insert(format!("GRPC_P_{}", suffix), "9090".into());
+        vars.insert(format!("GRPC_D_{}", suffix), "grpc.test.local".into());
+    }
     vars
 }
 
@@ -122,7 +134,7 @@ fn test_testnet_sdl_render_phase_a() {
     let sdl_template = config
         .load_sdl("testnet-a.yml")
         .expect("load testnet-a.yml");
-    let rendered = substitute_template_raw(&sdl_template, &vars).expect("render testnet-a.yml");
+    let rendered = akash_deploy_rs::substitute_partial(&sdl_template, &vars);
 
     // Validator service present with localterp image
     assert!(
@@ -182,7 +194,7 @@ fn test_testnet_sdl_render_phase_b() {
     let sdl_template = config
         .load_sdl("testnet-b.yml")
         .expect("load testnet-b.yml");
-    let rendered = substitute_template_raw(&sdl_template, &vars).expect("render testnet-b.yml");
+    let rendered = akash_deploy_rs::substitute_partial(&sdl_template, &vars);
 
     // Tackle services present
     assert!(
@@ -256,7 +268,7 @@ fn test_testnet_sdl_render_phase_c() {
     let sdl_template = config
         .load_sdl("testnet-c.yml")
         .expect("load testnet-c.yml");
-    let rendered = substitute_template_raw(&sdl_template, &vars).expect("render testnet-c.yml");
+    let rendered = akash_deploy_rs::substitute_partial(&sdl_template, &vars);
 
     // Forward services present
     assert!(
@@ -305,9 +317,11 @@ fn test_testnet_sdl_render_phase_c() {
 
 // ── Akash Deploy Test (requires infrastructure) ──────────────────────────────
 
+#[cfg(feature = "testing")]
 #[tokio::test]
 #[ignore = "requires local Akash dev cluster + localterp image (just test testnet deploy)"]
 async fn test_testnet_deploy_akash() {
+    #[cfg(feature = "testing")]
     use o_line_sdl::{
         config::build_config_from_env, deployer::OLineDeployer, testing::IctAkashNetwork,
     };
@@ -331,7 +345,7 @@ async fn test_testnet_deploy_akash() {
     // Stop after deploy — no real provider to send manifest to.
     std::env::set_var("OLINE_TEST_STOP_AFTER_DEPLOY", "1");
 
-    let config = build_config_from_env(net.deployer_mnemonic.clone());
+    let config = build_config_from_env(net.deployer_mnemonic.clone(), None);
 
     // 3. Fund deployer account.
     let deployer = OLineDeployer::new(config.clone(), "test".into())
@@ -378,7 +392,7 @@ async fn test_testnet_deploy_akash() {
     vars.insert("SNAPSHOT_80_ACCEPTS".into(), String::new());
     vars.insert("SEED_80_ACCEPTS".into(), String::new());
 
-    let rendered = substitute_template_raw(&sdl_a, &vars).expect("render testnet-a");
+    let rendered = akash_deploy_rs::substitute_partial(&sdl_a, &vars);
     println!("  Rendered testnet-a.yml ({} bytes)", rendered.len());
 
     // 5. Deploy Phase A via the deployer (auto-select provider).

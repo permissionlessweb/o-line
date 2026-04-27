@@ -1,5 +1,6 @@
 pub mod accounts;
 pub mod akash;
+pub mod authz;
 pub mod cli;
 pub mod cmd;
 pub mod config;
@@ -11,6 +12,7 @@ pub mod firewall;
 pub mod keys;
 #[cfg(feature = "interface")]
 pub mod interface;
+pub mod log_persistence;
 pub mod nodes;
 pub mod providers;
 pub mod registry;
@@ -32,10 +34,11 @@ pub use cmd::{
     },
     dns::{cmd_dns,DnsArgs},
     endpoints::{cmd_endpoints,EndpointsArgs},
-    firewall::{cmd_firewall,FirewallArgs},
+    // firewall::{cmd_firewall,FirewallArgs},
     init::{cmd_init,InitArgs},
     node::{cmd_node,NodeArgs},
     providers::{cmd_providers,ProvidersArgs},
+    proxy::{cmd_proxy,ProxyArgs},
     refresh::{cmd_refresh,RefreshArgs},
     registry::{cmd_registry,RegistryArgs},
     relayer::{cmd_relayer,RelayerArgs},
