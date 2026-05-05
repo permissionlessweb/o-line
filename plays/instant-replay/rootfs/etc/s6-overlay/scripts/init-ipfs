@@ -12,6 +12,7 @@ fi
 # Configure gateway port
 echo "[init-ipfs] Setting gateway to port ${IPFS_GATEWAY_P:-8081}"
 ipfs config Addresses.Gateway "/ip4/0.0.0.0/tcp/${IPFS_GATEWAY_P:-8081}"
+ipfs config Addresses.API "/ip4/0.0.0.0/tcp/${IPFS_UI_P:-5001}"
 
 # Tune for pinning server (low resource usage)
 ipfs config --json Swarm.ConnMgr.LowWater 50

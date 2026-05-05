@@ -14,18 +14,14 @@ META_LOCAL="${STAGING}/${META_OBJ}"
 
 mkdir -p "$STAGING"
 touch "$PINNED_LOG"
-
-# Configure mc alias
 mc alias set local "http://localhost:${MINIO_P}" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" --api S3v4 > /dev/null 2>&1
-
 echo "[autopin] Watching MinIO bucket '${MINIO_BUCKET}' every ${INTERVAL}s for: ${PATTERNS}"
 
-# update_metadata <objname> <cid> <etag>
+update_metadata() { # update_metadata <objname> <cid> <etag>
 #   1. Fetches current metadata.json from MinIO (creates empty skeleton if absent/corrupt)
 #   2. Merges new snapshot entry (keyed by object name)
 #   3. Uploads updated metadata.json back to MinIO (publicly readable)
 #   4. Pins metadata.json to IPFS and logs the resulting CID
-update_metadata() {
     local objname="$1" cid="$2" etag="$3"
     local now
     now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -55,7 +51,7 @@ update_metadata() {
 
     # Pin metadata.json itself to IPFS
     local meta_cid
-    meta_cid=$(s6-setuidgid app ipfs add --pin=true -Q "$META_LOCAL" 2>/dev/null)
+    meta_cid=$(s6-setuidgid app ipfs add  --nocopy --pin=true -Q "$META_LOCAL" 2>/dev/null)
     if [ -n "$meta_cid" ]; then
         echo "[autopin] Metadata pinned -> ${meta_cid}"
         echo "[autopin]   http://localhost:${IPFS_GATEWAY_P:-8081}/ipfs/${meta_cid}"
@@ -89,7 +85,7 @@ while true; do
         mc cp "local/${MINIO_BUCKET}/${objname}" "$local_path" > /dev/null 2>&1
 
         if [ -f "$local_path" ]; then
-            CID=$(s6-setuidgid app ipfs add --pin=true -Q "$local_path" 2>/dev/null)
+            CID=$(s6-setuidgid app ipfs add --nocopy --pin=true -Q "$local_path" 2>/dev/null)
             rm -f "$local_path"
 
             if [ -n "$CID" ]; then

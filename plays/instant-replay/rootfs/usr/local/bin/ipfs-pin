@@ -18,9 +18,9 @@ fi
 echo "Pinning '$TARGET' to IPFS..."
 
 if [ -d "$TARGET" ]; then
-    CID=$(ipfs add -r --pin=true -Q "$TARGET")
+    CID=$(ipfs add -r  --nocopy --pin=true -Q "$TARGET")
 else
-    CID=$(ipfs add --pin=true -Q "$TARGET")
+    CID=$(ipfs add  --nocopy --pin=true -Q "$TARGET")
 fi
 
 GATEWAY_P="${IPFS_GATEWAY_P:-8081}"
