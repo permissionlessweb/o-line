@@ -1,6 +1,6 @@
-use crate::{cli::*, config::*, templates, with_examples};
 use crate::config::oline_deploy_config_path;
 use crate::toml_config::{TomlConfig, CONFIG_FIELDS};
+use crate::{cli::*, config::*, templates, with_examples};
 use std::collections::HashSet;
 use std::{
     error::Error,
@@ -27,9 +27,10 @@ with_examples! {
 }
 
 pub async fn cmd_init(args: &InitArgs) -> Result<(), Box<dyn Error>> {
-    let output: String = args.output.clone().unwrap_or_else(|| {
-        oline_deploy_config_path().to_string_lossy().into_owned()
-    });
+    let output: String = args
+        .output
+        .clone()
+        .unwrap_or_else(|| oline_deploy_config_path().to_string_lossy().into_owned());
     // ── list-templates ────────────────────────────────────────────────────────
     if args.list_templates {
         tracing::info!("Available templates:\n");
@@ -51,78 +52,22 @@ pub async fn cmd_init(args: &InitArgs) -> Result<(), Box<dyn Error>> {
         })?;
         tracing::info!("  Using template: {} — {}", t.name, t.description);
         let config = t.build_config();
-        let peers = PeerInputs::default();
-        let deploy_config = DeployConfig::from_oline_config(&config, peers);
+        let deploy_config = DeployConfig::from_oline_config(&config);
         deploy_config.write_to_file(Path::new(&output))?;
         tracing::info!("\n  Config written to: {}", output);
         tracing::info!("  Review and customise, then render SDL with:");
         tracing::info!("    oline sdl --load-config {}", output);
         return Ok(());
     }
-
-    // ── interactive ───────────────────────────────────────────────────────────
-    let stdin = io::stdin();
-    let mut lines = stdin.lock().lines();
-
-    // Load TOML config as baseline
-    let mut toml_cfg = if std::path::Path::new("config.toml").exists() {
-        TomlConfig::load("config.toml").unwrap_or_else(|_| TomlConfig::from_defaults())
-    } else {
-        TomlConfig::from_defaults()
-    };
-
-    // Merge saved config if available
-    if has_saved_config() {
-        tracing::info!("  Found saved config.");
-        let password = rpassword::prompt_password(
-            "Enter password to decrypt config (or press Enter to skip): ",
-        )?;
-        if !password.is_empty() {
-            if let Some(saved) = load_config(&password) {
-                for field in CONFIG_FIELDS {
-                    let env_var = crate::toml_config::env_key(field.path);
-                    if toml_cfg.get_value(field.path).is_empty() {
-                        if let Some(v) = saved.get_str(&env_var) {
-                            if !v.is_empty() {
-                                toml_cfg.set_value(field.path, v.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let resolved: Vec<String> = CONFIG_FIELDS.iter().map(|f| toml_cfg.get_value(f.path)).collect();
-    print_config_table(&resolved);
-    let overrides: HashSet<usize> = read_override_selection(&mut lines)?;
-
-    for (i, field) in CONFIG_FIELDS.iter().enumerate() {
-        if overrides.contains(&i) {
-            let value = if field.is_secret {
-                read_secret_input(field.description, Some(&resolved[i]))?
-            } else {
-                read_input(&mut lines, field.description, Some(&resolved[i]))?
-            };
-            toml_cfg.set_value(field.path, value);
-        }
-    }
-
-    let config = OLineConfig::from_toml(&toml_cfg, String::new());
-
-    // Peer inputs
-    tracing::info!("\n  Peer IDs (press Enter to leave blank — fill in after Phase A):");
-    let snapshot = read_input(&mut lines, "Snapshot peer (id@host:port)", Some(""))?;
-    let seed = read_input(&mut lines, "Seed peer (id@host:port)", Some(""))?;
-    let statesync_rpc = read_input(&mut lines, "Statesync RPC (host:port,...)", Some(""))?;
-    let left_tackle = read_input(&mut lines, "Left tackle peer (id@host:port)", Some(""))?;
-    let right_tackle = read_input(&mut lines, "Right tackle peer (id@host:port)", Some(""))?;
-
-    let peers = PeerInputs { snapshot, seed, statesync_rpc, left_tackle, right_tackle };
-    let deploy_config = DeployConfig::from_oline_config(&config, peers);
+    let (toml_config, toml_content) = TomlConfig::default_with_template();
+    let oline_config = OLineConfig::from_toml(&toml_config, String::new());
+    let deploy_config = DeployConfig::from_oline_config(&oline_config);
     deploy_config.write_to_file(Path::new(&output))?;
 
     tracing::info!("\n  Config written to: {}", output);
-    tracing::info!("  Render SDL from it with: oline sdl --load-config {}", output);
+    tracing::info!(
+        "  Render SDL from it with: oline sdl --load-config {}",
+        output
+    );
     Ok(())
 }

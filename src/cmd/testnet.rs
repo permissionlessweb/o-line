@@ -24,6 +24,7 @@ use crate::{
         verify_files_and_signal_start,
     },
     deployer::OLineDeployer,
+    dns::cloudflare::cloudflare_update_accept_domains,
     with_examples, MAX_RETRIES,
 };
 use akash_deploy_rs::{
@@ -412,11 +413,11 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
     };
 
     let sentry_a_svc = lb_vars
-        .get("SENTRY_A_SVC")
+        .get("SEN_A_SVC")
         .map(|s| s.as_str())
         .unwrap_or("testnet-sentry-a");
     let sentry_b_svc = lb_vars
-        .get("SENTRY_B_SVC")
+        .get("SEN_B_SVC")
         .map(|s| s.as_str())
         .unwrap_or("testnet-sentry-b");
 
@@ -459,6 +460,29 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
         .await?;
     }
 
+    // TODO: UPDATE DNS RECORDS FOR TESTNET LB
+    let cf_token = config.val("OLINE_CF_API_TOKEN");
+    let cf_zone = config.val("OLINE_CF_ZONE_ID");
+    if !cf_token.is_empty() && !cf_zone.is_empty() {
+        let eps = sentry_b_eps;
+        tracing::info!("  Updating Cloudflare DNS for accept domains...");
+        cloudflare_update_accept_domains(&sdl_lb, &eps, &cf_token, &cf_zone).await;
+        // P2P domains: DNS-only A records (NOT proxied — raw TCP for CometBFT P2P)
+        // let vars = &lb_vars;
+        // let get = |k: &str| vars.get(k).map(|s| s.as_str()).unwrap_or("");
+        // let a_p2p: u16 = get("P2P_P_TNA").parse().unwrap_or(26656);
+        // let b_p2p: u16 = get("P2P_P_TNB").parse().unwrap_or(26656);
+        // let p2p_entries = [
+        //     (get("P2P_D_TNA"), a_p2p, "testnet-sentry-a"),
+        //     (get("P2P_D_TNB"), b_p2p, "testnet-sentry-b"),
+        // ];
+        // cloudflare_update_p2p_domains(&p2p_entries, &eps, &cf_token, &cf_zone).await;
+    } else {
+        tracing::info!(
+            "  Note: Cloudflare DNS not configured — update CNAMEs for accept domains manually."
+        );
+    }
+
     // ── 10. Summary + validator wiring instructions ───────────────────────────
     let sentry_a_p2p = lb_endpoints
         .iter()
@@ -492,11 +516,11 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
     tracing::info!("  After terpd init, get sentry node IDs:");
     tracing::info!(
         "    ssh -p <PORT> root@{} terpd tendermint show-node-id",
-        sentry_a_p2p.split(':').next().unwrap_or("SENTRY_A_HOST")
+        sentry_a_p2p.split(':').next().unwrap_or("SEN_A_HOST")
     );
     tracing::info!(
         "    ssh -p <PORT> root@{} terpd tendermint show-node-id",
-        sentry_b_p2p.split(':').next().unwrap_or("SENTRY_B_HOST")
+        sentry_b_p2p.split(':').next().unwrap_or("SEN_B_HOST")
     );
     tracing::info!("  Then start your validator with:");
     tracing::info!(
@@ -506,6 +530,10 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
     );
     tracing::info!("════════════════════════════════════════════════════════════\n");
 
+    // TODO:
+    // - retrieve node-ids from sentries via manual query
+    // - update each sentry node to be persitent peers with each other
+    //
     Ok(())
 }
 
@@ -519,44 +547,41 @@ fn build_testnet_lb_vars(
 
     // Service names
     vars.insert("LB_SVC".into(), "testnet-lb".into());
-    vars.insert("SENTRY_A_SVC".into(), "testnet-sentry-a".into());
-    vars.insert("SENTRY_B_SVC".into(), "testnet-sentry-b".into());
+    vars.insert("SEN_A_SVC".into(), "testnet-sentry-a".into());
+    vars.insert("SEN_B_SVC".into(), "testnet-sentry-b".into());
 
     // Chain
-    vars.insert("TESTNET_CHAIN_ID".into(), chain_id.to_string());
+    vars.insert("TN_CHAIN_ID".into(), chain_id.to_string());
     vars.insert("GENESIS_URL".into(), genesis_url.to_string());
 
     // Monikers
-    vars.insert("SENTRY_A_MONIKER".into(), generate_credential(12));
-    vars.insert("SENTRY_B_MONIKER".into(), generate_credential(12));
+    vars.insert("SEN_A_MONIKER".into(), generate_credential(12));
+    vars.insert("SEN_B_MONIKER".into(), generate_credential(12));
 
     // Sentry image — use testnet-specific terp-core image (with ZK wasmvm + hashmerchant + faucet)
-    let sentry_image = config.val("TESTNET_SENTRY_IMAGE");
+    let sentry_image = config.val("TN_SEN_IMAGE");
     let sentry_image = if sentry_image.is_empty() {
-        panic!("need sentry image set: TESTNET_SENTRY_IMAGE ")
+        panic!("need sentry image set: TN_SEN_IMAGE ")
     } else {
         sentry_image
     };
-    vars.insert("TESTNET_SENTRY_IMAGE".into(), sentry_image);
+    vars.insert("TN_SEN_IMAGE".into(), sentry_image);
 
     // Faucet keys — funded accounts in genesis; each sentry uses a distinct key
     // to avoid tx sequence conflicts when both serve faucet requests concurrently.
-    let fa_mnemonic = config.val("TESTNET_SENTRY_A_FAUCET_MNEMONIC");
-    let fb_mnemonic = config.val("TESTNET_SENTRY_B_FAUCET_MNEMONIC");
-    vars.insert("SENTRY_A_FAUCET_MNEMONIC".into(), fa_mnemonic);
-    vars.insert("SENTRY_B_FAUCET_MNEMONIC".into(), fb_mnemonic);
+    let fa_mnemonic = config.val("TN_SEN_A_FAUCET_MNEMONIC");
+    let fb_mnemonic = config.val("TN_SEN_B_FAUCET_MNEMONIC");
+    vars.insert("SEN_A_FAUCET_MNEMONIC".into(), fa_mnemonic);
+    vars.insert("SEN_B_FAUCET_MNEMONIC".into(), fb_mnemonic);
 
     // LB domains (the unified public endpoints)
-    let lb_domain = vars
-        .get("nodes.snapshot.domain")
-        .cloned()
-        .unwrap_or_else(|| "testnet.terp.network".into());
+    let lb_domain = "testnet.terp.network";
     vars.insert("RPC_D_LB".into(), format!("rpc-{}", lb_domain));
     vars.insert("API_D_LB".into(), format!("api-{}", lb_domain));
     vars.insert("GRPC_D_LB".into(), format!("grpc-{}", lb_domain));
 
     // LB port 80 accept items
-    let rpc_d = vars.get("RPC_D_LB").cloned().unwrap_or_default();
+    let rpc_d: String = vars.get("RPC_D_LB").cloned().unwrap_or_default();
     let api_d = vars.get("API_D_LB").cloned().unwrap_or_default();
     let mut accepts = Vec::new();
     if !rpc_d.is_empty() {

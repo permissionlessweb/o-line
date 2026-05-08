@@ -51,7 +51,7 @@ ssh   = 22
 http  = 80
 # MinIO
 s3_api    = 9000
-s3_console = 9001
+s3_console = 9002
 # IPFS
 ipfs_gateway = 8081
 ipfs_p2p     = 4001

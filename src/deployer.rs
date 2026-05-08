@@ -1,11 +1,8 @@
-use crate::{
-    config::OLineConfig,
-    providers::TrustedProviderStore,
-};
+use crate::{config::OLineConfig, providers::TrustedProviderStore};
 use akash_deploy_rs::{
-    AkashBackend, AkashClient, Bid, DeployError, DeploymentState, DeploymentStore,
-    DeploymentWorkflow, FileDeploymentStore, InputRequired, KeySigner, ProviderInfo,
-    ServiceEndpoint, Step, StepResult as AkashStepResult, WorkflowConfig,
+    AkashBackend, AkashClient, Bid, DeployError, DeploymentState, DeploymentWorkflow,
+    FileDeploymentStore, InputRequired, KeySigner, ProviderInfo, ServiceEndpoint, Step,
+    StepResult as AkashStepResult, WorkflowConfig,
 };
 use bip32::DerivationPath;
 use std::{collections::HashMap, error::Error, io, str::FromStr};
@@ -127,10 +124,7 @@ impl OLineDeployer {
         )
         .await
         .map_err(|_| {
-            DeployError::InvalidState(format!(
-                "Timed out connecting to Akash RPC ({}).",
-                rpc
-            ))
+            DeployError::InvalidState(format!("Timed out connecting to Akash RPC ({}).", rpc))
         })??;
 
         if !rest.is_empty() {
@@ -142,8 +136,9 @@ impl OLineDeployer {
 
         Ok(Self {
             client,
-            signer: KeySigner::new_mnemonic_str(&config.mnemonic, None)
-                .map_err(|e| DeployError::Signer(format!("Failed to create authz signer: {}", e)))?,
+            signer: KeySigner::new_mnemonic_str(&config.mnemonic, None).map_err(|e| {
+                DeployError::Signer(format!("Failed to create authz signer: {}", e))
+            })?,
             config,
             password: String::new(),
             deployment_store: FileDeploymentStore::new_default().await?,

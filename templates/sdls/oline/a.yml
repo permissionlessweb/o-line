@@ -135,8 +135,8 @@ ${SEED_80_ACCEPTS}
   ${MINIO_SVC}:
     image: ${MINIO_IPFS_IMAGE}
     expose:
-      - port: 9001
-        as: 9001
+      - port: 9002
+        as: 9002
         to:
           - global: true
       - port: 8081
@@ -162,7 +162,7 @@ ${MINIO_80_ACCEPTS}
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
       - MINIO_BUCKET=${MINIO_BUCKET}
-      - MINIO_CONSOLE_P=9001
+      - MINIO_CONSOLE_P=9002
       - IPFS_GATEWAY_P=8081
       - IPFS_PROFILE=server
       - AUTOPIN_INTERVAL=${OLINE_AUTOPIN_INTERVAL}

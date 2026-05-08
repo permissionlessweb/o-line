@@ -1,8 +1,11 @@
 # minio-ipfs
 
-MinIO object storage + Kubo IPFS gateway in a single container, managed by s6-overlay v3. Built from source.
+MinIO object storage + Kubo IPFS gateway in a single container, managed by s6-overlay v3. Built from source. Designed for O-Line validator infrastructure on Akash — receives snapshots via S3 API, serves them over HTTP and IPFS.
 
-Designed for O-Line validator infrastructure on Akash — receives snapshots via S3 API, serves them over HTTP and IPFS.
+## TODO
+- expose authenticated 'flush' where service checks for any new items to pin to ipfs
+- fix ipfs pinning automation layer
+- pir support
 
 ## Security model
 
@@ -10,7 +13,7 @@ Designed for O-Line validator infrastructure on Akash — receives snapshots via
 |------|--------|------|
 | S3 API `:9000` GET | Public | Anonymous download via `mc anonymous set download` |
 | S3 API `:9000` PUT/DELETE | Private | Requires `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` |
-| Console `:9001` | Private | Requires `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` |
+| Console `:9002` | Private | Requires `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` |
 | IPFS gateway `:8081` | Public | Read-only |
 | IPFS swarm `:4001` | Public | P2P protocol |
 
@@ -19,21 +22,34 @@ Anonymous download is configured automatically at startup by `init-minio-bucket`
 ## Quickstart
 
 ```bash
-docker run -d --name minio-ipfs \
-  -e MINIO_ROOT_USER=myaccesskey \
-  -e MINIO_ROOT_PASSWORD=mysecretkey \
-  -e MINIO_BUCKET=snapshots \
-  -p 9000:9000 -p 9001:9001 -p 8081:8081 \
-  -v minio_data:/data/minio \
-  -v ipfs_data:/data/ipfs \
-  ghcr.io/permissionlessweb/minio-ipfs:v0.0.9
+docker run -d --name minio-ipfs -e MINIO_ROOT_USER="accesskey123456" -e MINIO_ROOT_PASSWORD=secretkey123456 -e AUTOPIN_BUCKETS="snapshots,static" -p 9000:9000 -p 8081:8081 -p 9002:9002 -p 5001:5001 -p 4001:4001 -v minio_ipfs:/data ghcr.io/permissionlessweb/minio-ipfs:latest
 ```
 
 Upload a file (authenticated):
 ```bash
-mc alias set remote http://localhost:9000 myaccesskey mysecretkey
+mc alias set usb1 http://127.0.0.1:9000 myaccesskey mysecretkey
 mc cp snapshot.tar.gz remote/snapshots/
 ```
+
+### More `mc` CLI commands
+
+- `mc ls` : https://docs.min.io/aistor/reference/cli/mc-ls/
+- `mc put` : https://docs.min.io/aistor/reference/cli/mc-put/
+```
+mc [GLOBALFLAGS] put                           \
+                 TARGET                        \
+                 [--checksum value]            \
+                 [--disable-multipart]         \
+                 [--enc-kms value]             \
+                 [--enc-s3 value]              \
+                 [--enc-c value]               \
+                 [--if-not-exists]             \
+                 [--parallel, -P integer]      \
+                 [--part-size, -s string]      \
+                 [--storage-class, -sc string]
+```
+- `mc replicate` : https://docs.min.io/aistor/reference/cli/mc-replicate/
+- `mc inventory` : https://docs.min.io/aistor/reference/cli/mc-inventory/
 
 Download anonymously:
 ```bash
@@ -41,18 +57,17 @@ curl -O http://localhost:9000/snapshots/snapshot.tar.gz
 ```
 
 ## Environment variables
-
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MINIO_ROOT_USER` | `minioadmin` | MinIO admin username (S3 access key) |
 | `MINIO_ROOT_PASSWORD` | `minioadmin` | MinIO admin password (S3 secret key) |
-| `MINIO_BUCKET` | `snapshots` | Bucket created on first startup |
+| `AUTOPIN_BUCKETS` | `"snapshots,static"` | Buckets created on first startup |
 | `MINIO_ENABLED` | `true` | Set `false` to disable MinIO entirely |
 | `MINIO_P` | `9000` | S3 API listen port |
-| `MINIO_CONSOLE_P` | `9001` | Web console listen port |
+| `MINIO_CONSOLE_P` | `9002` | Web console listen port |
 | `IPFS_GATEWAY_P` | `8081` | IPFS HTTP gateway port |
 | `IPFS_PROFILE` | `server` | Kubo init profile (`server`, `lowpower`) |
-| `AUTOPIN_INTERVAL` | `300` | Seconds between auto-pin scans of the bucket |
+| `AUTOPIN_INTERVAL` | `30` | Seconds between auto-pin scans of the bucket |
 | `AUTOPIN_PATTERNS` | `*.tar.gz,*.tar.zst,*.tar.lz4,*.tar.xz` | Glob patterns to auto-pin from MinIO |
 | `PUID` | `1000` | Run-as user ID |
 | `PGID` | `1000` | Run-as group ID |
@@ -62,7 +77,7 @@ curl -O http://localhost:9000/snapshots/snapshot.tar.gz
 | Port | Service | Public |
 |------|---------|--------|
 | 9000 | MinIO S3 API | Yes (anonymous GET, authenticated PUT) |
-| 9001 | MinIO console | Yes (login required) |
+| 9002 | MinIO console | Yes (login required) |
 | 8081 | IPFS HTTP gateway | Yes (read-only) |
 | 4001 | IPFS swarm (P2P) | Optional |
 
@@ -133,7 +148,7 @@ E2E_IMAGE=minio-ipfs:latest ./e2e-test.sh
 This image runs as part of O-Line's `a.kickoff-special-teams.yml` SDL. The snapshot node writes to MinIO via `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` (passed as `S3_KEY`/`S3_SECRET` in the SDL). Anonymous download is enabled for public snapshot serving.
 
 Ports mapped in SDL:
-- `9001 -> 80` (console via `snapshots.terp.network`)
+- `9002 -> 80` (console via `snapshots.terp.network`)
 - `9000 -> 9000` (S3 API)
 - `8081 -> 8081` (IPFS gateway)
 - `4001 -> 4001` (IPFS swarm)

@@ -1,0 +1,164 @@
+---
+# ── Headscale VPN Authentication Server ──────────────────────────────────────
+# Self-hosted Tailscale-compatible control plane deployed on Akash.
+#
+# Services:
+#   headscale — Headscale server with embedded DERP relay + SQLite.
+#               Akash ingress terminates TLS on port 80 (accept domain).
+#               STUN exposed on UDP/3478 for NAT traversal.
+#
+# Image:
+#   Uses the -debug variant because the standard headscale image is distroless
+#   (no shell). The debug image adds Busybox (sh, wget) so we can generate
+#   config.yaml from env vars at startup. Binary location: /ko-app/headscale
+#
+# TLS:
+#   Akash provider ingress terminates TLS for the accept domain. Headscale
+#   listens on plain HTTP internally (listen_addr: 0.0.0.0:8080) but advertises
+#   its server_url as https://${HEADSCALE_DOMAIN}. Tailscale clients connect
+#   via HTTPS through the Akash ingress.
+#
+# Storage:
+#   /var/lib/headscale is persistent — holds SQLite DB, noise keys, and ACLs.
+#   First deploy auto-generates keys; subsequent deploys reuse them.
+# ─────────────────────────────────────────────────────────────────────────────
+version: "2.0"
+services:
+    headscale:
+        image: docker.io/headscale/headscale:0.25.1-debug
+        command:
+            - sh
+        args:
+            - -c
+            - |
+                set -e
+
+                CONFIG_DIR=/etc/headscale
+                DATA_DIR=/var/lib/headscale
+                CONFIG_FILE=${CONFIG_DIR}/config.yaml
+
+                mkdir -p ${CONFIG_DIR} ${DATA_DIR}/run
+
+                # ── Generate config.yaml from env vars ────────────────────────────
+                cat > ${CONFIG_FILE} << 'CFGEOF'
+                server_url: https://${HEADSCALE_DOMAIN}
+                listen_addr: 0.0.0.0:8080
+                metrics_listen_addr: 0.0.0.0:9090
+                grpc_listen_addr: 0.0.0.0:50443
+                grpc_allow_insecure: false
+                noise:
+                  private_key_path: /var/lib/headscale/noise_private.key
+                prefixes:
+                  v4: ${HEADSCALE_IPV4_PREFIX}
+                  v6: ${HEADSCALE_IPV6_PREFIX}
+                  allocation: sequential
+                derp:
+                  server:
+                    enabled: ${HEADSCALE_DERP_ENABLED}
+                    region_id: 999
+                    region_code: akash
+                    region_name: Akash DERP
+                    stun_listen_addr: 0.0.0.0:3478
+                    automatically_add_embedded_derp_region: true
+                  urls:
+                    - https://controlplane.tailscale.com/derpmap/default
+                  auto_update_enabled: true
+                  update_frequency: 24h
+                disable_check_updates: true
+                ephemeral_node_inactivity_timeout: 30m
+                database:
+                  type: sqlite
+                  sqlite:
+                    path: /var/lib/headscale/db.sqlite
+                    write_ahead_log: true
+                dns:
+                  magic_dns: true
+                  base_domain: ${HEADSCALE_BASE_DOMAIN}
+                  nameservers:
+                    global:
+                      - 1.1.1.1
+                      - 1.0.0.1
+                log:
+                  level: info
+                policy:
+                  mode: file
+                  path: ""
+                CFGEOF
+
+                # ── Resolve env vars in config (busybox sed) ─────────────────────
+                sed -i "s|\${HEADSCALE_DOMAIN}|${HEADSCALE_DOMAIN}|g" ${CONFIG_FILE}
+                sed -i "s|\${HEADSCALE_IPV4_PREFIX}|${HEADSCALE_IPV4_PREFIX}|g" ${CONFIG_FILE}
+                sed -i "s|\${HEADSCALE_IPV6_PREFIX}|${HEADSCALE_IPV6_PREFIX}|g" ${CONFIG_FILE}
+                sed -i "s|\${HEADSCALE_DERP_ENABLED}|${HEADSCALE_DERP_ENABLED}|g" ${CONFIG_FILE}
+                sed -i "s|\${HEADSCALE_BASE_DOMAIN}|${HEADSCALE_BASE_DOMAIN}|g" ${CONFIG_FILE}
+
+                echo "=== Headscale config generated ==="
+                cat ${CONFIG_FILE}
+                echo "=== Starting headscale ==="
+                exec /ko-app/headscale serve
+        expose:
+            # HTTPS control plane — Akash ingress terminates TLS, routes to 8080
+            - port: 8080
+              as: 80
+              to:
+                  - global: true
+              accept:
+                  - ${HEADSCALE_DOMAIN}
+            # STUN for embedded DERP relay — UDP, globally reachable for NAT traversal
+            - port: 3478
+              as: 3478
+              proto: udp
+              to:
+                  - global: true
+            # gRPC API — remote control via headscale CLI from another machine
+            - port: 50443
+              as: 50443
+              to:
+                  - global: true
+            # Metrics — internal only, expose if monitoring is needed
+            - port: 9090
+              as: 9090
+              to:
+                  - global: true
+        env:
+            - HEADSCALE_DOMAIN=${HEADSCALE_DOMAIN}
+            - HEADSCALE_BASE_DOMAIN=${HEADSCALE_BASE_DOMAIN}
+            - HEADSCALE_IPV4_PREFIX=${HEADSCALE_IPV4_PREFIX}
+            - HEADSCALE_IPV6_PREFIX=${HEADSCALE_IPV6_PREFIX}
+            - HEADSCALE_DERP_ENABLED=${HEADSCALE_DERP_ENABLED}
+        params:
+            storage:
+                headscale-data:
+                    mount: /var/lib/headscale
+                    readOnly: false
+profiles:
+    compute:
+        headscale:
+            resources:
+                cpu:
+                    units: 1
+                memory:
+                    size: 512Mi
+                storage:
+                    - size: 1Gi
+                    - name: headscale-data
+                      size: 2Gi
+                      attributes:
+                          persistent: true
+                          class: beta3
+    placement:
+        dcloud:
+            pricing:
+                headscale:
+                    denom: uact
+                    amount: 500
+            signedBy:
+                anyOf:
+                    - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
+            attributes:
+                host: akash
+deployment:
+    headscale:
+        dcloud:
+            profile: headscale
+            count: 1

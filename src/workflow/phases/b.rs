@@ -4,8 +4,8 @@ use crate::{
     deployer::OLineDeployer,
     nodes::register_phase_nodes,
     workflow::context::PhaseResult,
-    workflow::{OLineWorkflow, StepResult},
     workflow::step::{DeployPhase, OLineStep, PeerTarget},
+    workflow::{OLineWorkflow, StepResult},
 };
 use akash_deploy_rs::{DeployError, DeploymentRecord, DeploymentStore};
 use std::io::{BufRead, Lines};
@@ -19,22 +19,25 @@ pub async fn deploy_tackles(
         .map_err(|e| DeployError::InvalidState(e.to_string()))?
     {
         tracing::info!("  Skipping Phase B.");
-        w.ctx.set_phase_result(DeployPhase::Tackles, PhaseResult::Skipped);
+        w.ctx
+            .set_phase_result(DeployPhase::Tackles, PhaseResult::Skipped);
         w.step = OLineStep::Deploy(DeployPhase::Forwards);
         return Ok(StepResult::Continue);
     }
 
-    let b_vars = build_phase_b_vars(
-        &w.ctx.deployer.config,
-        w.ctx.peer(PeerTarget::Snapshot),
-        &w.ctx.statesync_rpc,
-    );
+    let mut config = w.ctx.deployer.config.clone();
+    let peer = w.ctx.peer(PeerTarget::Snapshot);
+    let state_sync_rpc = &w.ctx.statesync_rpc;
+    config.set("TERPD_P2P_PERSISTENT_PEERS", peer);
+    config.set("STATESYNC_RPC_SERVERS", state_sync_rpc.as_str());
+    let b_vars = build_phase_b_vars(&config);
 
     let sdl = match w.ctx.deployer.config.load_sdl("b.yml") {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("  Phase B SDL error: {} — skipping.", e);
-            w.ctx.set_phase_result(DeployPhase::Tackles, PhaseResult::Failed(e.to_string()));
+            w.ctx
+                .set_phase_result(DeployPhase::Tackles, PhaseResult::Failed(e.to_string()));
             w.step = OLineStep::Deploy(DeployPhase::Forwards);
             return Ok(StepResult::Continue);
         }
@@ -50,7 +53,8 @@ pub async fn deploy_tackles(
         Ok(result) => result,
         Err(e) => {
             tracing::warn!("  Phase B deploy failed: {} — skipping.", e);
-            w.ctx.set_phase_result(DeployPhase::Tackles, PhaseResult::Failed(e.to_string()));
+            w.ctx
+                .set_phase_result(DeployPhase::Tackles, PhaseResult::Failed(e.to_string()));
             w.step = OLineStep::Deploy(DeployPhase::Forwards);
             return Ok(StepResult::Continue);
         }
@@ -94,7 +98,8 @@ pub async fn deploy_tackles(
 
     w.ctx.set_endpoints(DeployPhase::Tackles, b_endpoints);
     w.ctx.set_state(DeployPhase::Tackles, b_state);
-    w.ctx.set_phase_result(DeployPhase::Tackles, PhaseResult::Deployed);
+    w.ctx
+        .set_phase_result(DeployPhase::Tackles, PhaseResult::Deployed);
 
     let boot_wait = std::env::var("OLINE_RPC_INITIAL_WAIT")
         .ok()
@@ -120,10 +125,12 @@ pub async fn wait_left_tackle(
         return Ok(StepResult::Continue);
     }
     let b_eps = w.ctx.endpoints(DeployPhase::Tackles);
-    let left_rpc_url = OLineDeployer::find_endpoint_by_internal_port(b_eps, "oline-b-left-node", 26657)
-        .map(|e| e.uri.clone());
-    let left_p2p_addr = OLineDeployer::find_endpoint_by_internal_port(b_eps, "oline-b-left-node", 26656)
-        .map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port));
+    let left_rpc_url =
+        OLineDeployer::find_endpoint_by_internal_port(b_eps, "oline-b-left-node", 26657)
+            .map(|e| e.uri.clone());
+    let left_p2p_addr =
+        OLineDeployer::find_endpoint_by_internal_port(b_eps, "oline-b-left-node", 26656)
+            .map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port));
 
     let left_tackle_peer = match (left_rpc_url.as_deref(), left_p2p_addr.as_deref()) {
         (Some(rpc), Some(p2p)) => {
@@ -157,10 +164,12 @@ pub async fn wait_right_tackle(
         return Ok(StepResult::Continue);
     }
     let b_eps = w.ctx.endpoints(DeployPhase::Tackles);
-    let right_rpc_url = OLineDeployer::find_endpoint_by_internal_port(b_eps, "oline-b-right-node", 26657)
-        .map(|e| e.uri.clone());
-    let right_p2p_addr = OLineDeployer::find_endpoint_by_internal_port(b_eps, "oline-b-right-node", 26656)
-        .map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port));
+    let right_rpc_url =
+        OLineDeployer::find_endpoint_by_internal_port(b_eps, "oline-b-right-node", 26657)
+            .map(|e| e.uri.clone());
+    let right_p2p_addr =
+        OLineDeployer::find_endpoint_by_internal_port(b_eps, "oline-b-right-node", 26656)
+            .map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port));
 
     let right_tackle_peer = match (right_rpc_url.as_deref(), right_p2p_addr.as_deref()) {
         (Some(rpc), Some(p2p)) => {

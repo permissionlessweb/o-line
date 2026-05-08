@@ -31,8 +31,8 @@ services:
         accept:
 ${VALIDATOR_80_ACCEPTS}
     env:
-      - CHAINID=${TESTNET_CHAIN_ID}
-      - FAST_BLOCKS=${TESTNET_FAST_BLOCKS}
+      - CHAINID=${TN_CHAIN_ID}
+      - FAST_BLOCKS=${TN_FAST_BLOCKS}
 profiles:
   compute:
     ${VALIDATOR_SVC}:

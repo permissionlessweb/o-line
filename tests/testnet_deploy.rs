@@ -14,7 +14,7 @@
 /// just akash-setup                    # one-time: ict-rs chain image + test-provider
 /// cargo build --bin test-provider
 /// # localterp image must be available:
-/// docker pull ghcr.io/permissionlessweb/localterp:latest
+/// docker pull ghcr.io/terpnetwork/terp-core:v5.2.1-testnet
 /// # or build locally:
 /// cd /path/to/terp-core && docker build --target localterp -t localterp:latest .
 /// ```
@@ -49,8 +49,8 @@ fn test_a_vars(config: &OLineConfig) -> HashMap<String, String> {
     vars.insert("SNAPSHOT_SVC".into(), "testnet-a-snapshot".into());
     vars.insert("SEED_SVC".into(), "testnet-a-seed".into());
     vars.insert("LOCALTERP_IMAGE".into(), "localterp:latest".into());
-    vars.insert("TESTNET_CHAIN_ID".into(), "testnet-1".into());
-    vars.insert("TESTNET_FAST_BLOCKS".into(), "true".into());
+    vars.insert("TN_CHAIN_ID".into(), "testnet-1".into());
+    vars.insert("TN_FAST_BLOCKS".into(), "true".into());
     vars.insert("SNAPSHOT_MONIKER".into(), "test-snapshot".into());
     vars.insert("SEED_MONIKER".into(), "test-seed".into());
     vars.insert("SSH_PUBKEY".into(), "ssh-ed25519 AAAA...".into());
@@ -84,7 +84,7 @@ fn test_b_vars(config: &OLineConfig) -> HashMap<String, String> {
     let mut vars = config.to_sdl_vars();
     vars.insert("LT_SVC".into(), "oline-b-left-tackle".into());
     vars.insert("RT_SVC".into(), "oline-b-right-tackle".into());
-    vars.insert("TESTNET_CHAIN_ID".into(), "testnet-1".into());
+    vars.insert("TN_CHAIN_ID".into(), "testnet-1".into());
     vars.insert("LEFT_TACKLE_MONIKER".into(), "test-lt".into());
     vars.insert("RIGHT_TACKLE_MONIKER".into(), "test-rt".into());
     vars.insert("SSH_PUBKEY".into(), "ssh-ed25519 AAAA...".into());
@@ -105,7 +105,7 @@ fn test_c_vars(config: &OLineConfig) -> HashMap<String, String> {
     let mut vars = config.to_sdl_vars();
     vars.insert("LF_SVC".into(), "oline-c-left-forward".into());
     vars.insert("RF_SVC".into(), "oline-c-right-forward".into());
-    vars.insert("TESTNET_CHAIN_ID".into(), "testnet-1".into());
+    vars.insert("TN_CHAIN_ID".into(), "testnet-1".into());
     vars.insert("LEFT_FMONIKER".into(), "test-lf".into());
     vars.insert("RIGHT_FMONIKER".into(), "test-rf".into());
     vars.insert("SSH_PUBKEY".into(), "ssh-ed25519 AAAA...".into());
@@ -379,10 +379,10 @@ async fn test_testnet_deploy_akash() {
     vars.insert("SEED_SVC".into(), "testnet-a-seed".into());
     vars.insert(
         "LOCALTERP_IMAGE".into(),
-        "ghcr.io/permissionlessweb/localterp:latest".into(),
+        "ghcr.io/terpnetwork/terp-core:v5.2.1-testnet".into(),
     );
-    vars.insert("TESTNET_CHAIN_ID".into(), "testnet-1".into());
-    vars.insert("TESTNET_FAST_BLOCKS".into(), "true".into());
+    vars.insert("TN_CHAIN_ID".into(), "testnet-1".into());
+    vars.insert("TN_FAST_BLOCKS".into(), "true".into());
     vars.insert("SNAPSHOT_MONIKER".into(), "test-snap".into());
     vars.insert("SEED_MONIKER".into(), "test-seed".into());
     vars.insert("SSH_PUBKEY".into(), "ssh-ed25519 AAAA_placeholder".into());

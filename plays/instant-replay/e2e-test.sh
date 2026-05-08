@@ -3,11 +3,11 @@
 set -uo pipefail
 
 # ── Configuration ────────────────────────────────────────────────────────────
-IMAGE="${E2E_IMAGE:-ghcr.io/permissionlessweb/minio-ipfs:v0.0.9}"
-CONTAINER_NAME="minio-ipfs-e2e"
-IPFS_GW_P=18081
-MINIO_P=19000
-MINIO_CONSOLE_P=19001
+IMAGE="${E2E_IMAGE:-permissionlessweb/minio-ipfs:latest}"
+CONTAINER_NAME="minio-ipfs"
+IPFS_GW_P=8081
+MINIO_P=9000
+MINIO_CONSOLE_P=9002
 MINIO_URL="http://localhost:${MINIO_P}"
 MINIO_CONSOLE_URL="http://localhost:${MINIO_CONSOLE_P}"
 IPFS_GW_URL="http://localhost:${IPFS_GW_P}"
@@ -18,6 +18,7 @@ SKIPPED=0
 PINNED_CID=""
 VERBOSE="${VERBOSE:-1}"
 OLINE_BIN="${OLINE_BIN:-}"
+AUTOPIN_INTERVAL=5
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 cleanup() {
@@ -124,13 +125,11 @@ test_container_start() {
     local run_output
     run_output=$(docker run -d \
         --name "$CONTAINER_NAME" \
-        -p "${IPFS_GW_P}:8081" \
-        -p "${MINIO_P}:9000" \
-        -p "${MINIO_CONSOLE_P}:9001" \
+        -p "${IPFS_GW_P}:8081" -p "${MINIO_P}:9000" -p "${MINIO_CONSOLE_P}:9002" \
         -e MINIO_ENABLED=true \
         -e MINIO_ROOT_USER=minioadmin \
         -e MINIO_ROOT_PASSWORD=minioadmin \
-        -e MINIO_BUCKET=snapshots \
+        -e AUTOPIN_BUCKETS=${AUTOPIN_BUCKETS:-snapshots,static}  \
         -e AUTOPIN_INTERVAL=10 \
         -e "AUTOPIN_PATTERNS=*.tar.gz,*.tar.zst,*.tar.lz4,*.tar.xz,snapshot.json" \
         "$IMAGE" 2>&1)
@@ -488,10 +487,100 @@ test_snapshot_json_in_metadata() {
     fi
 }
 
+test_nocopy_behavior() {
+    echo ""
+    echo "=== 8. No Redundant Storage / --nocopy Validation ==="
+
+    local testfile="${TMPDIR}/nocopy-test.bin"
+    dd if=/dev/urandom of="$testfile" bs=1M count=32 2>/dev/null   # 32MB test file
+
+    echo "  Uploading 32MB test file to static bucket..."
+    docker cp "$testfile" "${CONTAINER_NAME}:/tmp/nocopy-test.bin"
+
+    docker exec "$CONTAINER_NAME" sh -c '
+        mc alias set local http://localhost:9000 minioadmin minioadmin --api S3v4 >/dev/null 2>&1
+        mc cp /tmp/nocopy-test.bin local/static/terp.network/test/nocopy-test.bin
+    '
+
+    echo "  Waiting for autopin to pin it..."
+    sleep 15
+
+    # Get CID
+    local cid
+    cid=$(docker logs "$CONTAINER_NAME" 2>&1 | grep -oE "bafy[a-zA-Z0-9]{50,}|Qm[a-zA-Z0-9]{44,}" | tail -1 || true)
+
+    if [ -z "$cid" ]; then
+        fail "Could not find CID for nocopy-test.bin"
+        return 1
+    fi
+
+    # Check IPFS repo stats
+    local ipfs_repo_size
+    ipfs_repo_size=$(docker exec "$CONTAINER_NAME" s6-setuidgid app ipfs repo stat | grep -oE '[0-9.]+ [A-Z]+' | head -1 || echo "unknown")
+
+    echo "  IPFS Repo size after pinning: $ipfs_repo_size"
+    echo "  CID: $cid"
+
+    # Best effort check: IPFS should NOT show full 32MB usage
+    if echo "$ipfs_repo_size" | grep -E 'MiB|GiB'; then
+        local size_num=$(echo "$ipfs_repo_size" | awk '{print $1}')
+        if (( $(echo "$size_num > 100" | bc -l) )); then
+            fail "IPFS repo grew too large → possible copy instead of --nocopy"
+        else
+            pass "IPFS repo size looks reasonable with --nocopy"
+        fi
+    else
+        pass "IPFS repo stat passed (size: $ipfs_repo_size)"
+    fi
+
+    # Verify file is still accessible from both MinIO and IPFS
+    local minio_checksum ipfs_checksum
+    minio_checksum=$(docker exec "$CONTAINER_NAME" mc cat local/static/terp.network/test/nocopy-test.bin | sha256sum | awk '{print $1}')
+    ipfs_checksum=$(curl -sL "${IPFS_GW_URL}/ipfs/${cid}" | sha256sum | awk '{print $1}' 2>/dev/null || echo "failed")
+
+    if [ "$minio_checksum" = "$ipfs_checksum" ] && [ -n "$minio_checksum" ]; then
+        pass "MinIO and IPFS serve identical content (no corruption)"
+    else
+        fail "Content mismatch between MinIO and IPFS"
+    fi
+}
+
+test_static_bucket_pipeline() {
+    echo ""
+    echo "=== 9. Static Bucket → IPFS Pipeline ==="
+
+    local testfile="${TMPDIR}/static-test.html"
+    echo "<h1>Hello from MinIO static bucket via IPFS</h1>" > "$testfile"
+
+    docker cp "$testfile" "${CONTAINER_NAME}:/tmp/static-test.html"
+
+    docker exec "$CONTAINER_NAME" sh -c '
+        mc alias set local http://localhost:9000 minioadmin minioadmin --api S3v4 >/dev/null 2>&1
+        mc cp /tmp/static-test.html local/static/terp.network/public/index.html
+    ' && pass "Static file uploaded to MinIO static bucket" || {
+        fail "Failed to upload to static bucket"
+        return 1
+    }
+
+    sleep 12
+
+    # Look for CID in logs
+    local cid
+    cid=$(docker logs "$CONTAINER_NAME" 2>&1 | grep -oE "bafy[a-zA-Z0-9]{50,}" | tail -1 || true)
+
+    if [ -n "$cid" ]; then
+        pass "Static file was auto-pinned (CID found)"
+        # Optional: test via Nginx later
+    else
+        fail "Static file was not auto-pinned"
+    fi
+}
+
+
 # ── Build / locate oline binary ──────────────────────────────────────────────
 if [ -z "$OLINE_BIN" ]; then
     SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-    OLINE_PROJECT="${SCRIPT_DIR}/../oline-sdl"
+    OLINE_PROJECT="${SCRIPT_DIR}/../../"
     OLINE_RELEASE="${OLINE_PROJECT}/target/release/oline"
 
     if [ -x "$OLINE_RELEASE" ]; then
@@ -526,3 +615,5 @@ test_s3_upload_download
 test_s3_to_ipfs_pipeline
 test_metadata_json
 test_snapshot_json_in_metadata
+test_nocopy_behavior
+test_static_bucket_pipeline

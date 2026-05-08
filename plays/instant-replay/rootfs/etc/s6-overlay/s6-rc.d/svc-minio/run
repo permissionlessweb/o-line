@@ -12,12 +12,10 @@ export MINIO_ROOT_USER="${MINIO_ROOT_USER:-minioadmin}"
 export MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-minioadmin}"
 
 MINIO_P="${MINIO_P:-9000}"
-# MINIO_CONSOLE_P (default 9001) is the external-facing HTTPS port nginx listens on.
+# MINIO_CONSOLE_P (default 9002) is the external-facing HTTPS port nginx listens on.
 # MINIO_CONSOLE_INTERNAL_P (default 9002) is the private port minio console actually binds —
-# nginx proxies 9001(HTTPS) → 9002(HTTP minio console) so users get an encrypted connection.
+# nginx proxies 9002(HTTPS) → 9002(HTTP minio console) so users get an encrypted connection.
 MINIO_CONSOLE_INTERNAL_P="${MINIO_CONSOLE_INTERNAL_P:-9002}"
 
-echo "[svc-minio] Starting MinIO on :${MINIO_P} (console :${MINIO_CONSOLE_INTERNAL_P}, proxied via HTTPS :${MINIO_CONSOLE_P:-9001})"
-exec s6-setuidgid app minio server /data/minio \
-    --address ":${MINIO_P}" \
-    --console-address ":${MINIO_CONSOLE_INTERNAL_P}"
+echo "[svc-minio] Starting MinIO on :${MINIO_P} (console :${MINIO_CONSOLE_INTERNAL_P}, proxied via HTTPS :${MINIO_CONSOLE_P:-9002})"
+exec s6-setuidgid app minio server /data/minio --address ":${MINIO_P}" --console-address ":${MINIO_CONSOLE_INTERNAL_P}"

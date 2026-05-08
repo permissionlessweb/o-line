@@ -12,7 +12,9 @@
 //!   2. Reference `${fd.ev}` in the SDL template.
 //!   Done — no code change needed here.
 use crate::config::OLineConfig;
-use crate::crypto::{ensure_ssh_key_encrypted, gen_ssh_key, generate_credential, S3_KEY, S3_SECRET};
+use crate::crypto::{
+    ensure_ssh_key_encrypted, gen_ssh_key, generate_credential, S3_KEY, S3_SECRET,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -159,7 +161,9 @@ pub fn inject_p2p_nodeport(
         vars.insert("P2P_EXT_PORT".to_string(), ep.port.to_string());
         tracing::debug!(
             "  [p2p] {} NodePort: internal {} → external {}",
-            service, p2p_port, ep.port,
+            service,
+            p2p_port,
+            ep.port,
         );
     }
 }
@@ -181,11 +185,9 @@ pub async fn build_phase_a_vars(
     vars.insert("SNAPSHOT_SVC".into(), "oline-a-snapshot".into());
     vars.insert("SEED_SVC".into(), "oline-a-seed".into());
     vars.insert("MINIO_SVC".into(), "oline-a-minio-ipfs".into());
-
     // ── Random monikers ───────────────────────────────────────────────────────
     vars.insert("SNAPSHOT_MONIKER".into(), generate_credential(12));
     vars.insert("SEED_MONIKER".into(), generate_credential(12));
-
     // ── SSH keypair (shared by snapshot + seed + minio for SFTP cert delivery) ─
     // Reuse existing key if present; generate fresh otherwise. Stored encrypted.
     let key_path: PathBuf = format!("{}/oline-parallel-key", secrets_path).into();
@@ -199,7 +201,6 @@ pub async fn build_phase_a_vars(
             .to_string(),
     );
     vars.insert("SSH_KEY_PATH".into(), key_path.to_string_lossy().into());
-
     // ── S3 credentials (generated; shared by snapshot node + MinIO) ───────────
     let s3_key = generate_credential(S3_KEY);
     let s3_secret = generate_credential(S3_SECRET);
@@ -209,7 +210,6 @@ pub async fn build_phase_a_vars(
     vars.insert("S3_HOST".into(), "oline-a-minio-ipfs:9000 --no-ssl".into());
     vars.insert("MINIO_ROOT_USER".into(), s3_key);
     vars.insert("MINIO_ROOT_PASSWORD".into(), s3_secret);
-
     // ── Derived vars ─────────────────────────────────────────────────────────
     let snapshot_path = config.val("OLINE_SNAP_PATH");
     let download_domain = config.val("OLINE_SNAP_DOWNLOAD_DOMAIN");
@@ -231,7 +231,6 @@ pub async fn build_phase_a_vars(
             .unwrap_or("snapshots")
             .to_string(),
     );
-
     // ── Sync method (unified) ─────────────────────────────────────────────────
     // OLINE_SYNC_METHOD controls everything. Default: "snapshot".
     //   snapshot   → SNAPSHOT_URL set, STATESYNC_* cleared
@@ -245,10 +244,22 @@ pub async fn build_phase_a_vars(
         vars.insert("SNAPSHOT_JSON".into(), String::new());
         vars.insert("SNAPSHOT_URL".into(), String::new());
         vars.insert("STATESYNC_ENABLE".into(), "true".into());
-        vars.insert("STATESYNC_RPC_SERVERS".into(), config.val("STATESYNC_RPC_SERVERS"));
-        vars.insert("STATESYNC_TRUST_HEIGHT".into(), config.val("STATESYNC_TRUST_HEIGHT"));
-        vars.insert("STATESYNC_TRUST_HASH".into(), config.val("STATESYNC_TRUST_HASH"));
-        vars.insert("STATESYNC_TRUST_PERIOD".into(), config.val("STATESYNC_TRUST_PERIOD"));
+        vars.insert(
+            "STATESYNC_RPC_SERVERS".into(),
+            config.val("STATESYNC_RPC_SERVERS"),
+        );
+        vars.insert(
+            "STATESYNC_TRUST_HEIGHT".into(),
+            config.val("STATESYNC_TRUST_HEIGHT"),
+        );
+        vars.insert(
+            "STATESYNC_TRUST_HASH".into(),
+            config.val("STATESYNC_TRUST_HASH"),
+        );
+        vars.insert(
+            "STATESYNC_TRUST_PERIOD".into(),
+            config.val("STATESYNC_TRUST_PERIOD"),
+        );
     } else {
         // Snapshot mode (default) — clear all statesync vars, ensure SNAPSHOT_URL is set
         vars.insert("STATESYNC_RPC_SERVERS".into(), String::new());
@@ -281,11 +292,7 @@ pub async fn build_phase_a_vars(
 }
 
 /// Phase B: Left & Right Tackles.
-pub fn build_phase_b_vars(
-    config: &OLineConfig,
-    snapshot_peer: &str,
-    statesync_rpc_servers: &str,
-) -> HashMap<String, String> {
+pub fn build_phase_b_vars(config: &OLineConfig) -> HashMap<String, String> {
     let mut vars = config.to_sdl_vars();
 
     // ── Static service names ──────────────────────────────────────────────────
@@ -304,7 +311,7 @@ pub fn build_phase_b_vars(
     // ── Runtime peer inputs ───────────────────────────────────────────────────
     vars.insert(
         "TERPD_P2P_PERSISTENT_PEERS".into(),
-        snapshot_peer.to_string(),
+        config.val("TERPD_P2P_PERSISTENT_PEERS"),
     );
     // Validator private peer ID (also from config, but keep for clarity)
     let validator_peer = config.val("OLINE_VALIDATOR_PEER_ID");
@@ -315,16 +322,21 @@ pub fn build_phase_b_vars(
     let sync_method = config.val("OLINE_SYNC_METHOD");
     if sync_method == "statesync" {
         // Statesync: node fetches state from RPC servers
-        let rpc = if statesync_rpc_servers.is_empty() {
-            config.val("STATESYNC_RPC_SERVERS")
-        } else {
-            statesync_rpc_servers.to_string()
-        };
+        let rpc = config.val("STATESYNC_RPC_SERVERS");
         vars.insert("STATESYNC_RPC_SERVERS".into(), rpc);
         vars.insert("STATESYNC_ENABLE".into(), "true".into());
-        vars.insert("STATESYNC_TRUST_HEIGHT".into(), config.val("STATESYNC_TRUST_HEIGHT"));
-        vars.insert("STATESYNC_TRUST_HASH".into(), config.val("STATESYNC_TRUST_HASH"));
-        vars.insert("STATESYNC_TRUST_PERIOD".into(), config.val("STATESYNC_TRUST_PERIOD"));
+        vars.insert(
+            "STATESYNC_TRUST_HEIGHT".into(),
+            config.val("STATESYNC_TRUST_HEIGHT"),
+        );
+        vars.insert(
+            "STATESYNC_TRUST_HASH".into(),
+            config.val("STATESYNC_TRUST_HASH"),
+        );
+        vars.insert(
+            "STATESYNC_TRUST_PERIOD".into(),
+            config.val("STATESYNC_TRUST_PERIOD"),
+        );
         vars.insert("OLINE_OFFLINE".into(), "0".into());
         vars.insert("SNAPSHOT_MODE".into(), "".into());
         // Clear snapshot download vars — statesync nodes don't need them.
@@ -337,7 +349,8 @@ pub fn build_phase_b_vars(
         vars.insert("STATESYNC_TRUST_HEIGHT".into(), String::new());
         vars.insert("STATESYNC_TRUST_HASH".into(), String::new());
         vars.insert("STATESYNC_TRUST_PERIOD".into(), String::new());
-        vars.entry("SNAPSHOT_MODE".into()).or_insert_with(|| "sftp".into());
+        vars.entry("SNAPSHOT_MODE".into())
+            .or_insert_with(|| "sftp".into());
         vars.insert("OLINE_OFFLINE".into(), "1".into());
     }
 
@@ -363,14 +376,7 @@ pub fn build_phase_b_vars(
 }
 
 /// Phase C: Left & Right Forwards.
-pub fn build_phase_c_vars(
-    config: &OLineConfig,
-    seed_peer: &str,
-    snapshot_peer: &str,
-    left_tackle_peer: &str,
-    right_tackle_peer: &str,
-    statesync_rpc: &str,
-) -> HashMap<String, String> {
+pub fn build_phase_c_vars(config: &OLineConfig) -> HashMap<String, String> {
     let mut vars = config.to_sdl_vars();
 
     // ── Static service names ──────────────────────────────────────────────────
@@ -386,29 +392,38 @@ pub fn build_phase_c_vars(
     vars.insert("SSH_PUBKEY".into(), ssh_key.public_key().to_string());
 
     // ── Runtime peer inputs ───────────────────────────────────────────────────
-    let tackles_combined = format!("{},{}", left_tackle_peer, right_tackle_peer);
-    vars.insert("TERPD_P2P_SEEDS".into(), format!("{} ", seed_peer));
-    vars.insert("TERPD_P2P_PRIVATE_PEER_IDS".into(), tackles_combined.clone());
-    vars.insert("TERPD_P2P_UNCONDITIONAL_PEER_IDS".into(), tackles_combined);
     vars.insert(
-        "TERPD_P2P_PERSISTENT_PEERS".into(),
-        format!("{} ", snapshot_peer),
+        "TERPD_P2P_SEEDS".into(),
+        format!("{} ", config.val("TERPD_P2P_SEEDS")),
+    );
+    vars.insert(
+        "TERPD_P2P_PRIVATE_PEER_IDS".into(),
+        config.val("TERPD_P2P_PRIVATE_PEER_IDS"),
+    );
+    vars.insert(
+        "TERPD_P2P_UNCONDITIONAL_PEER_IDS".into(),
+        config.val("TERPD_P2P_PRIVATE_PEER_IDS"),
     );
 
     // ── Sync method (snapshot vs statesync) ─────────────────────────────────
     let sync_method = config.val("OLINE_SYNC_METHOD");
     if sync_method == "statesync" {
         // Statesync: node fetches state from RPC servers
-        let rpc = if statesync_rpc.is_empty() {
-            config.val("STATESYNC_RPC_SERVERS")
-        } else {
-            statesync_rpc.to_string()
-        };
+        let rpc = config.val("STATESYNC_RPC_SERVERS");
         vars.insert("STATESYNC_RPC_SERVERS".into(), rpc);
         vars.insert("STATESYNC_ENABLE".into(), "true".into());
-        vars.insert("STATESYNC_TRUST_HEIGHT".into(), config.val("STATESYNC_TRUST_HEIGHT"));
-        vars.insert("STATESYNC_TRUST_HASH".into(), config.val("STATESYNC_TRUST_HASH"));
-        vars.insert("STATESYNC_TRUST_PERIOD".into(), config.val("STATESYNC_TRUST_PERIOD"));
+        vars.insert(
+            "STATESYNC_TRUST_HEIGHT".into(),
+            config.val("STATESYNC_TRUST_HEIGHT"),
+        );
+        vars.insert(
+            "STATESYNC_TRUST_HASH".into(),
+            config.val("STATESYNC_TRUST_HASH"),
+        );
+        vars.insert(
+            "STATESYNC_TRUST_PERIOD".into(),
+            config.val("STATESYNC_TRUST_PERIOD"),
+        );
         vars.insert("OLINE_OFFLINE".into(), "0".into());
         vars.insert("SNAPSHOT_MODE".into(), "".into());
         // Clear snapshot download vars — statesync nodes don't need them.
@@ -421,7 +436,8 @@ pub fn build_phase_c_vars(
         vars.insert("STATESYNC_TRUST_HEIGHT".into(), String::new());
         vars.insert("STATESYNC_TRUST_HASH".into(), String::new());
         vars.insert("STATESYNC_TRUST_PERIOD".into(), String::new());
-        vars.entry("SNAPSHOT_MODE".into()).or_insert_with(|| "sftp".into());
+        vars.entry("SNAPSHOT_MODE".into())
+            .or_insert_with(|| "sftp".into());
         vars.insert("OLINE_OFFLINE".into(), "1".into());
     }
 
@@ -440,14 +456,8 @@ pub fn build_phase_c_vars(
     }
 
     // ── Accept lists ─────────────────────────────────────────────────────────
-    vars.insert(
-        "LF_80_ACCEPTS".into(),
-        build_accept_items(&vars, "FL"),
-    );
-    vars.insert(
-        "RF_80_ACCEPTS".into(),
-        build_accept_items(&vars, "FR"),
-    );
+    vars.insert("LF_80_ACCEPTS".into(), build_accept_items(&vars, "FL"));
+    vars.insert("RF_80_ACCEPTS".into(), build_accept_items(&vars, "FR"));
 
     vars
 }
@@ -552,25 +562,30 @@ pub fn build_ipfs_site_vars(
 }
 
 /// Phase F: Argus Indexer.
-pub fn build_phase_f_vars(config: &OLineConfig, statesync_rpc: &str) -> HashMap<String, String> {
+pub fn build_phase_f_vars(config: &OLineConfig) -> HashMap<String, String> {
     let mut vars = config.to_sdl_vars();
 
     // ── Random moniker ────────────────────────────────────────────────────────
     vars.insert("ARGUS_NODE_MONIKER".into(), generate_credential(12));
 
     // ── Statesync ─────────────────────────────────────────────────────────────
-    let rpc = if statesync_rpc.is_empty() {
-        config.val("STATESYNC_RPC_SERVERS")
-    } else {
-        statesync_rpc.to_string()
-    };
+    let rpc = config.val("STATESYNC_RPC_SERVERS");
     let use_statesync = !rpc.is_empty();
     if use_statesync {
         vars.insert("STATESYNC_RPC_SERVERS".into(), rpc);
         vars.insert("STATESYNC_ENABLE".into(), "true".into());
-        vars.insert("STATESYNC_TRUST_HEIGHT".into(), config.val("STATESYNC_TRUST_HEIGHT"));
-        vars.insert("STATESYNC_TRUST_HASH".into(), config.val("STATESYNC_TRUST_HASH"));
-        vars.insert("STATESYNC_TRUST_PERIOD".into(), config.val("STATESYNC_TRUST_PERIOD"));
+        vars.insert(
+            "STATESYNC_TRUST_HEIGHT".into(),
+            config.val("STATESYNC_TRUST_HEIGHT"),
+        );
+        vars.insert(
+            "STATESYNC_TRUST_HASH".into(),
+            config.val("STATESYNC_TRUST_HASH"),
+        );
+        vars.insert(
+            "STATESYNC_TRUST_PERIOD".into(),
+            config.val("STATESYNC_TRUST_PERIOD"),
+        );
         // Clear snapshot download vars — statesync nodes don't need them.
         vars.insert("OLINE_SNAPSHOT_URL".into(), String::new());
         vars.insert("SNAPSHOT_URL".into(), String::new());

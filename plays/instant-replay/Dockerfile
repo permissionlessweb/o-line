@@ -93,21 +93,21 @@ RUN chmod +x /etc/s6-overlay/scripts/* && \
 ENV MINIO_ENABLED="true" \
     MINIO_ROOT_USER="minioadmin" \
     MINIO_ROOT_PASSWORD="minioadmin" \
-    MINIO_BUCKET="snapshots" \
+    AUTOPIN_BUCKETS="snapshots,static" \
     MINIO_P=9000 \
-    MINIO_CONSOLE_P=9001 \
+    MINIO_CONSOLE_P=9002 \
     IPFS_GATEWAY_P=8081 \
     IPFS_PROFILE=server \
-    AUTOPIN_INTERVAL=300 \
+    AUTOPIN_INTERVAL=30 \
     AUTOPIN_PATTERNS="*.tar.gz,*.tar.zst,*.tar.lz4,*.tar.xz" \
     PUID=1000 \
     PGID=1000
 
-EXPOSE 80 8081 9000 9001
+EXPOSE 80 8081 9000 9002
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD /usr/local/bin/healthcheck
 
-VOLUME ["/data/ipfs", "/data/minio"]
-
+RUN mkdir -p /data/ipfs /data/minio /data
+VOLUME ["/data"]
 ENTRYPOINT ["/init"]

@@ -1,4 +1,3 @@
-
 /// Parallel deployment path: all phases deployed before snapshot sync wait.
 ///
 /// The key improvement over the sequential path is that phases B (Tackles) and
@@ -259,9 +258,10 @@ async fn select_provider_for_phase(
             tracing::info!("  [{}] Using pre-selected provider: {}", label, provider);
             return Ok(ProviderChoice::Selected(provider.to_string()));
         } else {
-            return Err(DeployError::InvalidState(
-                format!("[{}] Pre-selected provider {} did not bid on this phase.", label, provider)
-            ));
+            return Err(DeployError::InvalidState(format!(
+                "[{}] Pre-selected provider {} did not bid on this phase.",
+                label, provider
+            )));
         }
     }
 
@@ -393,10 +393,16 @@ async fn build_all_sdl_vars(
     ),
     DeployError,
 > {
-    let secrets_path = crate::config::oline_config_dir().to_string_lossy().into_owned();
-    let a_vars = build_phase_a_vars(&w.ctx.deployer.config, &secrets_path, &w.ctx.deployer.password)
-        .await
-        .map_err(|e| DeployError::InvalidState(format!("build_phase_a_vars: {}", e)))?;
+    let secrets_path = crate::config::oline_config_dir()
+        .to_string_lossy()
+        .into_owned();
+    let a_vars = build_phase_a_vars(
+        &w.ctx.deployer.config,
+        &secrets_path,
+        &w.ctx.deployer.password,
+    )
+    .await
+    .map_err(|e| DeployError::InvalidState(format!("build_phase_a_vars: {}", e)))?;
 
     // Extract and store SSH key from Phase A.
     let ssh_privkey_pem = a_vars
@@ -414,7 +420,7 @@ async fn build_all_sdl_vars(
     let ssh_pubkey = a_vars.get("SSH_PUBKEY").cloned().unwrap_or_default();
 
     let b_vars = if run_b {
-        let mut v = build_phase_b_vars(&w.ctx.deployer.config, "", "");
+        let mut v = build_phase_b_vars(&w.ctx.deployer.config);
         v.insert("SSH_PUBKEY".into(), ssh_pubkey.clone());
         v
     } else {
@@ -422,7 +428,7 @@ async fn build_all_sdl_vars(
     };
 
     let c_vars = if run_c {
-        let mut v = build_phase_c_vars(&w.ctx.deployer.config, "", "", "", "", "");
+        let mut v = build_phase_c_vars(&w.ctx.deployer.config);
         v.insert("SSH_PUBKEY".into(), ssh_pubkey.clone());
         v
     } else {
@@ -481,42 +487,41 @@ fn build_phase_slots(
     });
 
     // Helper: try loading an optional phase SDL.
-    let mut try_load_optional =
-        |run: bool,
-         file: &str,
-         phase: DeployPhase,
-         vars: HashMap<String, String>,
-         select_key: &'static str,
-         label: &'static str,
-         unit_index: usize,
-         session_phase: &'static str,
-         node_services: Vec<(&'static str, &'static str)>,
-         phase_letter: &'static str| {
-            if !run {
-                return;
+    let mut try_load_optional = |run: bool,
+                                 file: &str,
+                                 phase: DeployPhase,
+                                 vars: HashMap<String, String>,
+                                 select_key: &'static str,
+                                 label: &'static str,
+                                 unit_index: usize,
+                                 session_phase: &'static str,
+                                 node_services: Vec<(&'static str, &'static str)>,
+                                 phase_letter: &'static str| {
+        if !run {
+            return;
+        }
+        match w.ctx.deployer.config.load_sdl(file) {
+            Ok(sdl) => {
+                let rendered = akash_deploy_rs::substitute_partial(&sdl, &vars);
+                slots.push(PhaseSlot {
+                    phase,
+                    select_key,
+                    label,
+                    rendered_sdl: rendered,
+                    vars,
+                    unit_index,
+                    session_phase,
+                    node_services,
+                    phase_letter,
+                });
             }
-            match w.ctx.deployer.config.load_sdl(file) {
-                Ok(sdl) => {
-                    let rendered = akash_deploy_rs::substitute_partial(&sdl, &vars);
-                    slots.push(PhaseSlot {
-                        phase,
-                        select_key,
-                        label,
-                        rendered_sdl: rendered,
-                        vars,
-                        unit_index,
-                        session_phase,
-                        node_services,
-                        phase_letter,
-                    });
-                }
-                Err(e) => {
-                    tracing::warn!("  Phase {} SDL error: {} — skipping.", phase_letter, e);
-                    w.ctx
-                        .set_phase_result(phase, PhaseResult::Failed(e.to_string()));
-                }
+            Err(e) => {
+                tracing::warn!("  Phase {} SDL error: {} — skipping.", phase_letter, e);
+                w.ctx
+                    .set_phase_result(phase, PhaseResult::Failed(e.to_string()));
             }
-        };
+        }
+    };
 
     try_load_optional(
         run_b,
@@ -990,8 +995,7 @@ async fn create_leases_batch(
     is_direct: bool,
 ) -> Result<Vec<LeasedPhase>, DeployError> {
     // Apply provider selections and build bid IDs.
-    let mut selected: Vec<(PhaseSlot, DeploymentState, BidId)> =
-        Vec::with_capacity(phases.len());
+    let mut selected: Vec<(PhaseSlot, DeploymentState, BidId)> = Vec::with_capacity(phases.len());
 
     for mut phase in phases {
         let provider = match phase.provider_choice {
@@ -1002,10 +1006,8 @@ async fn create_leases_batch(
         };
         DeploymentWorkflow::<AkashClient>::select_provider(&mut phase.state, &provider)?;
 
-        let bid = find_bid_for_provider(
-            &phase.bids,
-            phase.state.selected_provider.as_ref().unwrap(),
-        )?;
+        let bid =
+            find_bid_for_provider(&phase.bids, phase.state.selected_provider.as_ref().unwrap())?;
         let bid_id = BidId::from_bid(
             &phase.state.owner,
             phase.state.dseq.unwrap(),
@@ -1035,9 +1037,7 @@ async fn create_leases_batch(
         let acct = querier
             .base_account(d0.client.address_ref())
             .await
-            .map_err(|e| {
-                DeployError::Query(format!("base_account master for lease: {}", e))
-            })?;
+            .map_err(|e| DeployError::Query(format!("base_account master for lease: {}", e)))?;
 
         let signer_entries = vec![SignerEntry {
             signer: &w.ctx.deployer.signer,
@@ -1080,9 +1080,7 @@ async fn create_leases_batch(
             let acct = querier
                 .base_account(d.client.address_ref())
                 .await
-                .map_err(|e| {
-                    DeployError::Query(format!("base_account d{} for lease: {}", i, e))
-                })?;
+                .map_err(|e| DeployError::Query(format!("base_account d{} for lease: {}", i, e)))?;
             let hd_index = w
                 .ctx
                 .units
@@ -1208,11 +1206,7 @@ async fn record_deployed_phase(
     ssh_port_internal: u16,
 ) -> Result<(), DeployError> {
     let dseq = state.dseq.unwrap_or(0);
-    tracing::info!(
-        "  [Phase {}] Deployed. DSEQ: {}",
-        slot.phase_letter,
-        dseq
-    );
+    tracing::info!("  [Phase {}] Deployed. DSEQ: {}", slot.phase_letter, dseq);
 
     w.ctx
         .deployer
@@ -1226,14 +1220,7 @@ async fn record_deployed_phase(
 
     // Node registration — Phase E has dynamic service names.
     if slot.phase == DeployPhase::Relayer {
-        register_phase_e_nodes(
-            w,
-            &slot.vars,
-            state,
-            endpoints,
-            password,
-            ssh_port_internal,
-        );
+        register_phase_e_nodes(w, &slot.vars, state, endpoints, password, ssh_port_internal);
     } else {
         register_phase_nodes(
             endpoints,
@@ -1303,10 +1290,8 @@ fn register_phase_e_nodes(
                 .iter()
                 .map(|svc| (svc.as_str(), format!("Phase E - {}", svc)))
                 .collect();
-            let e_svc_refs: Vec<(&str, &str)> = e_svc_pairs
-                .iter()
-                .map(|(s, l)| (*s, l.as_str()))
-                .collect();
+            let e_svc_refs: Vec<(&str, &str)> =
+                e_svc_pairs.iter().map(|(s, l)| (*s, l.as_str())).collect();
             register_phase_nodes(
                 endpoints,
                 state.dseq.unwrap_or(0),
@@ -1329,10 +1314,9 @@ fn extract_statesync_rpc(endpoints: &[ServiceEndpoint]) -> String {
         OLineDeployer::find_endpoint_by_internal_port(endpoints, "oline-a-snapshot", 26657)
             .map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port))
             .unwrap_or_default();
-    let seed_rpc =
-        OLineDeployer::find_endpoint_by_internal_port(endpoints, "oline-a-seed", 26657)
-            .map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port))
-            .unwrap_or_default();
+    let seed_rpc = OLineDeployer::find_endpoint_by_internal_port(endpoints, "oline-a-seed", 26657)
+        .map(|e| format!("{}:{}", endpoint_hostname(&e.uri), e.port))
+        .unwrap_or_default();
     match (snap_rpc.is_empty(), seed_rpc.is_empty()) {
         (false, false) => format!("{},{}", snap_rpc, seed_rpc),
         (false, true) => snap_rpc,
@@ -1418,11 +1402,7 @@ async fn update_dns_after_deploy(w: &OLineWorkflow) {
 
 /// Push scripts to the snapshot node with retry, then signal it to start syncing.
 /// Returns `true` if the signal succeeded (snapshot is bootstrapping).
-async fn push_and_signal_snapshot(
-    w: &OLineWorkflow,
-    scripts_path: &str,
-    nginx_path: &str,
-) -> bool {
+async fn push_and_signal_snapshot(w: &OLineWorkflow, scripts_path: &str, nginx_path: &str) -> bool {
     let snapshot_eps = w
         .ctx
         .service_endpoints(DeployPhase::SpecialTeams, "oline-a-snapshot");
@@ -1494,11 +1474,7 @@ async fn push_and_signal_snapshot(
 }
 
 /// Push scripts to seed and minio nodes (Phase A), and sentry nodes (B/C).
-async fn push_scripts_to_remaining_nodes(
-    w: &OLineWorkflow,
-    scripts_path: &str,
-    nginx_path: &str,
-) {
+async fn push_scripts_to_remaining_nodes(w: &OLineWorkflow, scripts_path: &str, nginx_path: &str) {
     // Phase A: seed node
     let seed_eps = w
         .ctx
@@ -1568,8 +1544,7 @@ async fn push_scripts_to_sentry_services(
             .collect();
         if !eps.is_empty() {
             tracing::info!("  [init] Pushing scripts to {}...", svc);
-            let _ =
-                push_scripts_sftp(svc, &eps, &w.ctx.ssh_key_path, scripts_path, None).await;
+            let _ = push_scripts_sftp(svc, &eps, &w.ctx.ssh_key_path, scripts_path, None).await;
         }
     }
 }
@@ -1596,8 +1571,7 @@ fn has_pre_start_snapshot() -> bool {
 /// Push scripts to all nodes and signal Phase A to start syncing.
 async fn ssh_init_all_nodes(w: &mut OLineWorkflow) {
     let scripts_path = var("OLINE_SCRIPTS_PATH").unwrap_or_else(|_| "plays/audible".into());
-    let nginx_path =
-        var("OLINE_NGINX_PATH").unwrap_or_else(|_| "plays/flea-flicker/nginx".into());
+    let nginx_path = var("OLINE_NGINX_PATH").unwrap_or_else(|_| "plays/flea-flicker/nginx".into());
 
     if !has_pre_start_snapshot() {
         if push_and_signal_snapshot(w, &scripts_path, &nginx_path).await {
@@ -1637,12 +1611,19 @@ pub async fn deploy_all_units(
     };
 
     // 2. Build SDL template variables for all active phases.
-    let (a_vars, b_vars, c_vars, e_vars) =
-        build_all_sdl_vars(w, run_b, run_c, run_e).await?;
+    let (a_vars, b_vars, c_vars, e_vars) = build_all_sdl_vars(w, run_b, run_c, run_e).await?;
 
     // 3. Load SDL templates, render with vars, and build PhaseSlot descriptors.
-    let slots =
-        build_phase_slots(w, run_b, run_c, run_e, a_vars, b_vars, c_vars, e_vars.clone())?;
+    let slots = build_phase_slots(
+        w,
+        run_b,
+        run_c,
+        run_e,
+        a_vars,
+        b_vars,
+        c_vars,
+        e_vars.clone(),
+    )?;
 
     // 4. Build and broadcast MsgCreateDeployment batch.
     tracing::info!("  Building multi-signer batch (1 tx for all MsgCreateDeployment)...");
@@ -1668,7 +1649,12 @@ pub async fn deploy_all_units(
     }
 
     let dseqs = broadcast_create_deployments(
-        w, &slots, base_dseq, deposit_amount, deposit_denom, is_direct,
+        w,
+        &slots,
+        base_dseq,
+        deposit_amount,
+        deposit_denom,
+        is_direct,
     )
     .await?;
 
@@ -1739,8 +1725,7 @@ pub async fn deploy_all_units(
                     w.ctx.statesync_rpc = extract_statesync_rpc(&endpoints);
                 }
 
-                w.ctx
-                    .set_endpoints(phase.slot.phase.clone(), endpoints);
+                w.ctx.set_endpoints(phase.slot.phase.clone(), endpoints);
                 w.ctx
                     .set_state(phase.slot.phase.clone(), phase.state.clone());
             }
@@ -1753,10 +1738,8 @@ pub async fn deploy_all_units(
                     phase.slot.phase_letter,
                     e
                 );
-                w.ctx.set_phase_result(
-                    phase.slot.phase.clone(),
-                    PhaseResult::Failed(e.to_string()),
-                );
+                w.ctx
+                    .set_phase_result(phase.slot.phase.clone(), PhaseResult::Failed(e.to_string()));
             }
         }
     }
@@ -1866,7 +1849,11 @@ pub async fn update_all_dns(w: &mut OLineWorkflow) -> Result<StepResult, DeployE
         let cfg = &w.ctx.deployer.config;
         let val = |k: &str| {
             let v = cfg.val(k);
-            if v.is_empty() { String::new() } else { v }
+            if v.is_empty() {
+                String::new()
+            } else {
+                v
+            }
         };
 
         let a_eps = w.ctx.endpoints(DeployPhase::SpecialTeams).to_vec();
@@ -2079,7 +2066,8 @@ pub async fn wait_snapshot_ready(
 
             let phase_a_state = w.ctx.state(DeployPhase::SpecialTeams);
             let provider_addr = phase_a_state.and_then(|s| s.selected_provider.clone());
-            let host_uri = provider_addr.as_ref()
+            let host_uri = provider_addr
+                .as_ref()
                 .and_then(|addr| w.ctx.provider_hosts.get(addr).cloned());
             let lease_id = phase_a_state.and_then(|s| s.lease_id.clone());
 
@@ -2113,8 +2101,12 @@ pub async fn wait_snapshot_ready(
                         }
                     });
                     Some(handle)
-                } else { None }
-            } else { None }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         };
 
         // Use a generous initial wait since snapshot sync takes ~30 min in production.
@@ -2245,13 +2237,17 @@ pub async fn distribute_snapshot(w: &mut OLineWorkflow) -> Result<StepResult, De
         }
         if let Some(genesis_bytes) = genesis {
             if let Err(e) = push_pre_start_files(
-                label, eps, key,
+                label,
+                eps,
+                key,
                 &[PreStartFile {
                     source: FileSource::Bytes(genesis_bytes.to_vec()),
                     remote_path: "/tmp/genesis.json".into(),
                 }],
                 MAX_RETRIES,
-            ).await {
+            )
+            .await
+            {
                 tracing::info!("  Warning: genesis push to {} failed: {}", label, e);
             }
         }
@@ -2261,15 +2257,65 @@ pub async fn distribute_snapshot(w: &mut OLineWorkflow) -> Result<StepResult, De
     let sync_method = w.ctx.deployer.config.val("OLINE_SYNC_METHOD");
     let skip_bc = sync_method == "statesync";
     if skip_bc {
-        tracing::info!("  OLINE_SYNC_METHOD=statesync — skipping B/C snapshot push (they will statesync)");
+        tracing::info!(
+            "  OLINE_SYNC_METHOD=statesync — skipping B/C snapshot push (they will statesync)"
+        );
     }
 
     tokio::join!(
-        push_one("parallel-seed",          &seed_eps, key, &local_path, rp, None),
-        async { if !skip_bc { push_one("parallel-left-tackle",   &lt_eps,   key, &local_path, rp, Some(gen)).await } },
-        async { if !skip_bc { push_one("parallel-right-tackle",  &rt_eps,   key, &local_path, rp, Some(gen)).await } },
-        async { if !skip_bc { push_one("parallel-left-forward",  &lf_eps,   key, &local_path, rp, Some(gen)).await } },
-        async { if !skip_bc { push_one("parallel-right-forward", &rf_eps,   key, &local_path, rp, Some(gen)).await } },
+        push_one("parallel-seed", &seed_eps, key, &local_path, rp, None),
+        async {
+            if !skip_bc {
+                push_one(
+                    "parallel-left-tackle",
+                    &lt_eps,
+                    key,
+                    &local_path,
+                    rp,
+                    Some(gen),
+                )
+                .await
+            }
+        },
+        async {
+            if !skip_bc {
+                push_one(
+                    "parallel-right-tackle",
+                    &rt_eps,
+                    key,
+                    &local_path,
+                    rp,
+                    Some(gen),
+                )
+                .await
+            }
+        },
+        async {
+            if !skip_bc {
+                push_one(
+                    "parallel-left-forward",
+                    &lf_eps,
+                    key,
+                    &local_path,
+                    rp,
+                    Some(gen),
+                )
+                .await
+            }
+        },
+        async {
+            if !skip_bc {
+                push_one(
+                    "parallel-right-forward",
+                    &rf_eps,
+                    key,
+                    &local_path,
+                    rp,
+                    Some(gen),
+                )
+                .await
+            }
+        },
     );
 
     w.step = OLineStep::SignalAllNodes;
@@ -2295,7 +2341,12 @@ pub async fn signal_all_nodes(w: &mut OLineWorkflow) -> Result<StepResult, Deplo
     // Auto-fetch statesync trust params from Phase A RPC if not manually set.
     let sync_method = w.ctx.deployer.config.val("OLINE_SYNC_METHOD");
     if sync_method == "statesync" {
-        let has_height = !w.ctx.deployer.config.val("STATESYNC_TRUST_HEIGHT").is_empty();
+        let has_height = !w
+            .ctx
+            .deployer
+            .config
+            .val("STATESYNC_TRUST_HEIGHT")
+            .is_empty();
         if !has_height {
             let rpc = if w.ctx.statesync_rpc.is_empty() {
                 w.ctx.deployer.config.val("STATESYNC_RPC_SERVERS")
@@ -2316,11 +2367,10 @@ pub async fn signal_all_nodes(w: &mut OLineWorkflow) -> Result<StepResult, Deplo
         }
     }
 
-    let b_vars = build_phase_b_vars(
-        &w.ctx.deployer.config,
-        w.ctx.peer(PeerTarget::Snapshot),
-        &w.ctx.statesync_rpc,
-    );
+    let mut config = w.ctx.deployer.config.clone();
+    //    w.ctx.peer(PeerTarget::Snapshot),
+    //     &w.ctx.statesync_rpc,
+    let b_vars = build_phase_b_vars(&config);
 
     // Signal left tackle.
     let lt_eps = w
@@ -2427,14 +2477,13 @@ pub async fn inject_peers(w: &mut OLineWorkflow) -> Result<StepResult, DeployErr
     // Signal Phase C (forwards) if not already done, injecting tackle peers.
     let scripts_path = var("OLINE_SCRIPTS_PATH").unwrap_or_else(|_| "plays/audible".into());
 
-    let c_vars = build_phase_c_vars(
-        &w.ctx.deployer.config,
-        w.ctx.peer(PeerTarget::Seed),
-        w.ctx.peer(PeerTarget::Snapshot),
-        w.ctx.peer(PeerTarget::LeftTackle),
-        w.ctx.peer(PeerTarget::RightTackle),
-        &w.ctx.statesync_rpc.clone(),
-    );
+    let mut config = w.ctx.deployer.config.clone();
+    // w.ctx.peer(PeerTarget::Seed),
+    //     w.ctx.peer(PeerTarget::Snapshot),
+    //     w.ctx.peer(PeerTarget::LeftTackle),
+    //     w.ctx.peer(PeerTarget::RightTackle),
+    //     &w.ctx.statesync_rpc.clone(),
+    let c_vars = build_phase_c_vars(&w.ctx.deployer.config);
 
     let lf_eps = w
         .ctx

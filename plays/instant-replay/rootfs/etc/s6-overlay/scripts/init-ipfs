@@ -19,11 +19,12 @@ ipfs config --json Swarm.ConnMgr.LowWater 50
 ipfs config --json Swarm.ConnMgr.HighWater 100
 ipfs config Datastore.StorageMax "10GB"
 ipfs config --json Discovery.MDNS.Enabled false
+ipfs config --json Experimental.FilestoreEnabled true
 
 # Create denylists dir for nopfs plugin (looks at $HOME/.config/ipfs/denylists)
 mkdir -p /home/app/.config/ipfs/denylists
 
 # Fix ownership
 chown -R app:app /data/ipfs /home/app/.config
-
 echo "[init-ipfs] Done"
+

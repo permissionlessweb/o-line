@@ -1,105 +1,89 @@
 #!/command/with-contenv bash
 export IPFS_PATH=/data/ipfs
 
-INTERVAL="${AUTOPIN_INTERVAL:-300}"
-PATTERNS="${AUTOPIN_PATTERNS:-*.tar.gz,*.tar.zst,*.tar.lz4,*.tar.xz,snapshot.json}"
+INTERVAL="${AUTOPIN_INTERVAL:-30}"
+PATTERNS="${AUTOPIN_PATTERNS:-*}" 
 PINNED_LOG="/data/ipfs/.autopin-state"
 STAGING="/tmp/autopin"
 MINIO_P="${MINIO_P:-9000}"
-MINIO_BUCKET="${MINIO_BUCKET:-snapshots}"
+AUTOPIN_BUCKETS="${AUTOPIN_BUCKETS:-snapshots,static}"
 MINIO_ROOT_USER="${MINIO_ROOT_USER:-minioadmin}"
 MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-minioadmin}"
+ALIAS="local"
 META_OBJ="metadata.json"
-META_LOCAL="${STAGING}/${META_OBJ}"
 
 mkdir -p "$STAGING"
 touch "$PINNED_LOG"
-mc alias set local "http://localhost:${MINIO_P}" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" --api S3v4 > /dev/null 2>&1
-echo "[autopin] Watching MinIO bucket '${MINIO_BUCKET}' every ${INTERVAL}s for: ${PATTERNS}"
 
-update_metadata() { # update_metadata <objname> <cid> <etag>
-#   1. Fetches current metadata.json from MinIO (creates empty skeleton if absent/corrupt)
-#   2. Merges new snapshot entry (keyed by object name)
-#   3. Uploads updated metadata.json back to MinIO (publicly readable)
-#   4. Pins metadata.json to IPFS and logs the resulting CID
-    local objname="$1" cid="$2" etag="$3"
-    local now
-    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# Set up MinIO alias
+mc alias set "$ALIAS" "http://localhost:${MINIO_P}" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" --api S3v4 >/dev/null 2>&1
 
-    # Fetch existing metadata from MinIO; start fresh if missing or corrupt
-    mc cp "local/${MINIO_BUCKET}/${META_OBJ}" "$META_LOCAL" > /dev/null 2>&1 || \
-        printf '{"updated_at":"","snapshots":{}}' > "$META_LOCAL"
-    jq empty "$META_LOCAL" 2>/dev/null || \
-        printf '{"updated_at":"","snapshots":{}}' > "$META_LOCAL"
+echo "[autopin] Watching buckets: ${AUTOPIN_BUCKETS} every ${INTERVAL}s (patterns: ${PATTERNS})"
+# Convert to array
+IFS=',' read -ra BUCKETS <<< "$AUTOPIN_BUCKETS"
 
-    # Merge snapshot entry (upsert by object name)
-    jq --arg name    "$objname" \
-       --arg cid     "$cid" \
-       --arg etag    "$etag" \
-       --arg now     "$now" \
-       '.updated_at = $now |
-        .snapshots[$name] = {ipfs_cid: $cid, etag: $etag, pinned_at: $now}' \
-       "$META_LOCAL" > "${META_LOCAL}.tmp" \
-    && mv "${META_LOCAL}.tmp" "$META_LOCAL"
+update_metadata() {
+    local bucket="$1" objname="$2" cid="$3" etag="$4"
+    local now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    local meta_local="${STAGING}/${bucket}-${META_OBJ}"
 
-    # Push updated metadata back to MinIO (anonymous GET still applies)
-    if mc cp "$META_LOCAL" "local/${MINIO_BUCKET}/${META_OBJ}" > /dev/null 2>&1; then
-        echo "[autopin] Metadata updated: http://localhost:${MINIO_P}/${MINIO_BUCKET}/${META_OBJ}"
-    else
-        echo "[autopin] Warning: failed to upload ${META_OBJ} to MinIO"
-    fi
+    mc cp "${ALIAS}/${bucket}/${META_OBJ}" "$meta_local" >/dev/null 2>&1 || \
+        printf '{"updated_at":"","objects":{}}' > "$meta_local"
 
-    # Pin metadata.json itself to IPFS
+    jq --arg name "$objname" \
+       --arg cid "$cid" \
+       --arg etag "$etag" \
+       --arg now "$now" \
+       '.updated_at = $now | .objects[$name] = {ipfs_cid: $cid, etag: $etag, pinned_at: $now}' \
+       "$meta_local" > "${meta_local}.tmp" && mv "${meta_local}.tmp" "$meta_local"
+    mc cp "$meta_local" "${ALIAS}/${bucket}/${META_OBJ}" >/dev/null 2>&1 || \
+        echo "[autopin] Warning: Failed to update metadata in ${bucket}"
+
     local meta_cid
-    meta_cid=$(s6-setuidgid app ipfs add  --nocopy --pin=true -Q "$META_LOCAL" 2>/dev/null)
-    if [ -n "$meta_cid" ]; then
-        echo "[autopin] Metadata pinned -> ${meta_cid}"
-        echo "[autopin]   http://localhost:${IPFS_GATEWAY_P:-8081}/ipfs/${meta_cid}"
-    else
-        echo "[autopin] Warning: failed to pin ${META_OBJ} to IPFS"
-    fi
+    meta_cid=$(s6-setuidgid app ipfs add --nocopy --pin=true -Q "$meta_local" 2>/dev/null)
+    [ -n "$meta_cid" ] && echo "[autopin] Metadata pinned -> ${meta_cid} (bucket: ${bucket})"
 }
 
 while true; do
-    mc ls --recursive "local/${MINIO_BUCKET}" 2>/dev/null | awk '{print $NF}' | while IFS= read -r objname; do
-        [ -z "$objname" ] && continue
+    for bucket in "${BUCKETS[@]}"; do
+        bucket=$(echo "$bucket" | xargs)
+        [ -z "$bucket" ] && continue
 
-        # Never treat metadata.json as a snapshot to pin
-        [ "$(basename "$objname")" = "$META_OBJ" ] && continue
+        echo "[autopin] Scanning bucket: ${bucket}"
 
-        # Check pattern match
-        matched=false
-        IFS=',' read -ra PATS <<< "$PATTERNS"
-        for pat in "${PATS[@]}"; do
-            case "$objname" in $pat) matched=true; break;; esac
-        done
-        [ "$matched" = false ] && continue
+        # Better ls + stat approach
+        mc ls --recursive "${ALIAS}/${bucket}" 2>/dev/null | awk '{print $NF}' | while IFS= read -r objname; do
+            [ -z "$objname" ] && continue
+            [ "$(basename "$objname")" = "$META_OBJ" ] && continue
 
-        # ETag-based change detection
-        etag=$(mc stat "local/${MINIO_BUCKET}/${objname}" 2>/dev/null | grep -i etag | awk '{print $NF}')
-        key="${objname}::${etag}"
-        grep -qxF "$key" "$PINNED_LOG" 2>/dev/null && continue
+            # Get ETag more reliably
+            etag=$(mc stat "${ALIAS}/${bucket}/${objname}" 2>/dev/null | grep -i 'ETag:' | awk '{print $2}' | tr -d '"' || echo "")
+            [ -z "$etag" ] && continue
 
-        echo "[autopin] Pinning: ${objname}"
-        local_path="${STAGING}/$(basename "$objname")"
-        mc cp "local/${MINIO_BUCKET}/${objname}" "$local_path" > /dev/null 2>&1
+            key="${bucket}/${objname}::${etag}"
+            grep -qxF "$key" "$PINNED_LOG" 2>/dev/null && continue
 
-        if [ -f "$local_path" ]; then
-            CID=$(s6-setuidgid app ipfs add --nocopy --pin=true -Q "$local_path" 2>/dev/null)
-            rm -f "$local_path"
+            full_fs_path="/data/minio/${bucket}/${objname}"
 
-            if [ -n "$CID" ]; then
-                echo "$key" >> "$PINNED_LOG"
-                echo "[autopin] Pinned ${objname} -> ${CID}"
-                echo "[autopin]   http://localhost:${IPFS_GATEWAY_P:-8081}/ipfs/${CID}"
-
-                update_metadata "$objname" "$CID" "$etag"
-            else
-                echo "[autopin] Failed to pin ${objname}"
+            if [ ! -f "$full_fs_path" ]; then
+                echo "[autopin] Warning: File not found on disk: ${full_fs_path}"
+                continue
             fi
-        else
-            echo "[autopin] Failed to download ${objname} from MinIO"
-        fi
+
+            echo "[autopin] Pinning: ${bucket}/${objname}"
+
+            CID=$(s6-setuidgid app ipfs add --nocopy --pin=true -Q "$full_fs_path" 2>&1)
+
+            if [[ "$CID" =~ ^(Qm[1-9A-HJ-NP-Za-km-z]{44}|bafy|bafk) ]]; then
+                echo "$key" >> "$PINNED_LOG"
+                echo "[autopin] Successfully pinned ${bucket}/${objname} → ${CID}"
+                echo "[autopin] Gateway: http://localhost:${IPFS_GATEWAY_P:-8081}/ipfs/${CID}"
+
+                update_metadata "$bucket" "$objname" "$CID" "$etag"
+            else
+                echo "[autopin] Failed to pin ${bucket}/${objname} (output: ${CID})"
+            fi
+        done
     done
 
     sleep "$INTERVAL"

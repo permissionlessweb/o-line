@@ -19,7 +19,7 @@
 /// ```
 
 const LOCALTERP_IMAGE: &str = "terpnetwork/terp-core:localterp";
-const TESTNET_CHAIN_ID: &str = "bootstrap-test-1";
+const TN_CHAIN_ID: &str = "bootstrap-test-1";
 const CONTAINER_NAME: &str = "oline-bootstrap-test";
 const BLOCK_TIMEOUT_SECS: u64 = 30;
 
@@ -152,7 +152,7 @@ fn test_localterp_genesis_bootstrap() {
     cleanup_container(CONTAINER_NAME);
 
     // Start fresh localterp with fast blocks
-    start_localterp(CONTAINER_NAME, TESTNET_CHAIN_ID, true)
+    start_localterp(CONTAINER_NAME, TN_CHAIN_ID, true)
         .expect("start localterp container");
 
     // Wait for container to boot and produce blocks
@@ -195,10 +195,10 @@ fn test_localterp_genesis_bootstrap() {
         .text()
         .expect("genesis body");
     assert!(
-        genesis_resp.contains(TESTNET_CHAIN_ID),
-        "genesis should contain chain_id {}", TESTNET_CHAIN_ID
+        genesis_resp.contains(TN_CHAIN_ID),
+        "genesis should contain chain_id {}", TN_CHAIN_ID
     );
-    println!("  Genesis contains chain_id: {}", TESTNET_CHAIN_ID);
+    println!("  Genesis contains chain_id: {}", TN_CHAIN_ID);
 
     // Verify chain_id matches
     let status_resp = reqwest::blocking::get(format!("{}/status", rpc_url))
@@ -206,7 +206,7 @@ fn test_localterp_genesis_bootstrap() {
         .text()
         .expect("status body");
     assert!(
-        status_resp.contains(TESTNET_CHAIN_ID),
+        status_resp.contains(TN_CHAIN_ID),
         "status should contain chain_id"
     );
 

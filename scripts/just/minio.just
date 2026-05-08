@@ -16,6 +16,15 @@ build-push-minio-ipfs tag=minio_ipfs_version:
 # minio site tests moved to testing.just → `just test sites`, `just test sites-phase-a`
 
 # build no push 
+build-minio-ipfs-latest-linux tag=minio_ipfs_version:
+    docker buildx build \
+        --platform linux/amd64 \
+        --tag {{ghcr_image}}:{{tag}} \
+        --tag {{ghcr_image}}:latest \
+        --tag {{dh_image}}:{{tag}} \
+        --tag {{dh_image}}:latest \
+        --load \
+        plays/instant-replay
 build-minio-ipfs-latest tag=minio_ipfs_version:
     docker buildx build \
         --platform linux/amd64,linux/arm64 \

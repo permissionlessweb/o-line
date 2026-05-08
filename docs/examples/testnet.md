@@ -166,9 +166,9 @@ After sentries are deployed, get their node IDs and wire the validator:
 
 ```bash
 # Get sentry node IDs from the SSH endpoints printed by oline
-ssh -i ~/.oline/oline-testnet-key root@<PROVIDER_HOST> -p <SENTRY_A_SSH_PORT> \
+ssh -i ~/.oline/oline-testnet-key root@<PROVIDER_HOST> -p <SEN_A_SSH_PORT> \
   terpd tendermint show-node-id
-ssh -i ~/.oline/oline-testnet-key root@<PROVIDER_HOST> -p <SENTRY_B_SSH_PORT> \
+ssh -i ~/.oline/oline-testnet-key root@<PROVIDER_HOST> -p <SEN_B_SSH_PORT> \
   terpd tendermint show-node-id
 
 # Wire validator to dial out to both sentries
@@ -217,10 +217,10 @@ during deployment:
 ssh -i ~/.oline/oline-testnet-key root@<PROVIDER_HOST> -p <LB_SSH_PORT>
 
 # Sentry A
-ssh -i ~/.oline/oline-testnet-key root@<PROVIDER_HOST> -p <SENTRY_A_SSH_PORT>
+ssh -i ~/.oline/oline-testnet-key root@<PROVIDER_HOST> -p <SEN_A_SSH_PORT>
 
 # Sentry B
-ssh -i ~/.oline/oline-testnet-key root@<PROVIDER_HOST> -p <SENTRY_B_SSH_PORT>
+ssh -i ~/.oline/oline-testnet-key root@<PROVIDER_HOST> -p <SEN_B_SSH_PORT>
 ```
 
 ## Step-by-step: remote validator

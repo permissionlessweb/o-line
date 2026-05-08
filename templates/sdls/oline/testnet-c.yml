@@ -38,7 +38,7 @@ ${LF_80_ACCEPTS}
     env:
       - MONIKER=${LEFT_FMONIKER}
       - PROJECT_BIN=${OLINE_BINARY}
-      - CHAIN_ID=${TESTNET_CHAIN_ID}
+      - CHAIN_ID=${TN_CHAIN_ID}
       - GENESIS_URL=${GENESIS_URL}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - PRUNING=default
@@ -99,7 +99,7 @@ ${RF_80_ACCEPTS}
     env:
       - MONIKER=${RIGHT_FMONIKER}
       - PROJECT_BIN=${OLINE_BINARY}
-      - CHAIN_ID=${TESTNET_CHAIN_ID}
+      - CHAIN_ID=${TN_CHAIN_ID}
       - GENESIS_URL=${GENESIS_URL}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - PRUNING=default

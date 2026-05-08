@@ -1,0 +1,96 @@
+# Required: API version must be "v1"
+apiVersion: v1
+# Required: Unique identifier for this job
+id: terp-snapshot-inventory
+# Required: Destination configuration
+destination:
+  # Required: Destination bucket name
+  bucket: snapshots
+  # Optional: Prefix for report files
+  prefix: inventory/
+  # Output format (csv, json, or parquet)
+  format: json
+  # Optional: Compression setting (on or off)
+  # Default: on
+  compression: on
+# Optional: Job schedule (once, hourly, daily, weekly, monthly, yearly)
+# Default: once
+schedule: hourly
+# Optional: Operational mode (fast or strict)
+# Default: fast
+mode: strict
+# Optional: Version handling (all or current)
+# Default: all
+versions: all
+# Optional: Additional metadata fields to include
+# See output field list for all available fields
+# includeFields:
+#   - ETag
+#   - StorageClass
+#   - IsMultipart
+#   - EncryptionStatus
+#   - Tags
+#   - UserMetadata
+#   - ReplicationStatus
+#   - ObjectLockMode
+#   - TierField
+# # Optional: Filter rules to select objects
+# filters:
+#   # Prefix filter: Include objects with these prefixes
+#   prefix:
+#     - "documents/"
+#     - "images/"
+#     - "videos/"
+#   # Age filter: Filter by last modified date
+#   lastModified:
+#     # Relative time filters (use duration strings)
+#     olderThan: 7d
+#     newerThan: 365d
+#     # Absolute time filters (use RFC3339 timestamps)
+#     # Can be combined with relative filters
+#     after: "2024-01-01T00:00:00Z"
+#     # before: "2024-12-31T23:59:59Z"
+#   # Size filter: Filter by object size
+#   size:
+#     greaterThan: 1MiB
+#     lessThan: 100GiB
+#     # equalTo: 50MiB  # Mutually exclusive with range filters
+#   # Version count filter: Filter by number of versions
+#   versionsCount:
+#     greaterThan: 1
+#     lessThan: 3
+#     # equalTo: 5  # Mutually exclusive with range filters
+#   # Name filter: Filter by object key
+#   # NOTE: match, contains, and regex are mutually exclusive
+#   name:
+#     match: "*.mp4"
+#     # contains: "archive"  # Mutually exclusive with match/regex
+#     # regex: "^data-\\d{4}\\.json$"  # Mutually exclusive with match/contains
+#   # Tag filter: Filter by object tags
+#   tags:
+#     # AND: All conditions must be true
+#     and:
+#       - key: project
+#         valueString:
+#           match: "ares-*"
+#       - key: status
+#         valueString:
+#           contains: "active"
+#       - key: priority
+#         valueNum:
+#           greaterThan: 5
+#     # OR: At least one condition must be true
+#     # NOTE: Can specify both 'and' and 'or' in same filter
+#     # or:
+#     #   - key: urgent
+#     #     valueString:
+#     #       match: "true"
+#   # User metadata filter: Filter by user-defined metadata
+#   userMetadata:
+#     and:
+#       - key: x-amz-meta-processed-by
+#         valueString:
+#           regex: "worker-\\d+"
+#       - key: x-amz-meta-version
+#         valueNum:
+#           greaterThan: 2

@@ -1254,7 +1254,6 @@ pub fn decrypt_mnemonic(encrypted_b64: &str, password: &str) -> Result<String, B
         &blob[SALT_LEN + NONCE_LEN..],
     );
 
-    println!("{:#?}", password);
     let mut key = [0u8; 32];
     Argon2::default()
         .hash_password_into(password.as_bytes(), salt, &mut key)

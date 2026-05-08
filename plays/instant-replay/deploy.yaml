@@ -2,41 +2,38 @@
 # minio-ipfs — Akash SDL
 #
 # Deploys MinIO (S3 API + Console UI) + IPFS (Kubo) with auto-pinning.
-# Upload snapshots via MinIO Console (:9001) or S3 API (:9000) →
+# Upload snapshots via MinIO Console (:9002) or S3 API (:9000) →
 # autopin service pins them to IPFS for decentralized distribution.
 #
 # No FUSE or SYS_ADMIN capability required.
 #
 # Image must be pre-built and pushed to a registry before deploying.
-# Build:  docker build -t ghcr.io/permissionlessweb/minio-ipfs:v0.0.9 .
-# Push:   docker push ghcr.io/permissionlessweb/minio-ipfs:v0.0.9
+# Build:  docker build -t ghcr.io/permissionlessweb/minio-ipfs:v0.1.01 .
+# Push:   docker push ghcr.io/permissionlessweb/minio-ipfs:v0.1.01
 
 version: "2.0"
 
 services:
   minio-ipfs:
-    image: ghcr.io/permissionlessweb/minio-ipfs:v0.0.9
+    image: ghcr.io/permissionlessweb/minio-ipfs:latest
     env:
       # MinIO
       - "MINIO_ENABLED=true"
       - "MINIO_ROOT_USER=minioadmin"
       - "MINIO_ROOT_PASSWORD=minioadmin"
-      - "MINIO_BUCKET=snapshots"
+      - "AUTOPIN_BUCKETS=snapshots,static"
       - "MINIO_P=9000"
-      - "MINIO_CONSOLE_P=9001"
-      # Ports
+      - "MINIO_CONSOLE_P=9002"
       - "IPFS_GATEWAY_P=8081"
-      # IPFS
       - "IPFS_PROFILE=server"
-      # Auto-pin: scan every 5 minutes for snapshot files
-      - "AUTOPIN_INTERVAL=300"
+      - "AUTOPIN_INTERVAL=30"
       - "AUTOPIN_PATTERNS=*.tar.gz,*.tar.zst,*.tar.lz4,*.tar.xz"
       # User
       - "PUID=1000"
       - "PGID=1000"
     expose:
       # MinIO Console UI (browse/upload/download files)
-      - port: 9001
+      - port: 9002
         as: 80
         to:
           - global: true
@@ -60,7 +57,6 @@ services:
         as: 9000
         to:
           - global: true
-      # IPFS Swarm (P2P — enables content distribution)
       - port: 4001
         as: 4001
         proto: tcp

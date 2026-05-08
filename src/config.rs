@@ -11,9 +11,7 @@ use std::{
 };
 
 use crate::{
-    cli::{
-        print_config_table, prompt_continue, read_input, read_override_selection, read_secret_input,
-    },
+    cli::prompt_continue,
     crypto::{decrypt_mnemonic, encrypt_mnemonic},
     toml_config::{TomlConfig, CONFIG_FIELDS},
 };
@@ -351,13 +349,14 @@ pub fn save_config(c: &OLineConfig, pw: &str) -> Result<(), Box<dyn Error>> {
     if let Some(p) = p.parent() {
         fs::create_dir_all(p)?;
     }
-    fs::write(&p, encrypt_mnemonic(&serde_json::to_string(c)?, pw)?)?;
+    let toml_str = toml::to_string_pretty(c)
+        .map_err(|e| format!("Failed to serialize config to TOML: {}", e))?;
+    fs::write(&p, toml_str)?;
     Ok(())
 }
 
 pub fn load_config(password: &str) -> Option<OLineConfig> {
-    let encrypted = fs::read_to_string(&config_path()).ok()?;
-    serde_json::from_str(&decrypt_mnemonic(encrypted.trim(), password).ok()?).ok()
+    serde_json::from_str(&fs::read_to_string(&config_path()).ok()?).ok()
 }
 
 pub fn has_saved_config() -> bool {
@@ -452,12 +451,11 @@ pub struct PeerInputs {
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct DeployConfig {
     pub config: HashMap<String, String>,
-    pub peers: PeerInputs,
 }
 
 impl DeployConfig {
     /// Build from an `OLineConfig`, stripping secrets.
-    pub fn from_oline_config(c: &OLineConfig, peers: PeerInputs) -> Self {
+    pub fn from_oline_config(c: &OLineConfig) -> Self {
         let mut config: HashMap<String, String> = HashMap::new();
         for field in CONFIG_FIELDS {
             if field.is_secret {
@@ -474,7 +472,7 @@ impl DeployConfig {
                 }
             }
         }
-        Self { config, peers }
+        Self { config }
     }
 
     pub fn write_to_file(&self, path: &Path) -> Result<(), Box<dyn Error>> {

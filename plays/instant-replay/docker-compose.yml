@@ -2,36 +2,32 @@ services:
   minio-ipfs:
     build: .
     image: minio-ipfs:latest
-    container_name: minio-ipfs
+    container_name: minio-ipfs-e2e
     restart: unless-stopped
     environment:
-      # MinIO (internal S3-compatible server)
+      # MinIO
       - MINIO_ENABLED=${MINIO_ENABLED:-true}
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
-      - MINIO_BUCKET=${MINIO_BUCKET:-snapshots}
       - MINIO_P=${MINIO_P:-9000}
-      - MINIO_CONSOLE_P=${MINIO_CONSOLE_P:-9001}
-      # Ports
+      - MINIO_CONSOLE_P=${MINIO_CONSOLE_P:-9002}
       - IPFS_GATEWAY_P=${IPFS_GATEWAY_P:-8081}
-      # IPFS
       - IPFS_PROFILE=${IPFS_PROFILE:-server}
-      # Auto-pin (scans MinIO bucket for snapshots and pins to IPFS)
-      - AUTOPIN_INTERVAL=${AUTOPIN_INTERVAL:-300}
-      - AUTOPIN_PATTERNS=${AUTOPIN_PATTERNS:-*.tar.gz,*.tar.zst,*.tar.lz4,*.tar.xz}
+      # Auto-pin (NEW multi-bucket support)
+      - AUTOPIN_BUCKETS=${AUTOPIN_BUCKETS:-snapshots,static} 
+      - AUTOPIN_INTERVAL=${AUTOPIN_INTERVAL:-30}
+      - AUTOPIN_PATTERNS=${AUTOPIN_PATTERNS:-*}
       # User
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
+
     ports:
-      - "9001:9001"    # MinIO Console UI
+      - "9002:9002"    # MinIO Console
+      - "5001:5001"    # IPFS Console
       - "8081:8081"    # IPFS Gateway
       - "9000:9000"    # MinIO S3 API
-      # - "4001:4001"  # IPFS Swarm (P2P)
-      # - "5001:5001"  # IPFS API (keep internal)
-    volumes:
-      - ipfs_data:/data/ipfs
-      - minio_data:/data/minio
 
+    volumes:
+          - minio_ipfs:/data
 volumes:
-  ipfs_data:
-  minio_data:
+  minio_ipfs:

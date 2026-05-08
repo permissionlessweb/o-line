@@ -4,7 +4,7 @@ MINIO_ENABLED="${MINIO_ENABLED:-true}"
 [ "$MINIO_ENABLED" != "true" ] && exit 0
 
 MINIO_P="${MINIO_P:-9000}"
-MINIO_BUCKET="${MINIO_BUCKET:-snapshots}"
+AUTOPIN_BUCKETS="${AUTOPIN_BUCKETS:-"snapshots,static"}"
 MINIO_ROOT_USER="${MINIO_ROOT_USER:-minioadmin}"
 MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-minioadmin}"
 
@@ -22,15 +22,19 @@ while [ $ATTEMPTS -lt 30 ]; do
 done
 [ $ATTEMPTS -eq 30 ] && echo " timeout" && exit 1
 
-# Create bucket if needed
 mc alias set local "http://localhost:${MINIO_P}" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" --api S3v4 > /dev/null 2>&1
-if ! mc ls "local/${MINIO_BUCKET}" > /dev/null 2>&1; then
-    echo "[init-minio-bucket] Creating bucket: ${MINIO_BUCKET}"
-    mc mb "local/${MINIO_BUCKET}" > /dev/null 2>&1
-else
-    echo "[init-minio-bucket] Bucket exists: ${MINIO_BUCKET}"
-fi
 
+# Convert comma-separated string to array, # Loop through each bucket, Create bucket if needed
+IFS=',' read -ra BUCKETS <<< "$AUTOPIN_BUCKETS"
+for bucket in "${BUCKETS[@]}"; do
+  echo "Processing bucket: $bucket"
+if ! mc ls "local/$bucket" > /dev/null 2>&1; then
+    echo "[init-minio-bucket] Creating bucket: $bucket"
+    mc mb "local/$bucket" > /dev/null 2>&1
+else
+    echo "[init-minio-bucket] Bucket exists: $bucket"
+fi
 # Set anonymous download (public read, authenticated write)
-mc anonymous set download "local/${MINIO_BUCKET}"
-echo "[init-minio-bucket] Anonymous download enabled on ${MINIO_BUCKET}"
+mc anonymous set download "local/$bucket"
+echo "[init-minio-bucket] Anonymous download enabled on $bucket"
+done

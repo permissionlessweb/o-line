@@ -114,6 +114,119 @@ pub struct TomlConfig {
     pub logging: LoggingConfig,
 }
 
+impl TomlConfig {
+    pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
+        let path = path.as_ref();
+
+        // Create parent directory if needed
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        // Use TOML (recommended for config files) or JSON
+        let content = toml::to_string_pretty(self)
+            .map_err(|e| format!("Failed to serialize config: {}", e))
+            .unwrap();
+
+        fs::write(path, content)?;
+
+        println!("✅ Config written to: {}", path.display());
+        Ok(())
+    }
+    /// Generate a nice, commented default config.toml for `oline init`
+    pub fn generate_default_template() -> String {
+        let config = Self::from_defaults();
+
+        // Serialize the full config to TOML
+        let mut toml_str =
+            toml::to_string_pretty(&config).expect("Failed to serialize default config");
+
+        // Add header with helpful instructions
+        let header = r#"# =============================================================================
+# oline Default Configuration
+# =============================================================================
+# This is the single source of truth for oline.
+#
+# Environment variables (OLINE_*) take precedence over this file.
+# Run `oline config edit` to customize.
+#
+# Uncomment and fill in values as needed.
+# =============================================================================
+
+"#;
+
+        // Post-process to add comments for important/empty fields
+        let enhanced = enhance_toml_with_comments(&toml_str);
+
+        format!("{}{}", header, enhanced)
+    }
+
+    /// Write the default config (used by `oline init`)
+    pub fn write_default_config<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<()> {
+        let content = Self::generate_default_template();
+        if let Some(parent) = path.as_ref().parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, content)
+    }
+
+    /// Creates a default `TomlConfig` (already done via `from_defaults()`)
+    /// and also returns the pretty TOML string for writing to disk.
+    pub fn default_with_template() -> (Self, String) {
+        let config = Self::from_defaults();
+        let toml_string = Self::generate_default_template(); // your pretty version
+        (config, toml_string)
+    }
+
+    /// Alternative: Parse the generated template back into struct (safe because it's from defaults)
+    pub fn from_default_template() -> Self {
+        let toml_str = Self::generate_default_template();
+        toml::from_str(&toml_str).expect("Failed to parse generated default config")
+    }
+}
+
+fn enhance_toml_with_comments(toml: &str) -> String {
+    let mut output = String::new();
+    let mut in_nodes = false;
+
+    for line in toml.lines() {
+        let trimmed = line.trim();
+
+        // Add explanatory comments before key sections
+        if trimmed.starts_with("[chain]") {
+            output.push_str("# ── Chain Configuration ─────────────────────────────────────\n");
+        } else if trimmed.starts_with("[images]") {
+            output.push_str("\n# ── Docker Images ───────────────────────────────────────────\n");
+        } else if trimmed.starts_with("[akash]") {
+            output.push_str("\n# ── Akash Network Endpoints ────────────────────────────────\n");
+        } else if trimmed.starts_with("[nodes]") {
+            output.push_str("\n# ── Node Domains & Ports ───────────────────────────────────\n");
+            in_nodes = true;
+        } else if trimmed.starts_with("[relayer]") || trimmed.starts_with("[argus]") {
+            output.push_str("\n");
+        }
+
+        // Comment out empty string fields to guide the user
+        if trimmed.contains(" = \"\"") || trimmed.contains(" = ''") {
+            output.push_str("# ");
+            output.push_str(line);
+            output.push('\n');
+            continue;
+        }
+
+        // Special handling for nodes subsection
+        if in_nodes && trimmed.starts_with("domain = \"\"") {
+            output.push_str("# domain = \"your-domain.com\"\n");
+            continue;
+        }
+
+        output.push_str(line);
+        output.push('\n');
+    }
+
+    output
+}
+
 /// Wrapper that deserializes a config.toml with optional `[profiles.<name>]` sections.
 /// Profile values are deep-merged over the base config before env overrides apply.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -135,10 +248,15 @@ impl ProfiledTomlConfig {
             deep_merge(&mut base_val, overlay);
         } else if !self.profiles.is_empty() {
             let available: Vec<&String> = self.profiles.keys().collect();
-            tracing::warn!("  Profile '{}' not found. Available: {:?}", profile, available);
+            tracing::warn!(
+                "  Profile '{}' not found. Available: {:?}",
+                profile,
+                available
+            );
         }
 
-        let mut config: TomlConfig = base_val.try_into()
+        let mut config: TomlConfig = base_val
+            .try_into()
             .map_err(|e| format!("Failed to deserialize merged config: {}", e))?;
         config.apply_env_overrides();
         Ok(config)
@@ -161,7 +279,6 @@ fn deep_merge(base: &mut toml::Value, overlay: &toml::Value) {
         }
     }
 }
-
 
 // ── Chain ─────────────────────────────────────────────────────────────────
 
@@ -191,9 +308,15 @@ pub struct ChainConfig {
     pub faucet_domain: String,
 }
 
-fn d_chain_id() -> String { "morocco-1".into() }
-fn d_binary() -> String { "terpd".into() }
-fn d_sync_method() -> String { "snapshot".into() }
+fn d_chain_id() -> String {
+    "morocco-1".into()
+}
+fn d_binary() -> String {
+    "terpd".into()
+}
+fn d_sync_method() -> String {
+    "snapshot".into()
+}
 
 impl Default for ChainConfig {
     fn default() -> Self {
@@ -227,8 +350,12 @@ pub struct ImagesConfig {
     pub argus: String,
 }
 
-fn d_node_image() -> String { "ghcr.io/terpnetwork/terp-core:v5.1.6-oline".into() }
-fn d_minio_image() -> String { "minio/minio:latest".into() }
+fn d_node_image() -> String {
+    "ghcr.io/terpnetwork/terp-core:v5.1.6-oline".into()
+}
+fn d_minio_image() -> String {
+    "minio/minio:latest".into()
+}
 
 impl Default for ImagesConfig {
     fn default() -> Self {
@@ -253,13 +380,23 @@ pub struct AkashConfig {
     pub rest: String,
 }
 
-fn d_akash_rpc() -> String { "https://akash-rpc.polkachu.com".into() }
-fn d_akash_grpc() -> String { "https://akash.lavenderfive.com:443".into() }
-fn d_akash_rest() -> String { "https://api.akashnet.net:443".into() }
+fn d_akash_rpc() -> String {
+    "https://akash-rpc.polkachu.com".into()
+}
+fn d_akash_grpc() -> String {
+    "https://akash.lavenderfive.com:443".into()
+}
+fn d_akash_rest() -> String {
+    "https://api.akashnet.net:443".into()
+}
 
 impl Default for AkashConfig {
     fn default() -> Self {
-        Self { rpc: d_akash_rpc(), grpc: d_akash_grpc(), rest: d_akash_rest() }
+        Self {
+            rpc: d_akash_rpc(),
+            grpc: d_akash_grpc(),
+            rest: d_akash_rest(),
+        }
     }
 }
 
@@ -283,10 +420,17 @@ pub struct SshConfig {
     pub pubkey: String,
 }
 
-fn d_ssh_port() -> u16 { 22 }
+fn d_ssh_port() -> u16 {
+    22
+}
 
 impl Default for SshConfig {
-    fn default() -> Self { Self { port: d_ssh_port(), pubkey: String::new() } }
+    fn default() -> Self {
+        Self {
+            port: d_ssh_port(),
+            pubkey: String::new(),
+        }
+    }
 }
 
 // ── Snapshot export ───────────────────────────────────────────────────────
@@ -307,11 +451,21 @@ pub struct SnapshotExportConfig {
     pub keep_last: u32,
 }
 
-fn d_snap_path() -> String { "snapshots/terpnetwork".into() }
-fn d_snap_schedule() -> String { "00:00:00".into() }
-fn d_snap_format() -> String { "tar.gz".into() }
-fn d_snap_retain() -> String { "2 days".into() }
-fn d_snap_keep() -> u32 { 2 }
+fn d_snap_path() -> String {
+    "snapshots/terpnetwork".into()
+}
+fn d_snap_schedule() -> String {
+    "00:00:00".into()
+}
+fn d_snap_format() -> String {
+    "tar.gz".into()
+}
+fn d_snap_retain() -> String {
+    "2 days".into()
+}
+fn d_snap_keep() -> u32 {
+    2
+}
 
 impl Default for SnapshotExportConfig {
     fn default() -> Self {
@@ -348,13 +502,28 @@ pub struct NodePorts {
     pub p2p: u16,
 }
 
-fn d_rpc() -> u16 { 26657 }
-fn d_api() -> u16 { 1317 }
-fn d_grpc() -> u16 { 9090 }
-fn d_p2p() -> u16 { 26656 }
+fn d_rpc() -> u16 {
+    26657
+}
+fn d_api() -> u16 {
+    1317
+}
+fn d_grpc() -> u16 {
+    9090
+}
+fn d_p2p() -> u16 {
+    26656
+}
 
 impl Default for NodePorts {
-    fn default() -> Self { Self { rpc: d_rpc(), api: d_api(), grpc: d_grpc(), p2p: d_p2p() } }
+    fn default() -> Self {
+        Self {
+            rpc: d_rpc(),
+            api: d_api(),
+            grpc: d_grpc(),
+            p2p: d_p2p(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -421,11 +590,21 @@ pub struct ArgusConfig {
     pub db_accounts_name: String,
 }
 
-fn d_argus_image() -> String { "ghcr.io/permissionlessweb/argus:latest".into() }
-fn d_bech32() -> String { "terp".into() }
-fn d_argus_db_user() -> String { "argus".into() }
-fn d_argus_db_data() -> String { "argus_data".into() }
-fn d_argus_db_accounts() -> String { "argus_accounts".into() }
+fn d_argus_image() -> String {
+    "ghcr.io/permissionlessweb/argus:latest".into()
+}
+fn d_bech32() -> String {
+    "terp".into()
+}
+fn d_argus_db_user() -> String {
+    "argus".into()
+}
+fn d_argus_db_data() -> String {
+    "argus_data".into()
+}
+fn d_argus_db_accounts() -> String {
+    "argus_accounts".into()
+}
 
 impl Default for ArgusConfig {
     fn default() -> Self {
@@ -461,8 +640,12 @@ pub struct RegistryConfig {
     pub storage_dir: String,
 }
 
-fn d_reg_port() -> u16 { 5000 }
-fn d_reg_user() -> String { "oline".into() }
+fn d_reg_port() -> u16 {
+    5000
+}
+fn d_reg_user() -> String {
+    "oline".into()
+}
 
 impl Default for RegistryConfig {
     fn default() -> Self {
@@ -496,17 +679,29 @@ pub struct MinioConfig {
     pub autopin_interval: u32,
 }
 
-fn d_autopin() -> u32 { 300 }
+fn d_autopin() -> u32 {
+    300
+}
 
 impl Default for MinioConfig {
-    fn default() -> Self { Self { autopin_interval: d_autopin() } }
+    fn default() -> Self {
+        Self {
+            autopin_interval: d_autopin(),
+        }
+    }
 }
 
 // ── Proxy ─────────────────────────────────────────────────────────────────
 
-fn d_proxy_image() -> String { "ghcr.io/hard-nett/oline-proxy-node:latest".into() }
-fn d_proxy_svc() -> String { "proxy-node".into() }
-fn d_akash_chain_id() -> String { "akashnet-2".into() }
+fn d_proxy_image() -> String {
+    "ghcr.io/hard-nett/oline-proxy-node:latest".into()
+}
+fn d_proxy_svc() -> String {
+    "proxy-node".into()
+}
+fn d_akash_chain_id() -> String {
+    "akashnet-2".into()
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ProxyConfig {
@@ -563,7 +758,9 @@ pub struct LoggingConfig {
     pub log_dir: String,
 }
 
-fn d_persist() -> bool { true }
+fn d_persist() -> bool {
+    true
+}
 
 impl Default for LoggingConfig {
     fn default() -> Self {
@@ -586,7 +783,10 @@ impl TomlConfig {
     }
 
     /// Load from TOML file with optional profile selection, then apply env var overrides.
-    pub fn load_with_profile(path: impl AsRef<Path>, profile: Option<&str>) -> Result<Self, Box<dyn Error>> {
+    pub fn load_with_profile(
+        path: impl AsRef<Path>,
+        profile: Option<&str>,
+    ) -> Result<Self, Box<dyn Error>> {
         let content = fs::read_to_string(path.as_ref())?;
         let profiled: ProfiledTomlConfig = toml::from_str(&content)?;
         match profile {
@@ -678,7 +878,11 @@ impl TomlConfig {
         // ── SSH ──────────────────────────────────────────────────────
         self.ssh.port = resolve_u16("ssh.port", self.ssh.port);
         self.ssh.pubkey = resolve_str("ssh.pubkey", &self.ssh.pubkey);
-        if let Ok(v) = std::env::var("SSH_P") { if let Ok(p) = v.parse() { self.ssh.port = p; } }
+        if let Ok(v) = std::env::var("SSH_P") {
+            if let Ok(p) = v.parse() {
+                self.ssh.port = p;
+            }
+        }
         legacy_override_str(&mut self.ssh.pubkey, "SSH_PUBKEY");
 
         // ── Snapshot export ──────────────────────────────────────────
@@ -704,9 +908,12 @@ impl TomlConfig {
 
         // Re-assign after override (clone workaround for borrow checker)
         let nodes = [
-            ("snapshot", "SNAP"), ("seed", "SEED"),
-            ("left_tackle", "TL"), ("right_tackle", "TR"),
-            ("left_forward", "FL"), ("right_forward", "FR"),
+            ("snapshot", "SNAP"),
+            ("seed", "SEED"),
+            ("left_tackle", "TL"),
+            ("right_tackle", "TR"),
+            ("left_forward", "FL"),
+            ("right_forward", "FR"),
         ];
         for (name, suffix) in nodes {
             let node = self.node_mut(name);
@@ -745,7 +952,10 @@ impl TomlConfig {
         // ── Argus ────────────────────────────────────────────────────
         self.argus.node_moniker = resolve_str("argus.node_moniker", &self.argus.node_moniker);
         self.argus.node_seeds = resolve_str("argus.node_seeds", &self.argus.node_seeds);
-        self.argus.node_persistent_peers = resolve_str("argus.node_persistent_peers", &self.argus.node_persistent_peers);
+        self.argus.node_persistent_peers = resolve_str(
+            "argus.node_persistent_peers",
+            &self.argus.node_persistent_peers,
+        );
         self.argus.image = resolve_str("argus.image", &self.argus.image);
         self.argus.entrypoint_url = resolve_str("argus.entrypoint_url", &self.argus.entrypoint_url);
         self.argus.api_domain = resolve_str("argus.api_domain", &self.argus.api_domain);
@@ -753,10 +963,14 @@ impl TomlConfig {
         self.argus.db_user = resolve_str("argus.db_user", &self.argus.db_user);
         self.argus.db_password = resolve_str("argus.db_password", &self.argus.db_password);
         self.argus.db_data_name = resolve_str("argus.db_data_name", &self.argus.db_data_name);
-        self.argus.db_accounts_name = resolve_str("argus.db_accounts_name", &self.argus.db_accounts_name);
+        self.argus.db_accounts_name =
+            resolve_str("argus.db_accounts_name", &self.argus.db_accounts_name);
         legacy_override_str(&mut self.argus.node_moniker, "ARGUS_NODE_MONIKER");
         legacy_override_str(&mut self.argus.node_seeds, "ARGUS_NODE_SEEDS");
-        legacy_override_str(&mut self.argus.node_persistent_peers, "ARGUS_NODE_PERSISTENT_PEERS");
+        legacy_override_str(
+            &mut self.argus.node_persistent_peers,
+            "ARGUS_NODE_PERSISTENT_PEERS",
+        );
         legacy_override_str(&mut self.argus.image, "ARGUS_IMAGE");
         legacy_override_str(&mut self.argus.entrypoint_url, "ARGUS_ENTRYPOINT_URL");
         legacy_override_str(&mut self.argus.api_domain, "ARGUS_API_D");
@@ -786,7 +1000,8 @@ impl TomlConfig {
         legacy_override_str(&mut self.sites.console_domain, "SITES_CONSOLE_DOMAIN");
 
         // ── MinIO ────────────────────────────────────────────────────
-        self.minio.autopin_interval = resolve_u32("minio.autopin_interval", self.minio.autopin_interval);
+        self.minio.autopin_interval =
+            resolve_u32("minio.autopin_interval", self.minio.autopin_interval);
 
         // ── Proxy ───────────────────────────────────────────────────
         self.proxy.enabled = resolve_bool("proxy.enabled", self.proxy.enabled);
@@ -828,7 +1043,9 @@ impl TomlConfig {
     /// Simple domains (e.g. "terp.network") → dot prefix: `rpc.terp.network`
     /// Structured domains (e.g. "mainnet.terp.network") → dash prefix: `rpc-mainnet.terp.network`
     fn derive_subdomain(prefix: &str, domain: &str) -> String {
-        if domain.is_empty() { return String::new(); }
+        if domain.is_empty() {
+            return String::new();
+        }
         let dot_count = domain.chars().filter(|c| *c == '.').count();
         if dot_count <= 1 {
             format!("{}.{}", prefix, domain)
@@ -851,10 +1068,16 @@ impl TomlConfig {
         v.insert("OLINE_CHAIN_JSON".into(), self.chain.chain_json.clone());
         v.insert("OLINE_ADDRBOOK_URL".into(), self.chain.addrbook_url.clone());
         v.insert("OLINE_PERSISTENT_PEERS".into(), self.chain.peers.join(","));
-        v.insert("OLINE_VALIDATOR_PEER_ID".into(), self.chain.private_peers.join(","));
+        v.insert(
+            "OLINE_VALIDATOR_PEER_ID".into(),
+            self.chain.private_peers.join(","),
+        );
         v.insert("OLINE_SYNC_METHOD".into(), self.chain.sync_method.clone());
         v.insert("OLINE_SNAPSHOT_URL".into(), self.chain.snapshot_url.clone());
-        v.insert("OLINE_ENTRYPOINT_URL".into(), self.chain.entrypoint_url.clone());
+        v.insert(
+            "OLINE_ENTRYPOINT_URL".into(),
+            self.chain.entrypoint_url.clone(),
+        );
         v.insert("FAUCET_D".into(), self.chain.faucet_domain.clone());
 
         // ── Images ───────────────────────────────────────────────────
@@ -880,12 +1103,21 @@ impl TomlConfig {
         v.insert("SSH_P".into(), self.ssh.port.to_string());
 
         // ── Snapshot export ──────────────────────────────────────────
-        v.insert("OLINE_SNAP_DOWNLOAD_DOMAIN".into(), self.snapshot.domain.clone());
+        v.insert(
+            "OLINE_SNAP_DOWNLOAD_DOMAIN".into(),
+            self.snapshot.domain.clone(),
+        );
         v.insert("OLINE_SNAP_PATH".into(), self.snapshot.path.clone());
         v.insert("OLINE_SNAP_TIME".into(), self.snapshot.schedule.clone());
-        v.insert("OLINE_SNAP_SAVE_FORMAT".into(), self.snapshot.format.clone());
+        v.insert(
+            "OLINE_SNAP_SAVE_FORMAT".into(),
+            self.snapshot.format.clone(),
+        );
         v.insert("OLINE_SNAP_RETAIN".into(), self.snapshot.retain.clone());
-        v.insert("OLINE_SNAP_KEEP_LAST".into(), self.snapshot.keep_last.to_string());
+        v.insert(
+            "OLINE_SNAP_KEEP_LAST".into(),
+            self.snapshot.keep_last.to_string(),
+        );
 
         // ── Nodes (derived subdomains + ports) ───────────────────────
         self.insert_node_vars(&mut v, &self.nodes.snapshot, "SNAP");
@@ -896,16 +1128,28 @@ impl TomlConfig {
         self.insert_node_vars(&mut v, &self.nodes.right_forward, "FR");
 
         // ── Sites ────────────────────────────────────────────────────
-        v.insert("SITES_GATEWAY_DOMAIN".into(), self.sites.gateway_domain.clone());
+        v.insert(
+            "SITES_GATEWAY_DOMAIN".into(),
+            self.sites.gateway_domain.clone(),
+        );
         v.insert("SITES_S3_DOMAIN".into(), self.sites.s3_domain.clone());
-        v.insert("SITES_CONSOLE_DOMAIN".into(), self.sites.console_domain.clone());
+        v.insert(
+            "SITES_CONSOLE_DOMAIN".into(),
+            self.sites.console_domain.clone(),
+        );
 
         // ── MinIO ────────────────────────────────────────────────────
-        v.insert("OLINE_AUTOPIN_INTERVAL".into(), self.minio.autopin_interval.to_string());
+        v.insert(
+            "OLINE_AUTOPIN_INTERVAL".into(),
+            self.minio.autopin_interval.to_string(),
+        );
 
         // ── Relayer ──────────────────────────────────────────────────
         v.insert("RLY_KEY_NAME".into(), self.relayer.key_name.clone());
-        v.insert("RLY_REMOTE_CHAIN_ID".into(), self.relayer.remote_chain.clone());
+        v.insert(
+            "RLY_REMOTE_CHAIN_ID".into(),
+            self.relayer.remote_chain.clone(),
+        );
         v.insert("RLY_API_D".into(), self.relayer.domain.clone());
         v.insert("RLY_KEY_TERP".into(), self.relayer.key_terp.clone());
         v.insert("RLY_KEY_REMOTE".into(), self.relayer.key_remote.clone());
@@ -914,21 +1158,42 @@ impl TomlConfig {
         // ── Argus ────────────────────────────────────────────────────
         v.insert("ARGUS_NODE_MONIKER".into(), self.argus.node_moniker.clone());
         v.insert("ARGUS_NODE_SEEDS".into(), self.argus.node_seeds.clone());
-        v.insert("ARGUS_NODE_PERSISTENT_PEERS".into(), self.argus.node_persistent_peers.clone());
-        v.insert("ARGUS_ENTRYPOINT_URL".into(), self.argus.entrypoint_url.clone());
+        v.insert(
+            "ARGUS_NODE_PERSISTENT_PEERS".into(),
+            self.argus.node_persistent_peers.clone(),
+        );
+        v.insert(
+            "ARGUS_ENTRYPOINT_URL".into(),
+            self.argus.entrypoint_url.clone(),
+        );
         v.insert("ARGUS_API_D".into(), self.argus.api_domain.clone());
-        v.insert("ARGUS_BECH32_PREFIX".into(), self.argus.bech32_prefix.clone());
+        v.insert(
+            "ARGUS_BECH32_PREFIX".into(),
+            self.argus.bech32_prefix.clone(),
+        );
         v.insert("ARGUS_DB_USER".into(), self.argus.db_user.clone());
         v.insert("ARGUS_DB_PASSWORD".into(), self.argus.db_password.clone());
         v.insert("ARGUS_DB_DATA_NAME".into(), self.argus.db_data_name.clone());
-        v.insert("ARGUS_DB_ACCOUNTS_NAME".into(), self.argus.db_accounts_name.clone());
+        v.insert(
+            "ARGUS_DB_ACCOUNTS_NAME".into(),
+            self.argus.db_accounts_name.clone(),
+        );
 
         // ── Registry ─────────────────────────────────────────────────
         v.insert("OLINE_REGISTRY_URL".into(), self.registry.url.clone());
         v.insert("OLINE_REGISTRY_P".into(), self.registry.port.to_string());
-        v.insert("OLINE_REGISTRY_USERNAME".into(), self.registry.username.clone());
-        v.insert("OLINE_REGISTRY_PASSWORD".into(), self.registry.password.clone());
-        v.insert("OLINE_REGISTRY_DIR".into(), self.registry.storage_dir.clone());
+        v.insert(
+            "OLINE_REGISTRY_USERNAME".into(),
+            self.registry.username.clone(),
+        );
+        v.insert(
+            "OLINE_REGISTRY_PASSWORD".into(),
+            self.registry.password.clone(),
+        );
+        v.insert(
+            "OLINE_REGISTRY_DIR".into(),
+            self.registry.storage_dir.clone(),
+        );
 
         // ── Proxy ────────────────────────────────────────────────────
         v.insert("PROXY_NODE_IMAGE".into(), self.proxy.image.clone());
@@ -949,12 +1214,24 @@ impl TomlConfig {
         v.insert("SDL_DIR".into(), sdl_dir);
 
         // ── Testnet ───────────────────────────────────────────────────
-        v.insert("TESTNET_SENTRY_IMAGE".into(),
-            resolve_str("testnet.sentry_image", &self.testnet.sentry_image));
-        v.insert("TESTNET_SENTRY_A_FAUCET_MNEMONIC".into(),
-            resolve_str("testnet.sentry_a_faucet_mnemonic", &self.testnet.sentry_a_faucet_mnemonic));
-        v.insert("TESTNET_SENTRY_B_FAUCET_MNEMONIC".into(),
-            resolve_str("testnet.sentry_b_faucet_mnemonic", &self.testnet.sentry_b_faucet_mnemonic));
+        v.insert(
+            "TN_SEN_IMAGE".into(),
+            resolve_str("testnet.sentry_image", &self.testnet.sentry_image),
+        );
+        v.insert(
+            "TN_SEN_A_FAUCET_MNEMONIC".into(),
+            resolve_str(
+                "testnet.sentry_a_faucet_mnemonic",
+                &self.testnet.sentry_a_faucet_mnemonic,
+            ),
+        );
+        v.insert(
+            "TN_SEN_B_FAUCET_MNEMONIC".into(),
+            resolve_str(
+                "testnet.sentry_b_faucet_mnemonic",
+                &self.testnet.sentry_b_faucet_mnemonic,
+            ),
+        );
 
         v
     }
@@ -975,10 +1252,22 @@ impl TomlConfig {
             v.insert(format!("GRPC_D_{}", suffix), String::new());
             v.insert(format!("P2P_D_{}", suffix), String::new());
         } else {
-            v.insert(format!("RPC_D_{}", suffix), Self::derive_subdomain("rpc", d));
-            v.insert(format!("API_D_{}", suffix), Self::derive_subdomain("api", d));
-            v.insert(format!("GRPC_D_{}", suffix), Self::derive_subdomain("grpc", d));
-            v.insert(format!("P2P_D_{}", suffix), Self::derive_subdomain("peer", d));
+            v.insert(
+                format!("RPC_D_{}", suffix),
+                Self::derive_subdomain("rpc", d),
+            );
+            v.insert(
+                format!("API_D_{}", suffix),
+                Self::derive_subdomain("api", d),
+            );
+            v.insert(
+                format!("GRPC_D_{}", suffix),
+                Self::derive_subdomain("grpc", d),
+            );
+            v.insert(
+                format!("P2P_D_{}", suffix),
+                Self::derive_subdomain("peer", d),
+            );
         }
     }
 
@@ -1031,76 +1320,312 @@ pub struct ConfigField {
 /// All config fields in display order.
 pub const CONFIG_FIELDS: &[ConfigField] = &[
     // Chain
-    ConfigField { path: "chain.id",             description: "Chain ID",                        is_secret: false },
-    ConfigField { path: "chain.binary",         description: "Cosmos daemon binary",            is_secret: false },
-    ConfigField { path: "chain.genesis_url",    description: "Genesis JSON URL",                is_secret: false },
-    ConfigField { path: "chain.chain_json",     description: "Chain JSON URL",                  is_secret: false },
-    ConfigField { path: "chain.addrbook_url",   description: "Address book URL",                is_secret: false },
-    ConfigField { path: "chain.peers",          description: "Persistent peers",                is_secret: false },
-    ConfigField { path: "chain.private_peers",  description: "Private peer IDs",                is_secret: false },
-    ConfigField { path: "chain.sync_method",    description: "Sync method (snapshot/statesync)",is_secret: false },
-    ConfigField { path: "chain.snapshot_url",   description: "Snapshot download URL",           is_secret: false },
-    ConfigField { path: "chain.entrypoint_url", description: "Bootstrap entrypoint script URL", is_secret: false },
+    ConfigField {
+        path: "chain.id",
+        description: "Chain ID",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "chain.binary",
+        description: "Cosmos daemon binary",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "chain.genesis_url",
+        description: "Genesis JSON URL",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "chain.chain_json",
+        description: "Chain JSON URL",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "chain.addrbook_url",
+        description: "Address book URL",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "chain.peers",
+        description: "Persistent peers",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "chain.private_peers",
+        description: "Private peer IDs",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "chain.sync_method",
+        description: "Sync method (snapshot/statesync)",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "chain.snapshot_url",
+        description: "Snapshot download URL",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "chain.entrypoint_url",
+        description: "Bootstrap entrypoint script URL",
+        is_secret: false,
+    },
     // Images
-    ConfigField { path: "images.node",          description: "Node container image",            is_secret: false },
-    ConfigField { path: "images.minio",         description: "MinIO container image",           is_secret: false },
-    ConfigField { path: "images.relayer",       description: "Relayer container image",         is_secret: false },
-    ConfigField { path: "images.argus",         description: "Argus container image",           is_secret: false },
+    ConfigField {
+        path: "images.node",
+        description: "Node container image",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "images.minio",
+        description: "MinIO container image",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "images.relayer",
+        description: "Relayer container image",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "images.argus",
+        description: "Argus container image",
+        is_secret: false,
+    },
     // Akash
-    ConfigField { path: "akash.rpc",            description: "Akash RPC endpoint",              is_secret: false },
-    ConfigField { path: "akash.grpc",           description: "Akash gRPC endpoint",             is_secret: false },
-    ConfigField { path: "akash.rest",           description: "Akash REST endpoint",             is_secret: false },
+    ConfigField {
+        path: "akash.rpc",
+        description: "Akash RPC endpoint",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "akash.grpc",
+        description: "Akash gRPC endpoint",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "akash.rest",
+        description: "Akash REST endpoint",
+        is_secret: false,
+    },
     // DNS
-    ConfigField { path: "dns.cf_token",         description: "Cloudflare API token",            is_secret: true  },
-    ConfigField { path: "dns.cf_zone",          description: "Cloudflare zone ID",              is_secret: false },
+    ConfigField {
+        path: "dns.cf_token",
+        description: "Cloudflare API token",
+        is_secret: true,
+    },
+    ConfigField {
+        path: "dns.cf_zone",
+        description: "Cloudflare zone ID",
+        is_secret: false,
+    },
     // SSH
-    ConfigField { path: "ssh.port",             description: "SSH port",                        is_secret: false },
-    ConfigField { path: "ssh.pubkey",           description: "SSH public key",                  is_secret: false },
+    ConfigField {
+        path: "ssh.port",
+        description: "SSH port",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "ssh.pubkey",
+        description: "SSH public key",
+        is_secret: false,
+    },
     // Snapshot export
-    ConfigField { path: "snapshot.domain",      description: "Snapshot download domain",        is_secret: false },
-    ConfigField { path: "snapshot.path",        description: "S3 snapshot path",                is_secret: false },
-    ConfigField { path: "snapshot.schedule",    description: "Snapshot schedule time",          is_secret: false },
-    ConfigField { path: "snapshot.format",      description: "Snapshot save format",            is_secret: false },
-    ConfigField { path: "snapshot.retain",      description: "Snapshot retention period",       is_secret: false },
-    ConfigField { path: "snapshot.keep_last",   description: "Min snapshots to keep",           is_secret: false },
+    ConfigField {
+        path: "snapshot.domain",
+        description: "Snapshot download domain",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "snapshot.path",
+        description: "S3 snapshot path",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "snapshot.schedule",
+        description: "Snapshot schedule time",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "snapshot.format",
+        description: "Snapshot save format",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "snapshot.retain",
+        description: "Snapshot retention period",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "snapshot.keep_last",
+        description: "Min snapshots to keep",
+        is_secret: false,
+    },
     // Nodes
-    ConfigField { path: "nodes.snapshot.domain",     description: "Snapshot node domain",       is_secret: false },
-    ConfigField { path: "nodes.seed.domain",         description: "Seed node domain",           is_secret: false },
-    ConfigField { path: "nodes.left_tackle.domain",  description: "Left tackle domain",         is_secret: false },
-    ConfigField { path: "nodes.right_tackle.domain", description: "Right tackle domain",        is_secret: false },
-    ConfigField { path: "nodes.left_forward.domain", description: "Left forward domain",        is_secret: false },
-    ConfigField { path: "nodes.right_forward.domain",description: "Right forward domain",       is_secret: false },
+    ConfigField {
+        path: "nodes.snapshot.domain",
+        description: "Snapshot node domain",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "nodes.seed.domain",
+        description: "Seed node domain",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "nodes.left_tackle.domain",
+        description: "Left tackle domain",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "nodes.right_tackle.domain",
+        description: "Right tackle domain",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "nodes.left_forward.domain",
+        description: "Left forward domain",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "nodes.right_forward.domain",
+        description: "Right forward domain",
+        is_secret: false,
+    },
     // Relayer
-    ConfigField { path: "relayer.key_name",     description: "Relayer key name",                is_secret: false },
-    ConfigField { path: "relayer.remote_chain", description: "Remote chain ID",                 is_secret: false },
-    ConfigField { path: "relayer.domain",       description: "Relayer API domain",              is_secret: false },
-    ConfigField { path: "relayer.key_terp",     description: "Terp relayer key mnemonic",       is_secret: true  },
-    ConfigField { path: "relayer.key_remote",   description: "Remote relayer key mnemonic",     is_secret: true  },
-    ConfigField { path: "relayer.entrypoint",   description: "Relayer entrypoint URL",          is_secret: false },
+    ConfigField {
+        path: "relayer.key_name",
+        description: "Relayer key name",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "relayer.remote_chain",
+        description: "Remote chain ID",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "relayer.domain",
+        description: "Relayer API domain",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "relayer.key_terp",
+        description: "Terp relayer key mnemonic",
+        is_secret: true,
+    },
+    ConfigField {
+        path: "relayer.key_remote",
+        description: "Remote relayer key mnemonic",
+        is_secret: true,
+    },
+    ConfigField {
+        path: "relayer.entrypoint",
+        description: "Relayer entrypoint URL",
+        is_secret: false,
+    },
     // Argus
-    ConfigField { path: "argus.node_moniker",        description: "Argus node moniker",         is_secret: false },
-    ConfigField { path: "argus.node_seeds",          description: "Argus node seeds",           is_secret: false },
-    ConfigField { path: "argus.node_persistent_peers",description: "Argus persistent peers",    is_secret: false },
-    ConfigField { path: "argus.image",               description: "Argus Docker image",         is_secret: false },
-    ConfigField { path: "argus.entrypoint_url",      description: "Argus entrypoint URL",       is_secret: false },
-    ConfigField { path: "argus.api_domain",          description: "Argus API domain",           is_secret: false },
-    ConfigField { path: "argus.bech32_prefix",       description: "Bech32 prefix",              is_secret: false },
-    ConfigField { path: "argus.db_user",             description: "PostgreSQL username",         is_secret: false },
-    ConfigField { path: "argus.db_password",         description: "PostgreSQL password",         is_secret: true  },
-    ConfigField { path: "argus.db_data_name",        description: "PostgreSQL data DB name",     is_secret: false },
-    ConfigField { path: "argus.db_accounts_name",    description: "PostgreSQL accounts DB name", is_secret: false },
+    ConfigField {
+        path: "argus.node_moniker",
+        description: "Argus node moniker",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "argus.node_seeds",
+        description: "Argus node seeds",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "argus.node_persistent_peers",
+        description: "Argus persistent peers",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "argus.image",
+        description: "Argus Docker image",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "argus.entrypoint_url",
+        description: "Argus entrypoint URL",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "argus.api_domain",
+        description: "Argus API domain",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "argus.bech32_prefix",
+        description: "Bech32 prefix",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "argus.db_user",
+        description: "PostgreSQL username",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "argus.db_password",
+        description: "PostgreSQL password",
+        is_secret: true,
+    },
+    ConfigField {
+        path: "argus.db_data_name",
+        description: "PostgreSQL data DB name",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "argus.db_accounts_name",
+        description: "PostgreSQL accounts DB name",
+        is_secret: false,
+    },
     // Registry
-    ConfigField { path: "registry.url",         description: "Registry URL",                    is_secret: false },
-    ConfigField { path: "registry.port",        description: "Registry port",                   is_secret: false },
-    ConfigField { path: "registry.username",    description: "Registry username",               is_secret: false },
-    ConfigField { path: "registry.password",    description: "Registry password",               is_secret: true  },
-    ConfigField { path: "registry.storage_dir", description: "Registry storage dir",            is_secret: false },
+    ConfigField {
+        path: "registry.url",
+        description: "Registry URL",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "registry.port",
+        description: "Registry port",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "registry.username",
+        description: "Registry username",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "registry.password",
+        description: "Registry password",
+        is_secret: true,
+    },
+    ConfigField {
+        path: "registry.storage_dir",
+        description: "Registry storage dir",
+        is_secret: false,
+    },
     // Sites
-    ConfigField { path: "sites.gateway_domain", description: "Sites IPFS gateway domain",       is_secret: false },
-    ConfigField { path: "sites.s3_domain",      description: "Sites S3 domain",                 is_secret: false },
-    ConfigField { path: "sites.console_domain", description: "Sites console domain",            is_secret: false },
+    ConfigField {
+        path: "sites.gateway_domain",
+        description: "Sites IPFS gateway domain",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "sites.s3_domain",
+        description: "Sites S3 domain",
+        is_secret: false,
+    },
+    ConfigField {
+        path: "sites.console_domain",
+        description: "Sites console domain",
+        is_secret: false,
+    },
     // MinIO
-    ConfigField { path: "minio.autopin_interval", description: "IPFS auto-pin interval (s)",    is_secret: false },
+    ConfigField {
+        path: "minio.autopin_interval",
+        description: "IPFS auto-pin interval (s)",
+        is_secret: false,
+    },
 ];
 
 // ─── Field-dispatch macros ────────────────────────────────────────────────
@@ -1308,8 +1833,14 @@ impl TomlConfig {
             }
         }
         // Also check legacy env var names
-        matches!(env_var, "OLINE_CF_API_TOKEN" | "RLY_KEY_TERP" | "RLY_KEY_REMOTE"
-            | "ARGUS_DB_PASSWORD" | "OLINE_REGISTRY_PASSWORD")
+        matches!(
+            env_var,
+            "OLINE_CF_API_TOKEN"
+                | "RLY_KEY_TERP"
+                | "RLY_KEY_REMOTE"
+                | "ARGUS_DB_PASSWORD"
+                | "OLINE_REGISTRY_PASSWORD"
+        )
     }
 }
 
@@ -1321,20 +1852,38 @@ mod tests {
     fn test_env_key_derivation() {
         assert_eq!(env_key("chain.id"), "OLINE_CHAIN_ID");
         assert_eq!(env_key("images.node"), "OLINE_IMAGES_NODE");
-        assert_eq!(env_key("nodes.snapshot.domain"), "OLINE_NODES_SNAPSHOT_DOMAIN");
+        assert_eq!(
+            env_key("nodes.snapshot.domain"),
+            "OLINE_NODES_SNAPSHOT_DOMAIN"
+        );
         assert_eq!(env_key("akash.rpc"), "OLINE_AKASH_RPC");
     }
 
     #[test]
     fn test_subdomain_derivation() {
         // Simple domain → dot prefix
-        assert_eq!(TomlConfig::derive_subdomain("rpc", "terp.network"), "rpc.terp.network");
-        assert_eq!(TomlConfig::derive_subdomain("api", "terp.network"), "api.terp.network");
-        assert_eq!(TomlConfig::derive_subdomain("peer", "terp.network"), "peer.terp.network");
+        assert_eq!(
+            TomlConfig::derive_subdomain("rpc", "terp.network"),
+            "rpc.terp.network"
+        );
+        assert_eq!(
+            TomlConfig::derive_subdomain("api", "terp.network"),
+            "api.terp.network"
+        );
+        assert_eq!(
+            TomlConfig::derive_subdomain("peer", "terp.network"),
+            "peer.terp.network"
+        );
 
         // Structured domain → dash prefix
-        assert_eq!(TomlConfig::derive_subdomain("rpc", "mainnet.terp.network"), "rpc-mainnet.terp.network");
-        assert_eq!(TomlConfig::derive_subdomain("api", "mainnet.terp.network"), "api-mainnet.terp.network");
+        assert_eq!(
+            TomlConfig::derive_subdomain("rpc", "mainnet.terp.network"),
+            "rpc-mainnet.terp.network"
+        );
+        assert_eq!(
+            TomlConfig::derive_subdomain("api", "mainnet.terp.network"),
+            "api-mainnet.terp.network"
+        );
 
         // Empty → empty
         assert_eq!(TomlConfig::derive_subdomain("rpc", ""), "");
@@ -1346,7 +1895,10 @@ mod tests {
         let vars = cfg.to_sdl_vars();
         assert_eq!(vars.get("OLINE_CHAIN_ID").unwrap(), "morocco-1");
         assert_eq!(vars.get("OLINE_BINARY").unwrap(), "terpd");
-        assert_eq!(vars.get("OMNIBUS_IMAGE").unwrap(), "ghcr.io/terpnetwork/terp-core:v5.1.6-oline");
+        assert_eq!(
+            vars.get("OMNIBUS_IMAGE").unwrap(),
+            "ghcr.io/terpnetwork/terp-core:v5.1.6-oline"
+        );
         assert_eq!(vars.get("SSH_P").unwrap(), "22");
         assert_eq!(vars.get("RPC_P_SNAP").unwrap(), "26657");
         assert_eq!(vars.get("P2P_P_SEED").unwrap(), "26656");
@@ -1363,7 +1915,10 @@ mod tests {
             [chain]
             id = "morocco-1"
         };
-        deep_merge(&mut toml::Value::Table(base.clone()), &toml::Value::Table(overlay));
+        deep_merge(
+            &mut toml::Value::Table(base.clone()),
+            &toml::Value::Table(overlay),
+        );
         // Re-test via ProfiledTomlConfig round-trip
         let toml_str = r#"
 [chain]
@@ -1399,7 +1954,10 @@ id = "athena-4"
         let mainnet = profiled.clone().resolve("mainnet").unwrap();
         assert_eq!(mainnet.chain.id, "morocco-1");
         assert_eq!(mainnet.chain.binary, "terpd");
-        assert_eq!(mainnet.images.node, "ghcr.io/terpnetwork/terp-core:5.1.8-oline");
+        assert_eq!(
+            mainnet.images.node,
+            "ghcr.io/terpnetwork/terp-core:5.1.8-oline"
+        );
 
         let testnet = profiled.resolve("testnet").unwrap();
         assert_eq!(testnet.chain.id, "athena-4");
@@ -1420,5 +1978,4 @@ id = "morocco-1"
         let resolved = profiled.resolve("nonexistent").unwrap();
         assert_eq!(resolved.chain.id, "default-id"); // base value, no crash
     }
-
 }

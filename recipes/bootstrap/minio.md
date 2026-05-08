@@ -44,6 +44,6 @@ Only needed if external users should download snapshots directly.
 
 ## Notes
 - MinIO port 9000 is NOT globally exposed — Akash service-to-service only
-- Port 9001 (console) and 8081 (IPFS gateway) ARE globally exposed
+- Port 9002 (console) and 8081 (IPFS gateway) ARE globally exposed
 - `AUTOPIN_INTERVAL` controls how often IPFS pins new snapshot files
 - Persistent storage: `minio-data` (50 Gi) + `ipfs-data` (100 Gi) on beta3 class

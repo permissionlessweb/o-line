@@ -34,11 +34,11 @@ ${LB_80_ACCEPTS}
       - RPC_DOMAIN=${RPC_D_LB}
       - API_DOMAIN=${API_D_LB}
       - GRPC_DOMAIN=${GRPC_D_LB}
-      - UPSTREAM_RPC=${SENTRY_A_SVC}:26657,${SENTRY_B_SVC}:26657
-      - UPSTREAM_API=${SENTRY_A_SVC}:1317,${SENTRY_B_SVC}:1317
-      - UPSTREAM_GRPC=${SENTRY_A_SVC}:9090,${SENTRY_B_SVC}:9090
-  ${SENTRY_A_SVC}:
-    image: ${TESTNET_SENTRY_IMAGE}
+      - UPSTREAM_RPC=${SEN_A_SVC}:26657,${SEN_B_SVC}:26657
+      - UPSTREAM_API=${SEN_A_SVC}:1317,${SEN_B_SVC}:1317
+      - UPSTREAM_GRPC=${SEN_A_SVC}:9090,${SEN_B_SVC}:9090
+  ${SEN_A_SVC}:
+    image: ${TN_SEN_IMAGE}
     command:
       - sh
     args:
@@ -50,7 +50,7 @@ ${LB_80_ACCEPTS}
         to:
           - global: true
           - service: ${LB_SVC}
-          - service: ${SENTRY_B_SVC}
+          - service: ${SEN_B_SVC}
       - port: 26657
         as: 26657
         to:
@@ -68,9 +68,9 @@ ${LB_80_ACCEPTS}
         to:
           - global: true
     env:
-      - MONIKER=${SENTRY_A_MONIKER}
+      - MONIKER=${SEN_A_MONIKER}
       - PROJECT_BIN=${OLINE_BINARY}
-      - CHAIN_ID=${TESTNET_CHAIN_ID}
+      - CHAIN_ID=${TN_CHAIN_ID}
       - GENESIS_URL=${GENESIS_URL}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - FASTSYNC_VERSION=v0
@@ -79,10 +79,10 @@ ${LB_80_ACCEPTS}
       - SNAPSHOT_RETAIN=0
       - TERPD_P2P_PEX=true
       - TERPD_FAUCET_ENABLE=true
-      - FAUCET_KEY_MNEMONIC=${SENTRY_A_FAUCET_MNEMONIC}
+      - FAUCET_KEY_MNEMONIC=${SEN_A_FAUCET_MNEMONIC}
       - SSH_PUBKEY=${SSH_PUBKEY}
-  ${SENTRY_B_SVC}:
-    image: ${TESTNET_SENTRY_IMAGE}
+  ${SEN_B_SVC}:
+    image: ${TN_SEN_IMAGE}
     command:
       - sh
     args:
@@ -94,7 +94,7 @@ ${LB_80_ACCEPTS}
         to:
           - global: true
           - service: ${LB_SVC}
-          - service: ${SENTRY_A_SVC}
+          - service: ${SEN_A_SVC}
       - port: 26657
         as: 26657
         to:
@@ -112,9 +112,9 @@ ${LB_80_ACCEPTS}
         to:
           - global: true
     env:
-      - MONIKER=${SENTRY_B_MONIKER}
+      - MONIKER=${SEN_B_MONIKER}
       - PROJECT_BIN=${OLINE_BINARY}
-      - CHAIN_ID=${TESTNET_CHAIN_ID}
+      - CHAIN_ID=${TN_CHAIN_ID}
       - GENESIS_URL=${GENESIS_URL}
       - MINIMUM_GAS_PRICES=0.05uthiol
       - FASTSYNC_VERSION=v0
@@ -122,7 +122,7 @@ ${LB_80_ACCEPTS}
       - SNAPSHOT_RETAIN=0
       - TERPD_P2P_PEX=true
       - TERPD_FAUCET_ENABLE=true
-      - FAUCET_KEY_MNEMONIC=${SENTRY_B_FAUCET_MNEMONIC}
+      - FAUCET_KEY_MNEMONIC=${SEN_B_FAUCET_MNEMONIC}
       - SSH_PUBKEY=${SSH_PUBKEY}
 profiles:
   compute:
@@ -134,7 +134,7 @@ profiles:
           size: 512Mi
         storage:
           - size: 1Gi
-    ${SENTRY_A_SVC}:
+    ${SEN_A_SVC}:
       resources:
         cpu:
           units: 2
@@ -142,7 +142,7 @@ profiles:
           size: 8Gi
         storage:
           - size: 20Gi
-    ${SENTRY_B_SVC}:
+    ${SEN_B_SVC}:
       resources:
         cpu:
           units: 2
@@ -156,10 +156,10 @@ profiles:
         ${LB_SVC}:
           denom: uact
           amount: 500
-        ${SENTRY_A_SVC}:
+        ${SEN_A_SVC}:
           denom: uact
           amount: 1000
-        ${SENTRY_B_SVC}:
+        ${SEN_B_SVC}:
           denom: uact
           amount: 1000
       signedBy:
@@ -172,11 +172,11 @@ deployment:
     dcloud:
       profile: ${LB_SVC}
       count: 1
-  ${SENTRY_A_SVC}:
+  ${SEN_A_SVC}:
     dcloud:
-      profile: ${SENTRY_A_SVC}
+      profile: ${SEN_A_SVC}
       count: 1
-  ${SENTRY_B_SVC}:
+  ${SEN_B_SVC}:
     dcloud:
-      profile: ${SENTRY_B_SVC}
+      profile: ${SEN_B_SVC}
       count: 1

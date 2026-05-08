@@ -57,7 +57,9 @@ pub enum RefreshSubcommand {
 
 pub async fn cmd_refresh(args: &RefreshArgs) -> Result<(), Box<dyn Error>> {
     match &args.cmd {
-        RefreshSubcommand::Run { label, command } => cmd_refresh_run(label, command.as_deref()).await,
+        RefreshSubcommand::Run { label, command } => {
+            cmd_refresh_run(label, command.as_deref()).await
+        }
         RefreshSubcommand::Add => cmd_refresh_add(),
         RefreshSubcommand::List => cmd_refresh_list(),
         RefreshSubcommand::Status => cmd_refresh_status().await,
@@ -148,10 +150,17 @@ fn cmd_refresh_add() -> Result<(), Box<dyn Error>> {
     let key_name_default = "oline-ssh-key".to_string();
     let key_name = read_input(
         &mut lines,
-        &format!("SSH key filename in $SECRETS_PATH (default: {})", key_name_default),
+        &format!(
+            "SSH key filename in $SECRETS_PATH (default: {})",
+            key_name_default
+        ),
         Some(&key_name_default),
     )?;
-    let key_name = if key_name.is_empty() { key_name_default } else { key_name };
+    let key_name = if key_name.is_empty() {
+        key_name_default
+    } else {
+        key_name
+    };
 
     let record = NodeRecord::new(
         node_label.clone(),
@@ -165,7 +174,11 @@ fn cmd_refresh_add() -> Result<(), Box<dyn Error>> {
     );
 
     store.add(record)?;
-    tracing::info!("\n  Saved node '{}' to {:?}", node_label, NodeStore::default_path());
+    tracing::info!(
+        "\n  Saved node '{}' to {:?}",
+        node_label,
+        NodeStore::default_path()
+    );
 
     Ok(())
 }
@@ -186,7 +199,10 @@ fn cmd_refresh_list() -> Result<(), Box<dyn Error>> {
 
     tracing::info!(
         "  {:<10}  {:<8}  {:<35}  {}",
-        "ID", "Phase", "Label", "SSH Host:Port"
+        "ID",
+        "Phase",
+        "Label",
+        "SSH Host:Port"
     );
     tracing::info!("  {:-<85}", "");
 
@@ -225,7 +241,10 @@ async fn cmd_refresh_status() -> Result<(), Box<dyn Error>> {
 
     tracing::info!(
         "  {:<10}  {:<35}  {:<8}  {}",
-        "ID", "Label", "Phase", "RPC Status"
+        "ID",
+        "Label",
+        "Phase",
+        "RPC Status"
     );
     tracing::info!("  {:-<90}", "");
 
@@ -241,7 +260,13 @@ async fn cmd_refresh_status() -> Result<(), Box<dyn Error>> {
                 Err(e) => format!("ERROR: {}", e),
             }
         };
-        tracing::info!("  {:<10}  {:<35}  {:<8}  {}", composite, r.label, r.phase, status);
+        tracing::info!(
+            "  {:<10}  {:<35}  {:<8}  {}",
+            composite,
+            r.label,
+            r.phase,
+            status
+        );
         *idx += 1;
     }
 
@@ -273,10 +298,12 @@ pub async fn build_phase_vars(
     phase: &str,
     password: &str,
 ) -> std::collections::HashMap<String, String> {
-    let secrets = crate::config::oline_config_dir().to_string_lossy().into_owned();
+    let secrets = crate::config::oline_config_dir()
+        .to_string_lossy()
+        .into_owned();
     match phase.to_uppercase().as_str() {
-        "B" => build_phase_b_vars(config, "", ""),
-        "C" => build_phase_c_vars(config, "", "", "", "", ""),
+        "B" => build_phase_b_vars(config),
+        "C" => build_phase_c_vars(config),
         "E" => build_phase_rly_vars(config),
         _ => {
             // Phase A (default)

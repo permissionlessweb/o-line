@@ -3,8 +3,8 @@ use crate::{
     cli::prompt_continue,
     nodes::register_phase_nodes,
     workflow::context::PhaseResult,
-    workflow::{OLineWorkflow, StepResult},
     workflow::step::{DeployPhase, OLineStep, PeerTarget},
+    workflow::{OLineWorkflow, StepResult},
 };
 use akash_deploy_rs::{DeployError, DeploymentRecord, DeploymentStore};
 use std::io::{BufRead, Lines};
@@ -23,25 +23,26 @@ pub async fn deploy_forwards(
         .map_err(|e| DeployError::InvalidState(e.to_string()))?
     {
         tracing::info!("  Skipping Phase C.");
-        w.ctx.set_phase_result(DeployPhase::Forwards, PhaseResult::Skipped);
+        w.ctx
+            .set_phase_result(DeployPhase::Forwards, PhaseResult::Skipped);
         w.step = OLineStep::Deploy(DeployPhase::Relayer);
         return Ok(StepResult::Continue);
     }
 
-    let c_vars = build_phase_c_vars(
-        &w.ctx.deployer.config,
-        w.ctx.peer(PeerTarget::Seed),
-        w.ctx.peer(PeerTarget::Snapshot),
-        w.ctx.peer(PeerTarget::LeftTackle),
-        w.ctx.peer(PeerTarget::RightTackle),
-        &w.ctx.statesync_rpc,
-    );
+    let mut config = w.ctx.deployer.config.clone();
+    //  w.ctx.peer(PeerTarget::Seed),
+    // w.ctx.peer(PeerTarget::Snapshot),
+    // w.ctx.peer(PeerTarget::LeftTackle),
+    // w.ctx.peer(PeerTarget::RightTackle),
+    // &w.ctx.statesync_rpc,
+    let c_vars = build_phase_c_vars(&config);
 
     let sdl = match w.ctx.deployer.config.load_sdl("c.yml") {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("  Phase C SDL error: {} — skipping.", e);
-            w.ctx.set_phase_result(DeployPhase::Forwards, PhaseResult::Failed(e.to_string()));
+            w.ctx
+                .set_phase_result(DeployPhase::Forwards, PhaseResult::Failed(e.to_string()));
             w.step = OLineStep::Deploy(DeployPhase::Relayer);
             return Ok(StepResult::Continue);
         }
@@ -57,7 +58,8 @@ pub async fn deploy_forwards(
         Ok(result) => result,
         Err(e) => {
             tracing::warn!("  Phase C deploy failed: {} — skipping.", e);
-            w.ctx.set_phase_result(DeployPhase::Forwards, PhaseResult::Failed(e.to_string()));
+            w.ctx
+                .set_phase_result(DeployPhase::Forwards, PhaseResult::Failed(e.to_string()));
             w.step = OLineStep::Deploy(DeployPhase::Relayer);
             return Ok(StepResult::Continue);
         }
@@ -100,7 +102,8 @@ pub async fn deploy_forwards(
     }
 
     w.ctx.set_state(DeployPhase::Forwards, c_state);
-    w.ctx.set_phase_result(DeployPhase::Forwards, PhaseResult::Deployed);
+    w.ctx
+        .set_phase_result(DeployPhase::Forwards, PhaseResult::Deployed);
 
     w.step = OLineStep::Deploy(DeployPhase::Relayer);
     Ok(StepResult::Continue)

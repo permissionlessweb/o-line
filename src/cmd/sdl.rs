@@ -260,7 +260,7 @@ pub async fn cmd_generate_sdl(
         }
         toml_cfg.apply_env_overrides();
         let cfg = OLineConfig::from_toml(&toml_cfg, String::new());
-        (cfg, Some(deploy_config.peers))
+        cfg
     } else {
         // Interactive collection
         let saved = if has_saved_config() {
@@ -298,87 +298,11 @@ pub async fn cmd_generate_sdl(
             }
             OLineConfig::from_toml(&toml_cfg, String::new())
         };
-        (cfg, None)
+        cfg
     };
-    let (config, preloaded_peers) = config;
 
     // ── Peer inputs ───────���───────────────────────────���───────────────────────
     let needs_peers = matches!(phase.as_str(), "b" | "c" | "all");
-    let (snapshot_peer, seed_peer) = if needs_peers {
-        let default_snap = preloaded_peers
-            .as_ref()
-            .map(|p| p.snapshot.as_str())
-            .unwrap_or("<SNAPSHOT_PEER_1>");
-        let default_seed = preloaded_peers
-            .as_ref()
-            .map(|p| p.seed.as_str())
-            .unwrap_or("<SEED_PEER_1>");
-        let sp = read_input(
-            &mut lines,
-            "Snapshot peer 1 (id@host:port)",
-            Some(default_snap),
-        )?;
-        let sd = read_input(&mut lines, "Seed peer 1 (id@host:port)", Some(default_seed))?;
-        (sp, sd)
-    } else {
-        (
-            preloaded_peers
-                .as_ref()
-                .map(|p| p.snapshot.clone())
-                .unwrap_or_default(),
-            preloaded_peers
-                .as_ref()
-                .map(|p| p.seed.clone())
-                .unwrap_or_default(),
-        )
-    };
-
-    let statesync_rpc = if needs_peers {
-        let default_rpc = preloaded_peers
-            .as_ref()
-            .map(|p| p.statesync_rpc.as_str())
-            .unwrap_or("");
-        read_input(&mut lines, "Statesync RPC servers", Some(default_rpc))?
-    } else {
-        preloaded_peers
-            .as_ref()
-            .map(|p| p.statesync_rpc.clone())
-            .unwrap_or_default()
-    };
-
-    let needs_tackles = matches!(phase.as_str(), "c" | "all");
-    let (left_tackle_peer, right_tackle_peer) = if needs_tackles {
-        let default_lt = preloaded_peers
-            .as_ref()
-            .map(|p| p.left_tackle.as_str())
-            .unwrap_or("<LEFT_TACKLE_PEER>");
-        let default_rt = preloaded_peers
-            .as_ref()
-            .map(|p| p.right_tackle.as_str())
-            .unwrap_or("<RIGHT_TACKLE_PEER>");
-        let lt = read_input(
-            &mut lines,
-            "Left tackle peer (id@host:port)",
-            Some(default_lt),
-        )?;
-        let rt = read_input(
-            &mut lines,
-            "Right tackle peer (id@host:port)",
-            Some(default_rt),
-        )?;
-        (lt, rt)
-    } else {
-        (
-            preloaded_peers
-                .as_ref()
-                .map(|p| p.left_tackle.clone())
-                .unwrap_or_default(),
-            preloaded_peers
-                .as_ref()
-                .map(|p| p.right_tackle.clone())
-                .unwrap_or_default(),
-        )
-    };
 
     // ── SDL templates ─────────────────────────────────────────────────────────
     let sdl_a = config.load_sdl("a.yml")?;
@@ -418,21 +342,14 @@ pub async fn cmd_generate_sdl(
             ));
         }
         "b" => {
-            let vars = build_phase_b_vars(&config, &snapshot_peer, &statesync_rpc);
+            let vars = build_phase_b_vars(&config);
             rendered_files.push((
                 "b.yml",
                 render("Phase B: Left & Right Tackles", &sdl_b, &vars)?,
             ));
         }
         "c" => {
-            let vars = build_phase_c_vars(
-                &config,
-                &seed_peer,
-                &snapshot_peer,
-                &left_tackle_peer,
-                &right_tackle_peer,
-                &statesync_rpc,
-            );
+            let vars = build_phase_c_vars(&config);
             rendered_files.push((
                 "c.yml",
                 render("Phase C: Left & Right Forwards", &sdl_c, &vars)?,
@@ -443,23 +360,16 @@ pub async fn cmd_generate_sdl(
             rendered_files.push(("e.yml", render("Phase E: IBC Relayer", &sdl_e, &vars)?));
         }
         "f" => {
-            let vars = build_phase_f_vars(&config, &statesync_rpc);
+            let vars = build_phase_f_vars(&config);
             rendered_files.push(("f.yml", render("Phase F: Argus Indexer", &sdl_f, &vars)?));
         }
         "all" => {
             let (a, b, c, e, f) = (
                 build_phase_a_vars(&config, &secrets, &key_password).await?,
-                build_phase_b_vars(&config, &snapshot_peer, &statesync_rpc),
-                build_phase_c_vars(
-                    &config,
-                    &seed_peer,
-                    &snapshot_peer,
-                    &left_tackle_peer,
-                    &right_tackle_peer,
-                    &statesync_rpc,
-                ),
+                build_phase_b_vars(&config),
+                build_phase_c_vars(&config),
                 build_phase_rly_vars(&config),
-                build_phase_f_vars(&config, &statesync_rpc),
+                build_phase_f_vars(&config),
             );
             rendered_files.push((
                 "a.yml",
@@ -496,14 +406,7 @@ pub async fn cmd_generate_sdl(
             tracing::info!("  Wrote: {}", dest.display());
         }
 
-        let peers = PeerInputs {
-            snapshot: snapshot_peer,
-            seed: seed_peer,
-            statesync_rpc,
-            left_tackle: left_tackle_peer,
-            right_tackle: right_tackle_peer,
-        };
-        let deploy_config = DeployConfig::from_oline_config(&config, peers);
+        let deploy_config = DeployConfig::from_oline_config(&config);
         let config_path = dir.join("deploy-config.json");
         deploy_config.write_to_file(&config_path)?;
         tracing::info!("  Wrote: {}", config_path.display());

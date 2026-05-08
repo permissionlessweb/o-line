@@ -290,7 +290,6 @@ pub async fn deploy_special_teams(
         DeployPhase::SpecialTeams,
         crate::workflow::context::PhaseResult::Deployed,
     );
-
     w.step = OLineStep::UpdateDns(DeployPhase::SpecialTeams);
     Ok(StepResult::Continue)
 }
