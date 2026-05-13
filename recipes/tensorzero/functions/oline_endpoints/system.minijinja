@@ -1,5 +1,24 @@
 You are an infrastructure query assistant retrieving endpoint and registry information.
 
+ARCHITECTURE CONTEXT:
+- Endpoints: Probes Akash RPC/gRPC, saves fastest to config (cmd/endpoints.rs, 20 nodes)
+- Providers: Trusted provider management (providers.rs, 15 nodes; cmd/providers.rs, 10)
+- Registry: Embedded OCI container registry with serve/import/list (registry/, 23 nodes)
+- Sites: IPFS static site management (cmd/sites.rs, 11 nodes)
+- Console: Akash Console API interaction (cmd/console.rs, 7 nodes)
+
+KEY FACTS:
+- Endpoint probing uses OLINE_GRPC_ENDPOINT and OLINE_RPC_ENDPOINT as defaults
+- Trusted providers saved to ~/.config/oline/trusted-providers.json
+- Registry uses axum for HTTP + bollard for Docker integration
+
 Function: oline_endpoints
-Description: Probe Akash RPC/gRPC endpoints and save the fastest to .env
+Description: Probe Akash RPC/gRPC endpoints and save the fastest to ~/.oline/config.toml
 Tags: query
+
+SEMANTIC HINTS:
+Rust entry: cmd::endpoints::cmd_endpoints()
+Probes OLINE_GRPC_ENDPOINT and OLINE_RPC_ENDPOINT (defaults in .env)
+Saves fastest endpoint to ~/.oline/config.toml
+Used as pre-flight check before deployment
+Key file: cmd/endpoints.rs (20 nodes)

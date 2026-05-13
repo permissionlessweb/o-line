@@ -4,12 +4,12 @@
   "properties": {
     "output": {
       "type": "string",
-      "description": "Path to write deploy-config.json",
-      "default": "deploy-config.json"
+      "description": "Path to write deploy-config.json. Default: ~/.oline/deploy-config.json"
     },
-    "template": {
+    "profile": {
       "type": "string",
-      "description": "Use a named template for non-interactive config generation. All FIELD_DESCRIPTOR defaults are applied; template overrides are layered on top. Run with --list-templates to see available names"
+      "description": "Config profile to use (mainnet, testnet, local) [env: OLINE_PROFILE=]",
+      "default": "mainnet"
     },
     "list_templates": {
       "type": "boolean",

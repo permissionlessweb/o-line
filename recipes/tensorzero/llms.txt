@@ -1,16 +1,27 @@
 # TensorZero Function Index
-# Generated functions: 11
+# Generated functions: 22
 #
 # name | description | tags
 
-oline | validator deployment orchestrator | general
+oline_authz | Manage AuthZ + FeeGrant delegation for passwordless deployments | security
 oline_bootstrap | Bootstrap a private validator node with peers + snapshot | deploy
+oline_console | Interact with Akash Console API (deployments, providers, leases, etc.) | query
 oline_deploy | Full automated deployment (phases A → B → C → E) | deploy
 oline_dns | Upsert Cloudflare DNS records | network
-oline_encrypt | Encrypt mnemonic and store in .env | security
-oline_endpoints | Probe Akash RPC/gRPC endpoints and save the fastest to .env | query
-oline_init | Collect deployment config and write deploy-config.json | management
+oline_encrypt | Encrypt mnemonic and store in ~/.oline/config.enc | security
+oline_endpoints | Probe Akash RPC/gRPC endpoints and save the fastest to ~/.oline/config.toml | query
+oline_help | No detailed help available for help | general
+oline_init | Collect deployment config and write ~/.oline/deploy-config.json | management
 oline_manage | View and manage active deployments | management
+oline_node | Deploy and manage a dedicated Akash full node | network
+oline_providers | Manage trusted Akash providers (saved to ~/.config/oline/trusted-providers.json) | query
+oline_proxy | Deploy and manage the provider-proxy-node (specialty infrastructure) | infrastructure
+oline_refresh | SSH-based node management: push env updates, run scripts, check health | management
+oline_registry | Embedded OCI container registry (serve, import, list) | query
+oline_relayer | Manage a Cosmos IBC relayer (binary hot-swap, config reload, key install) | network
 oline_sdl | Render SDL templates without broadcasting | deploy
+oline_sites | Deploy and manage IPFS static websites via MinIO-IPFS on Akash | query
 oline_test_grpc | Test gRPC-Web endpoint health | testing
 oline_test_s3 | Test S3/MinIO bucket connectivity | storage, testing
+oline_testnet_deploy | Bootstrap a fresh testnet on Akash with validator, faucet, and full sentry array | deploy, testing
+oline_vpn | Provision and manage WireGuard VPN on pfSense | network

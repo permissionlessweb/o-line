@@ -6,13 +6,18 @@
       "type": "boolean",
       "description": "Run commands locally instead of over SSH"
     },
+    "profile": {
+      "type": "string",
+      "description": "Config profile to use (mainnet, testnet, local) [env: OLINE_PROFILE=]",
+      "default": "mainnet"
+    },
     "host": {
       "type": "string",
       "description": "SSH host IP or hostname (env: OLINE_PRIVATE_NODE_HOST) [env: OLINE_PRIVATE_NODE_HOST=]"
     },
     "port": {
       "type": "integer",
-      "description": "SSH port (env: OLINE_PRIVATE_NODE_PORT) [env: OLINE_PRIVATE_NODE_PORT=]",
+      "description": "SSH port (env: OLINE_PRIVATE_NODE_P) [env: OLINE_PRIVATE_NODE_P=]",
       "default": 22
     },
     "key": {
@@ -22,7 +27,7 @@
     },
     "binary": {
       "type": "string",
-      "description": "Cosmos daemon binary name (env: OLINE_BINARY) [env: OLINE_BINARY=terpd]",
+      "description": "Cosmos daemon binary name (env: OLINE_BINARY) [env: OLINE_BINARY=]",
       "default": "terpd"
     },
     "home": {
@@ -35,11 +40,11 @@
     },
     "snapshot": {
       "type": "string",
-      "description": "Snapshot URL (env: OLINE_SNAPSHOT_BASE_URL) [env: OLINE_SNAPSHOT_BASE_URL=https://server-4.itrocket.net/mainnet/terp/]"
+      "description": "Snapshot URL (env: OLINE_SNAP_BASE_URL) [env: OLINE_SNAP_BASE_URL=]"
     },
     "format": {
       "type": "string",
-      "description": "Snapshot format (env: OLINE_SNAPSHOT_SAVE_FORMAT) [env: OLINE_SNAPSHOT_SAVE_FORMAT=tar.gz]",
+      "description": "Snapshot format (env: OLINE_SNAP_SAVE_FORMAT) [env: OLINE_SNAP_SAVE_FORMAT=]",
       "default": "tar.lz4"
     },
     "yes": {

@@ -1,1 +1,8 @@
-Execute: {{function_name}}({{args | tojson}})
+Execute the management operation.
+
+Command: {{function_name}}
+Arguments: {{args | tojson}}
+
+Session state persists at ~/.config/oline/sessions/{episode_id}.json
+Refresh operations are stateless — no episode_id needed.
+FIELD_DESCRIPTORS is the source of truth for config fields.

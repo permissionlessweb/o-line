@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "profile": {
+      "type": "string",
+      "description": "Config profile to use (mainnet, testnet, local) [env: OLINE_PROFILE=]",
+      "default": "mainnet"
+    },
+    "server": {
+      "type": "string",
+      "description": "Headscale server label (uses default from store if omitted)"
+    },
+    "endpoint": {
+      "type": "string",
+      "description": "Override Headscale gRPC endpoint (e.g. https://admin.terp.network:443)"
+    }
+  },
+  "required": []
+}

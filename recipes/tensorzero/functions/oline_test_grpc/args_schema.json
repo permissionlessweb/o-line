@@ -1,6 +1,12 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
-  "properties": {},
+  "properties": {
+    "profile": {
+      "type": "string",
+      "description": "Config profile to use (mainnet, testnet, local) [env: OLINE_PROFILE=]",
+      "default": "mainnet"
+    }
+  },
   "required": []
 }

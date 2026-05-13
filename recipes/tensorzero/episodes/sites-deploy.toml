@@ -1,0 +1,20 @@
+# Episode: IPFS Static Site Deployment
+# Deploys a static website via MinIO-IPFS gateway on Akash.
+
+[episode]
+name = "sites-deploy"
+description = "Deploy and manage IPFS static websites via MinIO-IPFS on Akash"
+wall_clock = "10-15 min"
+groups = ["storage", "site-deploy"]
+
+[episode.prerequisites]
+minio = "MinIO must already be deployed (Phase A of full deploy, or standalone)"
+
+[episode.inferences]
+1 = { function = "oline_sites", description = "Create site deployment (upload to MinIO + IPFS pin + gateway SDL)" }
+2 = { function = "oline_dns", description = "Update DNS for site domain" }
+3 = { function = "oline_test_grpc", description = "Verify site is live and accessible" }
+
+[episode.day2]
+update = "oline sites update --name my-site --source ./dist-v2/"
+notes = "Re-uploads to MinIO, re-pins on IPFS, updates the gateway"

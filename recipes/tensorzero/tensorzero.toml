@@ -11,17 +11,17 @@ routing = ["default"]
 type = "openai"
 model_name = "default"
 
-[functions.oline]
+[functions.oline_authz]
 type = "chat"
-description = "validator deployment orchestrator"
-tags = ["general"]
-args_schema = "functions/oline/args_schema.json"
+description = "Manage AuthZ + FeeGrant delegation for passwordless deployments"
+tags = ["security"]
+args_schema = "functions/oline_authz/args_schema.json"
 
-[functions.oline.variants.default]
+[functions.oline_authz.variants.default]
 type = "chat_completion"
 model = "default"
-system_template = "functions/oline/system.minijinja"
-user_template = "functions/oline/user.minijinja"
+system_template = "functions/oline_authz/system.minijinja"
+user_template = "functions/oline_authz/user.minijinja"
 
 [functions.oline_bootstrap]
 type = "chat"
@@ -34,6 +34,18 @@ type = "chat_completion"
 model = "default"
 system_template = "functions/oline_bootstrap/system.minijinja"
 user_template = "functions/oline_bootstrap/user.minijinja"
+
+[functions.oline_console]
+type = "chat"
+description = "Interact with Akash Console API (deployments, providers, leases, etc.)"
+tags = ["query"]
+args_schema = "functions/oline_console/args_schema.json"
+
+[functions.oline_console.variants.default]
+type = "chat_completion"
+model = "default"
+system_template = "functions/oline_console/system.minijinja"
+user_template = "functions/oline_console/user.minijinja"
 
 [functions.oline_deploy]
 type = "chat"
@@ -61,7 +73,7 @@ user_template = "functions/oline_dns/user.minijinja"
 
 [functions.oline_encrypt]
 type = "chat"
-description = "Encrypt mnemonic and store in .env"
+description = "Encrypt mnemonic and store in ~/.oline/config.enc"
 tags = ["security"]
 args_schema = "functions/oline_encrypt/args_schema.json"
 
@@ -73,7 +85,7 @@ user_template = "functions/oline_encrypt/user.minijinja"
 
 [functions.oline_endpoints]
 type = "chat"
-description = "Probe Akash RPC/gRPC endpoints and save the fastest to .env"
+description = "Probe Akash RPC/gRPC endpoints and save the fastest to ~/.oline/config.toml"
 tags = ["query"]
 args_schema = "functions/oline_endpoints/args_schema.json"
 
@@ -83,9 +95,21 @@ model = "default"
 system_template = "functions/oline_endpoints/system.minijinja"
 user_template = "functions/oline_endpoints/user.minijinja"
 
+[functions.oline_help]
+type = "chat"
+description = "No detailed help available for help"
+tags = ["general"]
+args_schema = "functions/oline_help/args_schema.json"
+
+[functions.oline_help.variants.default]
+type = "chat_completion"
+model = "default"
+system_template = "functions/oline_help/system.minijinja"
+user_template = "functions/oline_help/user.minijinja"
+
 [functions.oline_init]
 type = "chat"
-description = "Collect deployment config and write deploy-config.json"
+description = "Collect deployment config and write ~/.oline/deploy-config.json"
 tags = ["management"]
 args_schema = "functions/oline_init/args_schema.json"
 
@@ -107,6 +131,78 @@ model = "default"
 system_template = "functions/oline_manage/system.minijinja"
 user_template = "functions/oline_manage/user.minijinja"
 
+[functions.oline_node]
+type = "chat"
+description = "Deploy and manage a dedicated Akash full node"
+tags = ["network"]
+args_schema = "functions/oline_node/args_schema.json"
+
+[functions.oline_node.variants.default]
+type = "chat_completion"
+model = "default"
+system_template = "functions/oline_node/system.minijinja"
+user_template = "functions/oline_node/user.minijinja"
+
+[functions.oline_providers]
+type = "chat"
+description = "Manage trusted Akash providers (saved to ~/.config/oline/trusted-providers.json)"
+tags = ["query"]
+args_schema = "functions/oline_providers/args_schema.json"
+
+[functions.oline_providers.variants.default]
+type = "chat_completion"
+model = "default"
+system_template = "functions/oline_providers/system.minijinja"
+user_template = "functions/oline_providers/user.minijinja"
+
+[functions.oline_proxy]
+type = "chat"
+description = "Deploy and manage the provider-proxy-node (specialty infrastructure)"
+tags = ["infrastructure"]
+args_schema = "functions/oline_proxy/args_schema.json"
+
+[functions.oline_proxy.variants.default]
+type = "chat_completion"
+model = "default"
+system_template = "functions/oline_proxy/system.minijinja"
+user_template = "functions/oline_proxy/user.minijinja"
+
+[functions.oline_refresh]
+type = "chat"
+description = "SSH-based node management: push env updates, run scripts, check health"
+tags = ["management"]
+args_schema = "functions/oline_refresh/args_schema.json"
+
+[functions.oline_refresh.variants.default]
+type = "chat_completion"
+model = "default"
+system_template = "functions/oline_refresh/system.minijinja"
+user_template = "functions/oline_refresh/user.minijinja"
+
+[functions.oline_registry]
+type = "chat"
+description = "Embedded OCI container registry (serve, import, list)"
+tags = ["query"]
+args_schema = "functions/oline_registry/args_schema.json"
+
+[functions.oline_registry.variants.default]
+type = "chat_completion"
+model = "default"
+system_template = "functions/oline_registry/system.minijinja"
+user_template = "functions/oline_registry/user.minijinja"
+
+[functions.oline_relayer]
+type = "chat"
+description = "Manage a Cosmos IBC relayer (binary hot-swap, config reload, key install)"
+tags = ["network"]
+args_schema = "functions/oline_relayer/args_schema.json"
+
+[functions.oline_relayer.variants.default]
+type = "chat_completion"
+model = "default"
+system_template = "functions/oline_relayer/system.minijinja"
+user_template = "functions/oline_relayer/user.minijinja"
+
 [functions.oline_sdl]
 type = "chat"
 description = "Render SDL templates without broadcasting"
@@ -118,6 +214,18 @@ type = "chat_completion"
 model = "default"
 system_template = "functions/oline_sdl/system.minijinja"
 user_template = "functions/oline_sdl/user.minijinja"
+
+[functions.oline_sites]
+type = "chat"
+description = "Deploy and manage IPFS static websites via MinIO-IPFS on Akash"
+tags = ["query"]
+args_schema = "functions/oline_sites/args_schema.json"
+
+[functions.oline_sites.variants.default]
+type = "chat_completion"
+model = "default"
+system_template = "functions/oline_sites/system.minijinja"
+user_template = "functions/oline_sites/user.minijinja"
 
 [functions.oline_test_grpc]
 type = "chat"
@@ -142,3 +250,27 @@ type = "chat_completion"
 model = "default"
 system_template = "functions/oline_test_s3/system.minijinja"
 user_template = "functions/oline_test_s3/user.minijinja"
+
+[functions.oline_testnet_deploy]
+type = "chat"
+description = "Bootstrap a fresh testnet on Akash with validator, faucet, and full sentry array"
+tags = ["deploy", "testing"]
+args_schema = "functions/oline_testnet_deploy/args_schema.json"
+
+[functions.oline_testnet_deploy.variants.default]
+type = "chat_completion"
+model = "default"
+system_template = "functions/oline_testnet_deploy/system.minijinja"
+user_template = "functions/oline_testnet_deploy/user.minijinja"
+
+[functions.oline_vpn]
+type = "chat"
+description = "Provision and manage WireGuard VPN on pfSense"
+tags = ["network"]
+args_schema = "functions/oline_vpn/args_schema.json"
+
+[functions.oline_vpn.variants.default]
+type = "chat_completion"
+model = "default"
+system_template = "functions/oline_vpn/system.minijinja"
+user_template = "functions/oline_vpn/user.minijinja"

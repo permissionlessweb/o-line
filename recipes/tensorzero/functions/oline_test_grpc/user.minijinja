@@ -1,1 +1,8 @@
-Execute: {{function_name}}({{args | tojson}})
+Execute the infrastructure test.
+
+Command: {{function_name}}
+Arguments: {{args | tojson}}
+
+Report: pass/fail status, latency (if applicable), endpoint details.
+For S3 tests: verify bucket access + read/write round-trip.
+For gRPC tests: verify endpoint responds to health check.

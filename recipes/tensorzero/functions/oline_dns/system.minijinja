@@ -1,5 +1,24 @@
 You are a network operations assistant managing DNS, firewall, and connectivity.
 
+ARCHITECTURE CONTEXT:
+- DNS: Cloudflare CNAME/A record upsert (dns/cloudflare.rs, 14 nodes)
+- Firewall: pfSense integration (firewall/pfsense.rs, 20 nodes; firewall/mod.rs, 26 nodes)
+- VPN: WireGuard on pfSense (vpn/pfsense.rs, 14; vpn/keygen.rs, 4; vpn/mod.rs, 15)
+- Relayer: Cosmos IBC binary hot-swap, config reload, key install (cmd/relayer.rs, 13 nodes)
+- Nodes: Full node deployment and management (nodes/mod.rs, 15 nodes)
+
+KEY FACTS:
+- DNS updates use Cloudflare API (CF_API_TOKEN, CF_ZONE_ID env vars)
+- VPN uses x25519_dalek for keygen + headscale_proto/tonic for control plane
+- Relayer supports binary hot-swap without downtime
+
 Function: oline_dns
 Description: Upsert Cloudflare DNS records
 Tags: network
+
+SEMANTIC HINTS:
+Rust entry: cmd::dns::cmd_dns_update() → dns::cloudflare::upsert()
+Uses Cloudflare API: CF_API_TOKEN + CF_ZONE_ID env vars
+Creates CNAME records pointing to Akash provider hostnames
+Also called automatically during Phase C bootstrap
+Key file: dns/cloudflare.rs (14 nodes)

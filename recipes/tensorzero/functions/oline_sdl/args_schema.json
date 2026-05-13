@@ -6,6 +6,11 @@
       "type": "string",
       "description": "Write rendered SDL files and deploy-config.json to this directory"
     },
+    "profile": {
+      "type": "string",
+      "description": "Config profile to use (mainnet, testnet, local) [env: OLINE_PROFILE=]",
+      "default": "mainnet"
+    },
     "load_config": {
       "type": "string",
       "description": "Load a deploy-config.json instead of prompting for values"

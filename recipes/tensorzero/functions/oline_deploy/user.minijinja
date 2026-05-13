@@ -1,1 +1,10 @@
-Execute: {{function_name}}({{args | tojson}})
+Execute the oline deployment command.
+
+Command: {{function_name}}
+Arguments: {{args | tojson}}
+
+IMPORTANT: Before executing, verify:
+1. SDL_DIR is set (default: templates/sdls/)
+2. Required env vars are populated
+3. deploy-config.json exists if referencing stored config
+4. Never broadcast from cmd_generate_sdl — it only renders templates

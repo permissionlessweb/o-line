@@ -1,0 +1,3 @@
+Execute: {{function_name}}({{args | tojson}})
+
+Description: Manage trusted Akash providers (saved to ~/.config/oline/trusted-providers.json)
