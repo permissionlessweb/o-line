@@ -8,11 +8,11 @@ validator deployment orchestrator
 Usage: oline [OPTIONS] <COMMAND>
 
 Commands:
-  encrypt         Encrypt mnemonic and store in .env
-  endpoints       Probe Akash RPC/gRPC endpoints and save the fastest to .env
+  encrypt         Encrypt mnemonic and store in ~/.oline/config.enc
+  endpoints       Probe Akash RPC/gRPC endpoints and save the fastest to ~/.oline/config.toml
   deploy          Full automated deployment (phases A → B → C → E)
   sdl             Render SDL templates without broadcasting
-  init            Collect deployment config and write deploy-config.json
+  init            Collect deployment config and write ~/.oline/deploy-config.json
   manage          View and manage active deployments
   test-s3         Test S3/MinIO bucket connectivity
   test-grpc       Test gRPC-Web endpoint health
@@ -21,13 +21,14 @@ Commands:
   sites           Deploy and manage IPFS static websites via MinIO-IPFS on Akash
   refresh         SSH-based node management: push env updates, run scripts, check health
   node            Deploy and manage a dedicated Akash full node
-  firewall        Manage pfSense firewall SSH keys and connectivity
   relayer         Manage a Cosmos IBC relayer (binary hot-swap, config reload, key install)
   vpn             Provision and manage WireGuard VPN on pfSense
   providers       Manage trusted Akash providers (saved to ~/.config/oline/trusted-providers.json)
   registry        Embedded OCI container registry (serve, import, list)
   testnet-deploy  Bootstrap a fresh testnet on Akash with validator, faucet, and full sentry array
+  proxy           Deploy and manage the provider-proxy-node (specialty infrastructure)
   console         Interact with Akash Console API (deployments, providers, leases, etc.)
+  authz           Manage AuthZ + FeeGrant delegation for passwordless deployments
   help            Print this message or the help of the given subcommand(s)
 
 Options:
@@ -42,11 +43,11 @@ Options:
 
 ```
 Commands:
-  encrypt         Encrypt mnemonic and store in .env
-  endpoints       Probe Akash RPC/gRPC endpoints and save the fastest to .env
+  encrypt         Encrypt mnemonic and store in ~/.oline/config.enc
+  endpoints       Probe Akash RPC/gRPC endpoints and save the fastest to ~/.oline/config.toml
   deploy          Full automated deployment (phases A → B → C → E)
   sdl             Render SDL templates without broadcasting
-  init            Collect deployment config and write deploy-config.json
+  init            Collect deployment config and write ~/.oline/deploy-config.json
   manage          View and manage active deployments
   test-s3         Test S3/MinIO bucket connectivity
   test-grpc       Test gRPC-Web endpoint health
@@ -55,20 +56,21 @@ Commands:
   sites           Deploy and manage IPFS static websites via MinIO-IPFS on Akash
   refresh         SSH-based node management: push env updates, run scripts, check health
   node            Deploy and manage a dedicated Akash full node
-  firewall        Manage pfSense firewall SSH keys and connectivity
   relayer         Manage a Cosmos IBC relayer (binary hot-swap, config reload, key install)
   vpn             Provision and manage WireGuard VPN on pfSense
   providers       Manage trusted Akash providers (saved to ~/.config/oline/trusted-providers.json)
   registry        Embedded OCI container registry (serve, import, list)
   testnet-deploy  Bootstrap a fresh testnet on Akash with validator, faucet, and full sentry array
+  proxy           Deploy and manage the provider-proxy-node (specialty infrastructure)
   console         Interact with Akash Console API (deployments, providers, leases, etc.)
+  authz           Manage AuthZ + FeeGrant delegation for passwordless deployments
   help            Print this message or the help of the given subcommand(s)
 ```
 
 ### oline encrypt
 
 ```
-Encrypt mnemonic and store in .env
+Encrypt mnemonic and store in ~/.oline/config.enc
 
 Usage: oline encrypt [OPTIONS]
 
@@ -112,7 +114,7 @@ The mnemonic is encrypted with AES-256-GCM using a password-derived key
 ### oline endpoints
 
 ```
-Probe Akash RPC/gRPC endpoints and save the fastest to .env
+Probe Akash RPC/gRPC endpoints and save the fastest to ~/.oline/config.toml
 
 Usage: oline endpoints [OPTIONS] [COMMAND]
 
@@ -244,6 +246,7 @@ OLINE_NON_INTERACTIVE=1 \
 OLINE_MNEMONIC="word1 word2 ... word24" \
 OLINE_PASSWORD=mypassword \
 OLINE_AUTO_SELECT=1 \
+OLINE_NO_AUTHZ=true \
   oline deploy
 ```
 
@@ -354,14 +357,13 @@ cat ./sdl-output/a.yml
 ### oline init
 
 ```
-Collect deployment config and write deploy-config.json
+Collect deployment config and write ~/.oline/deploy-config.json
 
 Usage: oline init [OPTIONS]
 
 Options:
-  -o, --output <OUTPUT>    Path to write deploy-config.json [default: deploy-config.json]
+  -o, --output <OUTPUT>    Path to write deploy-config.json. Default: ~/.oline/deploy-config.json
   -p, --profile <PROFILE>  Config profile to use (mainnet, testnet, local) [env: OLINE_PROFILE=] [default: mainnet]
-  -t, --template <NAME>    Use a named template for non-interactive config generation
       --list-templates     Print available template names and exit
       --examples           Print usage examples and exit
   -h, --help               Print help
@@ -446,6 +448,7 @@ Commands:
   restart     SSH into node, kill process, re-run full start sequence
   logs        Stream container logs from an Akash provider via WebSocket
   tui         Reconnect to a session's TUI log viewer
+  replay      Replay persisted logs from a previous session
   status      Check liveness of deployments in a session
   close       Close one or more active deployments by DSEQ
   drain       Return remaining funds from HD child accounts back to master
@@ -492,31 +495,6 @@ oline manage prune-keys
 # Restart a node to pick up config changes (full re-bootstrap)
 oline manage restart "Phase B - Left Tackle"
 ```
-
-## Debugging Deployments
-
-When a container fails to start or SSH doesn't connect, **always check provider
-logs first** — never retry SSH blindly:
-
-```bash
-# Stream the last 30 lines of a specific service's container logs
-oline manage logs <DSEQ> --service <SERVICE_NAME> --tail 30
-
-# Examples:
-oline manage logs 26523081 --service testnet-sentry-a --tail 30
-oline manage logs 26523081 --service testnet-lb --tail 50
-```
-
-This streams actual container stdout/stderr from the Akash provider via
-WebSocket. Common errors this catches immediately:
-- Missing binaries (`sh: curl: not found`) — wrong or stale Docker image
-- Config errors — bad env vars, missing genesis URL
-- Crash loops — OOM, permission errors, port conflicts
-
-**Standard procedure when bootstrap/SSH fails:**
-1. `oline manage logs <DSEQ> --service <svc> --tail 30` — read the error
-2. Diagnose root cause (image issue? config? provider problem?)
-3. Fix and redeploy — don't waste time retrying a broken container
 
 ---
 
@@ -696,11 +674,11 @@ Options:
       --host <HOST>          SSH host IP or hostname (env: OLINE_PRIVATE_NODE_HOST) [env: OLINE_PRIVATE_NODE_HOST=]
       --port <PORT>          SSH port (env: OLINE_PRIVATE_NODE_P) [env: OLINE_PRIVATE_NODE_P=] [default: 22]
       --key <KEY>            SSH private key path (env: OLINE_PRIVATE_NODE_KEY) [env: OLINE_PRIVATE_NODE_KEY=]
-      --binary <BINARY>      Cosmos daemon binary name (env: OLINE_BINARY) [env: OLINE_BINARY=terpd] [default: terpd]
+      --binary <BINARY>      Cosmos daemon binary name (env: OLINE_BINARY) [env: OLINE_BINARY=] [default: terpd]
       --home <HOME>          Node home directory (env: OLINE_PRIVATE_NODE_HOME) [env: OLINE_PRIVATE_NODE_HOME=]
-      --peers <PEERS>        Persistent peers id@host:port,... (env: OLINE_PERSISTENT_PEERS) [env: OLINE_PERSISTENT_PEERS=a43c1415bc3a58b0881d2c5c2abe857b45f0a7e7@135.181.60.157:26716,58e01ab84eb931a82a024324520021d2e075ec67@185.248.24.16:29656,fdfcac2813a3c2bf66cff73a9e61fb0f0bda21e1@108.28.11.226:26656]
+      --peers <PEERS>        Persistent peers id@host:port,... (env: OLINE_PERSISTENT_PEERS) [env: OLINE_PERSISTENT_PEERS=]
       --snapshot <SNAPSHOT>  Snapshot URL (env: OLINE_SNAP_BASE_URL) [env: OLINE_SNAP_BASE_URL=]
-      --format <FORMAT>      Snapshot format (env: OLINE_SNAP_SAVE_FORMAT) [env: OLINE_SNAP_SAVE_FORMAT=tar.gz] [default: tar.lz4]
+      --format <FORMAT>      Snapshot format (env: OLINE_SNAP_SAVE_FORMAT) [env: OLINE_SNAP_SAVE_FORMAT=] [default: tar.lz4]
   -y, --yes                  Skip confirmation prompt
       --examples             Print usage examples and exit
   -h, --help                 Print help
@@ -1032,84 +1010,6 @@ Subsequent `oline deploy` commands will use these private endpoints.
 
 ---
 
-### oline firewall
-
-```
-Manage pfSense firewall SSH keys and connectivity
-
-Usage: oline firewall [OPTIONS] <COMMAND>
-
-Commands:
-  bootstrap      Install SSH key on a pfSense firewall for passwordless management
-  list           Show saved firewall connections
-  status         Check SSH connectivity to saved firewalls
-  grant-access   Grant a client SSH access to internal servers via pfSense jump host
-  list-clients   Show all granted client access records
-  revoke-access  Revoke a client's SSH access from all their target servers
-  help           Print this message or the help of the given subcommand(s)
-
-Options:
-  -p, --profile <PROFILE>  Config profile to use (mainnet, testnet, local) [env: OLINE_PROFILE=] [default: mainnet]
-      --examples           Print usage examples and exit
-  -h, --help               Print help
-```
-
-#### Examples
-
-# oline firewall — pfSense SSH Key Provisioning
-
-## Bootstrap
-
-```bash
-# Interactive — prompts for host, password
-oline firewall bootstrap
-
-# Specify host and key path
-oline firewall bootstrap --host 192.168.1.1 --user admin --key-path ~/.ssh/oline-server
-
-# Force install method
-oline firewall bootstrap --host 192.168.1.1 --method ssh-copy-id
-
-# Non-interactive
-OLINE_NON_INTERACTIVE=1 PFSENSE_HOST=192.168.1.1 PFSENSE_PASSWORD=pfsense \
-  oline firewall bootstrap --key-path ~/.ssh/oline-server
-
-# Key already installed (just save the record)
-oline firewall bootstrap --host 192.168.1.1 --key-path ~/.ssh/oline-server \
-  --pubkey ~/.ssh/oline-server.pub --key-installed
-
-# Forward key to internal servers via pfSense jump host
-oline firewall bootstrap --host 192.168.1.1 \
-  --forward-to root@10.0.0.50 \
-  --forward-to deploy@10.0.0.51:2222
-```
-
-## List & Status
-
-```bash
-oline firewall list      # show saved firewalls
-oline firewall status    # check SSH connectivity
-```
-
-## Client Access Management
-
-```bash
-# Grant a client SSH access to an internal server via pfSense
-oline firewall grant-access --name alice --pubkey alice.pub --target root@10.0.0.50
-
-# Grant to firewall + target
-oline firewall grant-access --name alice --pubkey alice.pub \
-  --include-firewall --target root@10.0.0.50
-
-# List all client access records
-oline firewall list-clients
-
-# Revoke a client's access
-oline firewall revoke-access --name alice
-```
-
----
-
 ### oline relayer
 
 ```
@@ -1223,24 +1123,43 @@ Options:
           Enter raw mnemonic directly (skip encrypted .env)
       --non-interactive
           Skip interactive prompts — use env vars + defaults
-      --validator-rpc <VALIDATOR_RPC>
-          Use an external validator instead of deploying one (skip Phase V). Format: <RPC_URL> e.g. https://rpc-testnet.terp.network
-      --validator-peer <VALIDATOR_PEER>
-          External validator P2P peer address. Required with --validator-rpc. Format: <node_id>@<host>:<port>
       --profile <PROFILE>
           Config profile to use (default: testnet for testnet-deploy) [default: testnet]
       --resume
           Resume from saved state — accept leases for previously created deployments. Requires --provider-a (and optionally --provider-b, --provider-c)
-      --provider-a <PROVIDER_A>
+      --provider <PROVIDER>
           Provider address for Phase A (snapshot+seed). Used with --resume
-      --provider-b <PROVIDER_B>
-          Provider address for Phase B (tackles). Used with --resume
-      --provider-c <PROVIDER_C>
-          Provider address for Phase C (forwards). Used with --resume
+      --validator-rpc <VALIDATOR_RPC>
+          Use an external validator instead of deploying one (skip Phase V). Sentries sync from genesis independently; wire validator persistent_peers after deploy. Format: <RPC_URL> e.g. https://rpc-testnet.terp.network
+      --validator-p2p <VALIDATOR_P2P>
+          External validator P2P peer address. Required with --validator-rpc. Format: <node_id>@<host>:<port>
+      --dseq <DSEQ>
+          Dseq [default: 0]
       --examples
           Print usage examples and exit
   -h, --help
           Print help
+```
+
+---
+
+### oline proxy
+
+```
+Deploy and manage the provider-proxy-node (specialty infrastructure)
+
+Usage: oline proxy [OPTIONS] <COMMAND>
+
+Commands:
+  deploy  Deploy the provider-proxy-node SDL as a protected specialty deployment
+  status  Show proxy deployment status and on-chain health
+  url     Print the proxy's public URL
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -p, --profile <PROFILE>  Config profile to use (mainnet, testnet, local) [env: OLINE_PROFILE=] [default: mainnet]
+      --examples           Print usage examples and exit
+  -h, --help               Print help
 ```
 
 ---
@@ -1264,6 +1183,26 @@ Commands:
   address      Address balances and transactions
   settings     Deployment settings (auto top-up)
   help         Print this message or the help of the given subcommand(s)
+
+Options:
+  -p, --profile <PROFILE>  Config profile to use (mainnet, testnet, local) [env: OLINE_PROFILE=] [default: mainnet]
+  -h, --help               Print help
+```
+
+---
+
+### oline authz
+
+```
+Manage AuthZ + FeeGrant delegation for passwordless deployments
+
+Usage: oline authz [OPTIONS] <COMMAND>
+
+Commands:
+  setup   One-time setup: generate deployer wallet, broadcast AuthZ + FeeGrant grants
+  status  Query on-chain grant status
+  revoke  Revoke all grants and remove deployer key
+  help    Print this message or the help of the given subcommand(s)
 
 Options:
   -p, --profile <PROFILE>  Config profile to use (mainnet, testnet, local) [env: OLINE_PROFILE=] [default: mainnet]
@@ -1309,6 +1248,7 @@ OLINE_NON_INTERACTIVE=1 \
 OLINE_MNEMONIC="word1 word2 ... word24" \
 OLINE_PASSWORD=mypassword \
 OLINE_AUTO_SELECT=1 \
+OLINE_NO_AUTHZ=true \
   oline deploy
 ```
 

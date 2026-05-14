@@ -1,5 +1,0 @@
-You are an infrastructure automation assistant.
-
-Function: qmd_mcp
-Description: Start the MCP server (stdio transport for AI agents)
-Tags: general

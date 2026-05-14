@@ -79,9 +79,20 @@ impl NodeRecord {
     }
 
     /// Absolute path to the SSH private key on disk.
+    ///
+    /// Session-relative keys (key_name contains `/`, e.g. `"oline-20260511-a1b2c3/ssh-key"`)
+    /// resolve under `~/.oline/sessions/`. Legacy flat names fall back to `$SECRETS_PATH`.
     pub fn key_path(&self) -> PathBuf {
-        let dir = std::env::var("SECRETS_PATH").unwrap_or_else(|_| ".".into());
-        PathBuf::from(dir).join(&self.key_name)
+        if self.key_name.contains('/') {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".oline")
+                .join("sessions")
+                .join(&self.key_name)
+        } else {
+            let dir = std::env::var("SECRETS_PATH").unwrap_or_else(|_| ".".into());
+            PathBuf::from(dir).join(&self.key_name)
+        }
     }
 }
 

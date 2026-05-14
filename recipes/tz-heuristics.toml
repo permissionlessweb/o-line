@@ -1,16 +1,20 @@
 # tz-heuristics.toml — Heuristics for TensorZero function spec generation
-# Used by scripts/docs/gen-tz.py to categorize, tag, and template functions.
+# Used by scripts/gen/gen-tz.py to categorize, tag, and template functions.
+#
+# Semantic enrichment: Trailmark analysis (759 functions, 10110 call edges)
+# confirmed these categories and their module mappings.
 
 # ─── Category keyword lists ──────────────────────────────────────────────────
 # Command names matching any keyword are tagged with that category.
 [categories]
 deploy = ["deploy", "sdl", "bootstrap", "manifest"]
 network = ["dns", "firewall", "vpn", "relayer", "node"]
-storage = ["s3", "snapshot", "refresh"]
-security = ["encrypt", "grant", "tls", "cert"]
-query = ["endpoints", "providers", "registry", "sites"]
-management = ["manage", "init", "list", "status", "sync"]
+storage = ["s3", "snapshot", "minio", "ipfs"]
+security = ["encrypt", "grant", "tls", "cert", "authz"]
+query = ["endpoints", "providers", "registry", "sites", "console"]
+management = ["manage", "init", "list", "status", "sync", "refresh", "session"]
 testing = ["test", "check", "probe"]
+infrastructure = ["proxy", "testnet-deploy"]
 
 # ─── Secrets detection ───────────────────────────────────────────────────────
 [secrets]
@@ -23,33 +27,322 @@ system_prefix = "You are an infrastructure automation assistant."
 user_format = "Execute: {{function_name}}({{args | tojson}})"
 
 # Category-specific system prompt overrides
+# Each prompt includes domain context derived from Trailmark AST analysis:
+# 974 nodes, 759 functions, 2 entrypoints (main, test_provider)
 [templates.category_prompts]
-deploy = "You are an infrastructure automation assistant specializing in Akash Network deployments."
-network = "You are a network operations assistant managing DNS, firewall, and connectivity."
-storage = "You are a storage and data management assistant handling S3, snapshots, and node state."
-security = "You are a security operations assistant managing encryption, certificates, and access control."
-query = "You are an infrastructure query assistant retrieving endpoint and registry information."
-management = "You are a deployment management assistant handling lifecycle operations."
-testing = "You are an infrastructure testing assistant verifying connectivity and health."
+deploy = """\
+You are an infrastructure automation assistant specializing in Akash Network deployments.
+
+ARCHITECTURE CONTEXT:
+O-Line deploys validator infrastructure on Akash using a football metaphor:
+  Phase A (Special Teams): snapshot + seed + MinIO — SDL: a.kickoff-special-teams.yml
+  Phase B (Tackles): left + right sentry nodes — SDL: b.left-and-right-tackle.yml
+  Phase C (Forwards): left + right validator nodes — SDL: c.left-and-right-forwards.yml
+  Phase E (Relayer): IBC relayer — SDL: e.relayer.yml
+  Phase F (Argus): Indexer — SDL: f.argus-indexer.yml
+
+KEY INVARIANTS:
+- cmd_generate_sdl never broadcasts — it only renders templates
+- deploy-config.json never contains secrets (fd.s == true fields are skipped)
+- SDL templates live in templates/sdls/ (configured by SDL_DIR env)
+- Akash HTTP ingress uses port 80 with accept:, not 443. TLS is at the provider's nginx-ingress.
+- Workflow context uses fixed arrays (state(), peer(), endpoints() accessors)
+
+MODULES: config.rs (135 nodes), workflow/oline.rs (54), akash.rs (12), deployer.rs (18)"""
+
+network = """\
+You are a network operations assistant managing DNS, firewall, and connectivity.
+
+ARCHITECTURE CONTEXT:
+- DNS: Cloudflare CNAME/A record upsert (dns/cloudflare.rs, 14 nodes)
+- Firewall: pfSense integration (firewall/pfsense.rs, 20 nodes; firewall/mod.rs, 26 nodes)
+- VPN: WireGuard on pfSense (vpn/pfsense.rs, 14; vpn/keygen.rs, 4; vpn/mod.rs, 15)
+- Relayer: Cosmos IBC binary hot-swap, config reload, key install (cmd/relayer.rs, 13 nodes)
+- Nodes: Full node deployment and management (nodes/mod.rs, 15 nodes)
+
+KEY FACTS:
+- DNS updates use Cloudflare API (CF_API_TOKEN, CF_ZONE_ID env vars)
+- VPN uses x25519_dalek for keygen + headscale_proto/tonic for control plane
+- Relayer supports binary hot-swap without downtime"""
+
+storage = """\
+You are a storage and data management assistant handling S3, snapshots, and node state.
+
+ARCHITECTURE CONTEXT:
+- MinIO: S3-compatible storage deployed in Phase A for snapshot distribution
+- Snapshots: Automated chain state capture + distribution to tackles (snapshots.rs, 11 nodes)
+- IPFS: Static site deployment via MinIO-IPFS gateway (sites/mod.rs, 13 nodes)
+- Log persistence: Historical log storage (log_persistence.rs, 13 nodes)
+
+KEY FACTS:
+- Snapshots pipe from snapshot node to tackles via SSH (distribute-snapshot command)
+- MinIO credentials stored in deploy-config.json (non-secret fields only)
+- Sites command deploys static content through IPFS pinning"""
+
+security = """\
+You are a security operations assistant managing encryption, certificates, and access control.
+
+ARCHITECTURE CONTEXT:
+- Mnemonic encryption: AES-256-GCM with Argon2 key derivation (crypto.rs, 29 nodes)
+- SSH keygen: Ed25519 key generation + SFTP cert upload (crypto.rs)
+- AuthZ: Cosmos AuthZ + FeeGrant delegation for passwordless deployments (authz.rs, 8 nodes)
+- Accounts: BIP44 HD derivation at m/44'/118'/0'/0/{index} (accounts.rs, 4 nodes)
+
+KEY INVARIANTS:
+- deploy-config.json NEVER contains secrets — fields with fd.s == true are skipped
+- Encrypted mnemonic stored in OLINE_ENCRYPTED_MNEMONIC env var
+- AuthZ grants allow fee delegation so deployer key doesn't need constant funding
+- SSH keys generated per-session (~/.oline/sessions/<session-id>/ssh-key)"""
+
+query = """\
+You are an infrastructure query assistant retrieving endpoint and registry information.
+
+ARCHITECTURE CONTEXT:
+- Endpoints: Probes Akash RPC/gRPC, saves fastest to config (cmd/endpoints.rs, 20 nodes)
+- Providers: Trusted provider management (providers.rs, 15 nodes; cmd/providers.rs, 10)
+- Registry: Embedded OCI container registry with serve/import/list (registry/, 23 nodes)
+- Sites: IPFS static site management (cmd/sites.rs, 11 nodes)
+- Console: Akash Console API interaction (cmd/console.rs, 7 nodes)
+
+KEY FACTS:
+- Endpoint probing uses OLINE_GRPC_ENDPOINT and OLINE_RPC_ENDPOINT as defaults
+- Trusted providers saved to ~/.config/oline/trusted-providers.json
+- Registry uses axum for HTTP + bollard for Docker integration"""
+
+management = """\
+You are a deployment management assistant handling lifecycle operations.
+
+ARCHITECTURE CONTEXT:
+- Init: Collects config, writes deploy-config.json (cmd/init.rs, 2 nodes)
+- Manage: View/control active deployments (cmd/deploy.rs, 23 nodes)
+- Refresh: SSH-based day-2 operations — env push, restart, logs, peer injection (cmd/refresh.rs, 9 nodes)
+- Sessions: Episode tracking with UUIDv7 IDs (sessions.rs, 23 nodes)
+- Config: TomlConfig + DeployConfig + PeerInputs (config.rs, 135 nodes — largest module)
+
+KEY FACTS:
+- Sessions store state at ~/.config/oline/sessions/{episode_id}.json
+- Refresh is stateless — no episode_id needed
+- FIELD_DESCRIPTORS is the single source of truth for config fields
+- Config fields flow automatically through prompts, env loading, JSON serialization"""
+
+testing = """\
+You are an infrastructure testing assistant verifying connectivity and health.
+
+ARCHITECTURE CONTEXT:
+- S3 test: Validates MinIO bucket connectivity (cmd/test.rs, 5 nodes)
+- gRPC test: Tests gRPC-Web endpoint health (cmd/test.rs)
+- E2E: Full TLS workflow test requiring Docker (testing/ harness, 100+ nodes total)
+  - docker.rs (14), compose.rs (17), ict_network.rs (14), akash_network.rs (13)
+  - akash_cluster.rs (9), binary.rs (10), test_provider.rs (10)
+
+KEY FACTS:
+- E2E tests use bollard for Docker orchestration
+- Test provider is a separate binary (bin/test_provider.rs, 20 nodes)
+- just e2e runs full TLS workflow test"""
+
+infrastructure = """\
+You are an infrastructure provisioning assistant handling specialized deployments.
+
+ARCHITECTURE CONTEXT:
+- Proxy: Provider-proxy-node deployment (cmd/proxy.rs, 9 nodes)
+- Testnet: Full testnet bootstrap with validator, faucet, sentry array (cmd/testnet.rs, 6 nodes)
+- Both leverage the same workflow engine as production deployments
+
+KEY FACTS:
+- Testnet uses AkashDevCluster for local development
+- Proxy deploys specialty infrastructure with its own SDL template"""
 
 # ─── Model routing defaults ──────────────────────────────────────────────────
 [model]
 name = "default"
 routing = ["default"]
 
+# ─── Per-function semantic hints ─────────────────────────────────────────────
+# Injected into system.minijinja by gen-tz.py via heuristics.function_hints().
+# Derived from Trailmark AST analysis: 759 functions, 10110 call edges.
+# These give each LLM function call specific domain knowledge about
+# what the underlying Rust code does, key invariants, and pitfalls.
+
+[function_hints.oline_deploy]
+text = """\
+Rust entry: cmd::deploy::cmd_deploy() → OLineWorkflow::run()
+Workflow phases: A(special teams) → B(tackles) → C(forwards) → E(relayer)
+Each phase: deploy SDL → wait for lease → bootstrap → signal ready
+Config comes from deploy-config.json (never contains secrets)
+Key files: workflow/oline.rs (54 nodes), workflow/context.rs (19 nodes)"""
+
+[function_hints.oline_bootstrap]
+text = """\
+Rust entry: cmd::deploy::cmd_bootstrap() → OLineWorkflow step functions
+Phase A steps (9): deploy → dns → certs → signal → wait ×2 → minio
+Phase B steps (3): deploy tackles → wait left/right peer
+Phase C steps (1): deploy forwards
+Key files: workflow/phases/phase_a.rs, phase_b.rs, phase_c.rs
+Bootstrap is idempotent — safe to re-run on failure"""
+
+[function_hints.oline_sdl]
+text = """\
+Rust entry: cmd::sdl::cmd_generate_sdl()
+NEVER broadcasts — only renders SDL templates from templates/sdls/
+SDL templates: a.kickoff-special-teams.yml, b.left-and-right-tackle.yml,
+  c.left-and-right-forwards.yml, e.relayer.yml, f.argus-indexer.yml
+Vars populated from FIELD_DESCRIPTORS + deploy-config.json
+Akash HTTP ingress uses port 80 with accept:, not 443"""
+
+[function_hints.oline_dns]
+text = """\
+Rust entry: cmd::dns::cmd_dns_update() → dns::cloudflare::upsert()
+Uses Cloudflare API: CF_API_TOKEN + CF_ZONE_ID env vars
+Creates CNAME records pointing to Akash provider hostnames
+Also called automatically during Phase C bootstrap
+Key file: dns/cloudflare.rs (14 nodes)"""
+
+[function_hints.oline_encrypt]
+text = """\
+Rust entry: cmd::deploy::cmd_encrypt() → crypto::encrypt_mnemonic()
+AES-256-GCM encryption with Argon2id key derivation
+Encrypted mnemonic stored in OLINE_ENCRYPTED_MNEMONIC env var
+Decryption key derived from user-supplied password
+Key file: crypto.rs (29 nodes)"""
+
+[function_hints.oline_endpoints]
+text = """\
+Rust entry: cmd::endpoints::cmd_endpoints()
+Probes OLINE_GRPC_ENDPOINT and OLINE_RPC_ENDPOINT (defaults in .env)
+Saves fastest endpoint to ~/.oline/config.toml
+Used as pre-flight check before deployment
+Key file: cmd/endpoints.rs (20 nodes)"""
+
+[function_hints.oline_init]
+text = """\
+Rust entry: cmd::init::cmd_init()
+Interactive config collection → writes deploy-config.json
+FIELD_DESCRIPTORS drives all prompts and env loading
+Secret fields (fd.s == true) are skipped from JSON output
+Key file: config.rs (135 nodes — largest module)"""
+
+[function_hints.oline_manage]
+text = """\
+Rust entry: cmd::deploy::cmd_manage()
+Lists active Akash deployments by DSEQ
+Shows provider, host, status per deployment
+Reads from Akash on-chain state (no local state needed)
+Key file: cmd/deploy.rs (23 nodes)"""
+
+[function_hints.oline_refresh]
+text = """\
+Rust entry: cmd::refresh::cmd_refresh()
+Stateless SSH-based day-2 operations (no episode_id needed)
+Operations: list, health, env, restart, logs, inject-peers, snapshot-now, update-dns
+Targets nodes by label from ~/.config/oline/nodes.enc
+Node credentials from encrypted storage (AES-256-GCM)
+Key file: cmd/refresh.rs (9 nodes), sessions.rs (23 nodes)"""
+
+[function_hints.oline_test_s3]
+text = """\
+Rust entry: cmd::test::cmd_test_s3()
+Validates MinIO bucket connectivity + read/write round-trip
+Uses S3 credentials from deploy-config.json (non-secret fields)
+Required before Phase A bootstrap to verify snapshot storage
+Key file: cmd/test.rs (5 nodes)"""
+
+[function_hints.oline_test_grpc]
+text = """\
+Rust entry: cmd::test::cmd_test_grpc()
+Tests gRPC-Web endpoint health check
+Verifies port 9090 accessibility on target nodes
+Used as post-deploy validation for Phase C forwards
+Key file: cmd/test.rs (5 nodes)"""
+
+[function_hints.oline_sites]
+text = """\
+Rust entry: cmd::sites::cmd_sites()
+Deploys static sites via MinIO-IPFS gateway on Akash
+Operations: deploy, update, list, remove
+Uploads static files to MinIO → triggers IPFS pinning → deploys gateway SDL
+Key files: cmd/sites.rs (11 nodes), sites/mod.rs (13 nodes)"""
+
+[function_hints.oline_node]
+text = """\
+Rust entry: cmd::node::cmd_node()
+Full node deployment and management on Akash
+Operations: deploy, status, restart, logs
+Uses cosmos-omnibus image with terpd binary
+Key files: cmd/node.rs (5 nodes), nodes/mod.rs (15 nodes)"""
+
+[function_hints.oline_relayer]
+text = """\
+Rust entry: cmd::relayer::cmd_relayer()
+IBC relayer deployment with binary hot-swap support
+Operations: deploy, upgrade-binary, config-reload, install-key
+No downtime during binary upgrades — hot-swaps the relayer binary
+Key file: cmd/relayer.rs (13 nodes)"""
+
+[function_hints.oline_vpn]
+text = """\
+Rust entry: cmd::vpn::cmd_vpn()
+WireGuard VPN on pfSense for secure Akash node connectivity
+Operations: create, remove, list, status
+Uses x25519_dalek for keygen + headscale_proto/tonic for control plane
+Key files: vpn/pfsense.rs (14), vpn/keygen.rs (4), vpn/mod.rs (15)"""
+
+[function_hints.oline_providers]
+text = """\
+Rust entry: cmd::providers::cmd_providers()
+Trusted Akash provider management
+Operations: list, add, remove, verify
+Saves to ~/.config/oline/trusted-providers.json
+Key files: cmd/providers.rs (10 nodes), providers.rs (15 nodes)"""
+
+[function_hints.oline_registry]
+text = """\
+Rust entry: cmd::registry::cmd_registry()
+Embedded OCI container registry with HTTP API
+Operations: serve, import, list, push, pull
+Uses axum for HTTP + bollard for Docker integration
+Key files: registry/ (23 nodes total)"""
+
+[function_hints.oline_testnet_deploy]
+text = """\
+Rust entry: cmd::testnet::cmd_testnet_deploy()
+Full testnet bootstrap: validator + faucet + sentry array
+Uses AkashDevCluster for local development
+No snapshot sync needed — starts from genesis
+Key file: cmd/testnet.rs (6 nodes)"""
+
+[function_hints.oline_proxy]
+text = """\
+Rust entry: cmd::proxy::cmd_proxy()
+Provider-proxy-node deployment on Akash
+Deploys specialty infrastructure with its own SDL template
+Useful for RPC/gRPC proxying to internal nodes
+Key file: cmd/proxy.rs (9 nodes)"""
+
+[function_hints.oline_console]
+text = """\
+Rust entry: cmd::console::cmd_console()
+Akash Console API interaction for deployment management
+Operations: list, create, close, info
+Queries on-chain state via LCD/gRPC endpoints
+Key file: cmd/console.rs (7 nodes)"""
+
+[function_hints.oline_authz]
+text = """\
+Rust entry: cmd::authz::cmd_authz()
+Cosmos AuthZ + FeeGrant delegation for passwordless deployments
+Operations: grant, revoke, exec
+Allows fee delegation so deployer key doesn't need constant funding
+Uses BIP44 HD derivation at m/44'/118'/0'/0/{index}
+Key file: authz.rs (8 nodes), accounts.rs (4 nodes)"""
+
 # ─── Per-target configuration ────────────────────────────────────────────────
 [targets.oline]
 bin_name = "oline"
 cli_ref = "docs/cli-reference.md"
 tools_json = ".team/tools/oline_tools.json"
-output_dir = "recipes/tensorzero"
-
-[targets.ergors]
-bin_name = "ergors"
-cli_ref_cmd = "ssh -p 21212 returniflost@192.168.1.104 'source ~/.cargo/env && cd ~/CW-AGENT/e2e-improvements && cargo run --package ergors -- --help'"
-output_dir = "recipes/tensorzero-ergors"
+output_dir = "recipes/tz"
 
 [targets.qmd]
 bin_name = "qmd"
-cli_ref_cmd = "ssh -p 21212 returniflost@192.168.1.104 'source ~/.nvm/nvm.sh && qmd --help'"
-output_dir = "recipes/tensorzero-qmd"
+cli_ref_cmd = "source ~/.nvm/nvm.sh && qmd --help"
+output_dir = "recipes/tz-qmd"

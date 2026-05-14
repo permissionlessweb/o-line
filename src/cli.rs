@@ -6,9 +6,11 @@ use std::{
 };
 
 use crate::{
-    config::{days_to_date, has_saved_config, load_config, read_encrypted_mnemonic, write_encrypted_mnemonic},
+    config::{
+        days_to_date, has_saved_config, load_config, read_encrypted_mnemonic,
+        write_encrypted_mnemonic, TomlConfig, CONFIG_FIELDS,
+    },
     crypto::{decrypt_mnemonic, encrypt_mnemonic},
-    toml_config::{TomlConfig, CONFIG_FIELDS},
 };
 
 // ── Secret redaction ──
@@ -136,13 +138,12 @@ pub fn unlock_mnemonic() -> Result<(String, String), Box<dyn Error>> {
         return Ok((mnemonic, password));
     }
 
-    // Migration: config.enc stores the full OLineConfig as encrypted JSON.
+    // Migration: config.enc stores the full TomlConfig as encrypted JSON.
     // Extract the mnemonic and re-save it to the new mnemonic.enc path.
     if has_saved_config() {
         tracing::info!("Migrating mnemonic from config.enc → mnemonic.enc …");
         let password = get_password("Enter password: ")?;
-        let cfg = load_config(&password)
-            .ok_or("Failed to decrypt config.enc — wrong password?")?;
+        let cfg = load_config(&password).ok_or("Failed to decrypt config.enc — wrong password?")?;
         let blob = encrypt_mnemonic(&cfg.mnemonic, &password)?;
         write_encrypted_mnemonic(&blob)?;
         tracing::info!("Migration complete. mnemonic.enc written.\n");

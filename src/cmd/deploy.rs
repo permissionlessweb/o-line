@@ -553,8 +553,13 @@ async fn cmd_manage_close(dseqs: &[u64], all: bool) -> Result<(), Box<dyn Error>
 
     let (mnemonic, _password) = unlock_mnemonic()?;
     let config = build_config_from_env(mnemonic.clone(), None);
-    let rpc = config.val("OLINE_RPC_ENDPOINT");
-    let grpc = normalize_grpc_endpoint(&config.val("OLINE_GRPC_ENDPOINT"));
+    // Use config.akash.rpc/grpc directly instead of config.val() which looks for wrong keys
+    let rpc = std::env::var("OLINE_RPC_ENDPOINT")
+        .unwrap_or_else(|_| config.akash.rpc.clone());
+    let grpc = normalize_grpc_endpoint(
+        &std::env::var("OLINE_GRPC_ENDPOINT")
+            .unwrap_or_else(|_| config.akash.grpc.clone())
+    );
 
     let client = AkashClient::new_from_mnemonic(&mnemonic, &rpc, &grpc).await?;
     let signer = KeySigner::new_mnemonic_str(&mnemonic, None)

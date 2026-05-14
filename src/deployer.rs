@@ -1,4 +1,4 @@
-use crate::{config::OLineConfig, providers::TrustedProviderStore};
+use crate::{providers::TrustedProviderStore, TomlConfig};
 use akash_deploy_rs::{
     AkashBackend, AkashClient, Bid, DeployError, DeploymentState, DeploymentWorkflow,
     FileDeploymentStore, InputRequired, KeySigner, ProviderInfo, ServiceEndpoint, Step,
@@ -21,7 +21,7 @@ pub struct AuthzContext {
 pub struct OLineDeployer {
     pub client: AkashClient,
     pub signer: KeySigner,
-    pub config: OLineConfig,
+    pub config: TomlConfig,
     pub password: String,
     pub deployment_store: FileDeploymentStore,
     /// When set, this deployer operates via AuthZ delegation.
@@ -29,10 +29,16 @@ pub struct OLineDeployer {
 }
 
 impl OLineDeployer {
-    pub async fn new(config: OLineConfig, password: String) -> Result<Self, DeployError> {
-        let rpc = config.val("OLINE_RPC_ENDPOINT");
-        let grpc = config.val("OLINE_GRPC_ENDPOINT");
-        let rest = config.val("OLINE_REST_ENDPOINT");
+    pub async fn new(config: TomlConfig, password: String) -> Result<Self, DeployError> {
+        // Use the correct dotted path keys, not env var names
+        let rpc = config.val("akash.rpc");
+        let grpc = config.val("akash.grpc");
+        let rest = config.val("akash.rest");
+
+        // Debug: print what endpoints we're using
+        tracing::info!("  Akash RPC:  {}", rpc);
+        tracing::info!("  Akash gRPC: {}", grpc);
+        tracing::info!("  Akash REST: {}", rest);
 
         let mut client = tokio::time::timeout(
             std::time::Duration::from_secs(15),
@@ -67,7 +73,7 @@ impl OLineDeployer {
     /// The child account signs independently from the master, eliminating
     /// sequence conflicts during parallel deployment.
     pub async fn new_child(
-        config: OLineConfig,
+        config: TomlConfig,
         password: String,
         hd_index: u32,
     ) -> Result<Self, DeployError> {
@@ -111,7 +117,7 @@ impl OLineDeployer {
     /// messages are wrapped in `MsgExec` and executed on behalf of the granter.
     /// No password is needed — the deployer mnemonic is stored unencrypted.
     pub async fn new_authz(
-        config: OLineConfig,
+        config: TomlConfig,
         granter_address: String,
     ) -> Result<Self, DeployError> {
         let rpc = config.val("OLINE_RPC_ENDPOINT");

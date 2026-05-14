@@ -42,7 +42,7 @@ fmt:
 
 # Full workspace sync: build binary → CLI docs → tool schemas → team agents.
 # One command to bring every generated artifact up to date.
-sync: build gen-docs gen-tools team-sync
+sync: build gen-docs gen-tools gen-team-sync
     @echo "Workspace synced (binary, docs, tools, agents)"
 
 alias s := sync

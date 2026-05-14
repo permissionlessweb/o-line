@@ -294,20 +294,18 @@ fn cmd_refresh_remove(dseq: u64) -> Result<(), Box<dyn Error>> {
 /// This mirrors what the deploy workflow does — ensuring the refresh pushes
 /// consistent vars without redeploying.
 pub async fn build_phase_vars(
-    config: &crate::config::OLineConfig,
+    config: &crate::TomlConfig,
     phase: &str,
     password: &str,
 ) -> std::collections::HashMap<String, String> {
-    let secrets = crate::config::oline_config_dir()
-        .to_string_lossy()
-        .into_owned();
+    let fallback_key_path = crate::config::oline_config_dir().join("oline-parallel-key");
     match phase.to_uppercase().as_str() {
         "B" => build_phase_b_vars(config),
         "C" => build_phase_c_vars(config),
         "E" => build_phase_rly_vars(config),
         _ => {
             // Phase A (default)
-            build_phase_a_vars(config, &secrets, password)
+            build_phase_a_vars(config, &fallback_key_path, password)
                 .await
                 .expect("build_phase_a_vars failed")
         }

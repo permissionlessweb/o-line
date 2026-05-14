@@ -4,7 +4,7 @@
 /// master mnemonic.  In v1, all deployments still use the master account since
 /// `AkashClient` bundles connection + signer and can only be constructed from a
 /// mnemonic.  Future work: expose `AkashClient::new_with_signer` upstream or
-/// add per-unit mnemonic support to `OLineConfig`.
+/// add per-unit mnemonic support to `TomlConfig`.
 use akash_deploy_rs::{DeployError, KeySigner};
 use bech32::{ToBase32, Variant};
 use bip32::DerivationPath;

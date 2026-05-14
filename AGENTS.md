@@ -37,7 +37,7 @@ src/
   main.rs                 ← CLI entry (clap commands → cmd_* dispatch)
   lib.rs                  ← Crate root; re-exports; FIELD_DESCRIPTORS
   akash.rs                ← SDL var builders (build_phase_*_vars) + helpers
-  config.rs               ← OLineConfig, FIELD_DESCRIPTORS, DeployConfig, PeerInputs
+  config.rs               ← TomlConfig, FIELD_DESCRIPTORS, DeployConfig, PeerInputs
   crypto.rs               ← SSH keygen, SFTP cert upload, mnemonic encryption
   deployer.rs             ← OLineDeployer (Akash client + signer + store)
   error.rs                ← DeployError

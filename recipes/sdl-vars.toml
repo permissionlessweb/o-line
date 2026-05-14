@@ -4,7 +4,7 @@
 #   [name, source, required, default]
 #
 # source:
-#   "config"   — read from .env / OLineConfig (user must have set this)
+#   "config"   — read from .env / TomlConfig (user must have set this)
 #   "auto"     — oline generates this at deploy time (LLM does NOT output it)
 #   "runtime"  — injected from a previous phase's outputs (peer ids, endpoints)
 #   "input"    — LLM must provide this value when calling populate-sdl
@@ -45,7 +45,7 @@ vars = [
 [snapshot_storage]
 # Set when OLINE_SYNC_METHOD=snapshot (or snapshot node always)
 vars = [
-  ["OLINE_SNAP_PATH",            "config", true,  "snapshots/terpnetwork"],
+  ["OLINE_SNAP_PATH",            "config", true,  "snapshots/terpnetwork/mainnet/"],
   ["OLINE_SNAP_TIME",            "config", false, "00:00:00"],
   ["OLINE_SNAP_FULL_URL",        "config", false, ""],
   ["OLINE_SNAP_SAVE_FORMAT",     "config", false, "tar.gz"],

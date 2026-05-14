@@ -1,12 +1,7 @@
-use crate::config::oline_deploy_config_path;
-use crate::toml_config::{TomlConfig, CONFIG_FIELDS};
-use crate::{cli::*, config::*, templates, with_examples};
-use std::collections::HashSet;
-use std::{
-    error::Error,
-    io::{self, BufRead},
-    path::Path,
-};
+use crate::config::{oline_config_dir, oline_deploy_config_path, DeployConfig, TomlConfig};
+use crate::with_examples;
+use std::{error::Error, path::Path};
+
 
 with_examples! {
     #[derive(clap::Args, Debug, Default)]
@@ -15,9 +10,7 @@ with_examples! {
         #[arg(long, short = 'o')]
         pub output: Option<String>,
 
-        /// Use a named template for non-interactive config generation.
-        #[arg(long, short = 't', value_name = "NAME")]
-        pub template: Option<String>,
+
 
         /// Print available template names and exit.
         #[arg(long)]
@@ -31,36 +24,16 @@ pub async fn cmd_init(args: &InitArgs) -> Result<(), Box<dyn Error>> {
         .output
         .clone()
         .unwrap_or_else(|| oline_deploy_config_path().to_string_lossy().into_owned());
-    // ── list-templates ────────────────────────────────────────────────────────
-    if args.list_templates {
-        tracing::info!("Available templates:\n");
-        for t in templates::list_all() {
-            tracing::info!("  {:20}  {}", t.name, t.description);
-        }
-        return Ok(());
-    }
 
     tracing::info!("=== Init Deployment Config ===\n");
-
-    // ── template (non-interactive) ────────────────────────────────────────────
-    if let Some(ref name) = args.template {
-        let t = templates::find(name).ok_or_else(|| {
-            format!(
-                "Unknown template '{}'. Run `oline init --list-templates` to see options.",
-                name
-            )
-        })?;
-        tracing::info!("  Using template: {} — {}", t.name, t.description);
-        let config = t.build_config();
-        let deploy_config = DeployConfig::from_oline_config(&config);
-        deploy_config.write_to_file(Path::new(&output))?;
-        tracing::info!("\n  Config written to: {}", output);
-        tracing::info!("  Review and customise, then render SDL with:");
-        tracing::info!("    oline sdl --load-config {}", output);
-        return Ok(());
-    }
     let (toml_config, toml_content) = TomlConfig::default_with_template();
-    let oline_config = OLineConfig::from_toml(&toml_config, String::new());
+    // ── write YAML config to ~/.oline/config.toml ──────────────────────────
+    let config_path = oline_config_dir().join("config.toml");
+    std::fs::write(&config_path, &toml_content)?;
+    tracing::info!("  Config written to: {}", config_path.display());
+    // ── end ─────────────────────────────────────────────────────────────────
+
+    let oline_config = TomlConfig::from_toml(&toml_config, String::new());
     let deploy_config = DeployConfig::from_oline_config(&oline_config);
     deploy_config.write_to_file(Path::new(&output))?;
 

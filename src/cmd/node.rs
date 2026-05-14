@@ -11,12 +11,13 @@ use crate::{
     nodes::{NodeRecord, NodeStore},
     with_examples,
 };
-use akash_deploy_rs::{AkashBackend, DeploymentRecord, DeploymentStore, FileDeploymentStore, KeySigner};
+use akash_deploy_rs::{
+    AkashBackend, DeploymentRecord, DeploymentStore, FileDeploymentStore, KeySigner,
+};
 use std::{
     collections::HashMap,
     error::Error,
     io::{self, BufRead},
-    path::PathBuf,
 };
 
 // ── Clap arg structs ──────────────────────────────────────────────────────────
@@ -108,11 +109,18 @@ async fn cmd_node_deploy() -> Result<(), Box<dyn Error>> {
         .map_err(|e| -> Box<dyn Error> { e.into() })?;
 
     // Save deployment record
-    let record = DeploymentRecord::from_state(&state, &password)
-        .map_err(|e| -> Box<dyn Error> { format!("Failed to create deployment record: {}", e).into() })?;
-    deployer.deployment_store.save(&record).await
+    let record =
+        DeploymentRecord::from_state(&state, &password).map_err(|e| -> Box<dyn Error> {
+            format!("Failed to create deployment record: {}", e).into()
+        })?;
+    deployer
+        .deployment_store
+        .save(&record)
+        .await
         .map_err(|e| -> Box<dyn Error> { e.into() })?;
-    let dseq = state.dseq.ok_or("Deployment completed but no DSEQ assigned")?;
+    let dseq = state
+        .dseq
+        .ok_or("Deployment completed but no DSEQ assigned")?;
     tracing::info!("  Deployment saved (DSEQ {})", dseq);
 
     // Push TLS certs as startup sync signal + launch node
@@ -120,7 +128,7 @@ async fn cmd_node_deploy() -> Result<(), Box<dyn Error>> {
         label,
         &endpoints,
         &key_path,
-        &[],  // no pre-start files to verify
+        &[], // no pre-start files to verify
         &vars,
     )
     .await?;
@@ -129,7 +137,13 @@ async fn cmd_node_deploy() -> Result<(), Box<dyn Error>> {
     tracing::info!("\n  Waiting for Akash node RPC to become available...");
     let rpc_ep = OLineDeployer::find_endpoint_by_internal_port(&endpoints, label, 26657);
     let rpc_url = rpc_ep
-        .map(|ep| format!("http://{}:{}", crate::akash::endpoint_hostname(&ep.uri), ep.port))
+        .map(|ep| {
+            format!(
+                "http://{}:{}",
+                crate::akash::endpoint_hostname(&ep.uri),
+                ep.port
+            )
+        })
         .ok_or("No RPC endpoint found in deployment")?;
 
     let mut rpc_ready = false;
@@ -166,10 +180,22 @@ async fn cmd_node_deploy() -> Result<(), Box<dyn Error>> {
     };
 
     let grpc_url = grpc_ep
-        .map(|ep| format!("http://{}:{}", crate::akash::endpoint_hostname(&ep.uri), ep.port))
+        .map(|ep| {
+            format!(
+                "http://{}:{}",
+                crate::akash::endpoint_hostname(&ep.uri),
+                ep.port
+            )
+        })
         .unwrap_or_default();
     let rest_url = rest_ep
-        .map(|ep| format!("http://{}:{}", crate::akash::endpoint_hostname(&ep.uri), ep.port))
+        .map(|ep| {
+            format!(
+                "http://{}:{}",
+                crate::akash::endpoint_hostname(&ep.uri),
+                ep.port
+            )
+        })
         .unwrap_or_default();
 
     // Print summary
@@ -320,7 +346,7 @@ async fn cmd_node_close() -> Result<(), Box<dyn Error>> {
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 /// Build SDL template variables for the Akash full node deployment.
-fn build_node_vars(config: &OLineConfig) -> HashMap<String, String> {
+fn build_node_vars(config: &TomlConfig) -> HashMap<String, String> {
     let mut vars = config.to_sdl_vars();
 
     // Service name
@@ -333,8 +359,7 @@ fn build_node_vars(config: &OLineConfig) -> HashMap<String, String> {
     vars.insert(
         "AKASH_CHAIN_JSON".into(),
         std::env::var("AKASH_CHAIN_JSON").unwrap_or_else(|_| {
-            "https://raw.githubusercontent.com/cosmos/chain-registry/master/akash/chain.json"
-                .into()
+            "https://raw.githubusercontent.com/cosmos/chain-registry/master/akash/chain.json".into()
         }),
     );
 

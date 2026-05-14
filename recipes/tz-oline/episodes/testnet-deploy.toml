@@ -1,0 +1,25 @@
+# Episode: Testnet Bootstrap
+# Deploys a fresh testnet on Akash with validator, faucet, and sentry array.
+
+[episode]
+name = "testnet-deploy"
+description = "Bootstrap a fresh Terp Network testnet on Akash"
+wall_clock = "30-45 min"
+groups = ["genesis", "sentries"]
+
+# IMPORTANT: Use testnet profile for 120u-1 chain
+# Set OLINE_PROFILE=testnet or --profile testnet on all oline commands
+
+[episode.inferences]
+1 = { function = "oline_testnet_deploy", description = "Initialize testnet configuration" }
+2 = { function = "oline_sdl", description = "Populate SDL for genesis group" }
+3 = { function = "oline_deploy", description = "Deploy genesis group (validator + faucet)" }
+4 = { function = "oline_bootstrap", description = "Bootstrap validator and faucet nodes" }
+5 = { function = "oline_endpoints", description = "Wait for validator readiness + capture peer ID" }
+6 = { function = "oline_sdl", description = "Populate SDL for sentry group" }
+7 = { function = "oline_deploy", description = "Deploy sentry group (Phase A + B)" }
+8 = { function = "oline_dns", description = "Update DNS for testnet domains" }
+
+[episode.error_handling]
+resume = "OLINE_PROFILE=testnet oline bootstrap --episode $EID --node <failed-node>  # idempotent"
+notes = "Testnet bootstraps are faster — no snapshot sync needed, starts from genesis. Always use --profile testnet for 120u-1 chain."

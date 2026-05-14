@@ -18,7 +18,7 @@
 //! LB init script and sentry scripts are delivered via SFTP at bootstrap.
 
 use crate::{
-    config::{build_config_from_env, collect_config, OLineConfig},
+    config::{build_config_from_env, collect_config, TomlConfig},
     crypto::{
         ensure_ssh_key_encrypted, generate_credential, push_scripts_sftp,
         verify_files_and_signal_start,
@@ -73,26 +73,17 @@ with_examples! {
 
         /// Provider address for Phase A (snapshot+seed). Used with --resume.
         #[arg(long)]
-        pub provider_a: Option<String>,
-
-        /// Provider address for Phase B (tackles). Used with --resume.
-        #[arg(long)]
-        pub provider_b: Option<String>,
-
-        /// Provider address for Phase C (forwards). Used with --resume.
-        #[arg(long)]
-        pub provider_c: Option<String>,
+        pub provider: Option<String>,
 
         /// Use an external validator instead of deploying one (skip Phase V).
         /// Sentries sync from genesis independently; wire validator persistent_peers after deploy.
         /// Format: <RPC_URL> e.g. https://rpc-testnet.terp.network
         #[arg(long)]
         pub validator_rpc: Option<String>,
-
         /// External validator P2P peer address. Required with --validator-rpc.
         /// Format: <node_id>@<host>:<port>
         #[arg(long)]
-        pub validator_peer: Option<String>,
+        pub validator_p2p: Option<String>,
         /// Dseq
         #[arg(long,default_value = "0")]
         pub dseq: u64,
@@ -141,7 +132,6 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
             decrypt_mnemonic(&blob, &p)
                 .map_err(|e| format!("Failed to decrypt mnemonic: {}. Check OLINE_PASSWORD.", e))?
         };
-        println!("boom");
         (m, p, None)
     } else if args.raw {
         let m = rpassword::prompt_password("Enter mnemonic: ")?;
@@ -164,7 +154,7 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
         drop(lines);
         cfg
     };
-    println!("bap");
+
     // ── 2. Create deployer + preflight ───────────────────────────────────────
     let deployer = if let Some(granter) = authz_granter {
         OLineDeployer::new_authz(config.clone(), granter).await
@@ -177,7 +167,7 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
         .preflight_check()
         .await
         .map_err(|e| -> Box<dyn Error> { e.into() })?;
-    println!("brup");
+
     // ── 3. Shared setup ──────────────────────────────────────────────────────────────────────
     // In AuthZ mode, derive a deterministic password from the deployer mnemonic
     // for SSH key encryption (since no user password is available).
@@ -189,18 +179,18 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
         password.clone()
     };
     std::env::set_var("OLINE_PASSWORD", &effective_password);
-    println!("bop");
+
     // TODO: needs conditionals for when using/not using authz
     let secrets_path = crate::config::oline_config_dir();
     let ssh_key_path: PathBuf = secrets_path.join("oline-testnet-key");
     let ssh_key = ensure_ssh_key_encrypted(&ssh_key_path, &effective_password)?;
     let ssh_pubkey = ssh_key.public_key().to_string();
-    println!("bip");
+
     // ── 4. Validator: external or deploy Phase V ────────────────────────────────
     if let Some(ref ext_rpc) = args.validator_rpc {
         tracing::info!("\n── Using external validator (skip Phase V) ──");
         tracing::info!("  RPC: {}", ext_rpc);
-        if let Some(ref peer) = args.validator_peer {
+        if let Some(ref peer) = args.validator_p2p {
             tracing::info!("  Peer: {}", peer);
         }
 
@@ -230,12 +220,12 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
         }
     }
 
-    let genesis_url = config.val("GENESIS_URL");
+    let genesis_url = config.val("chain.genesis_url");
     if genesis_url.is_empty() {
-        return Err("genesis_url not set in config.toml testnet profile ([profiles.testnet.chain] genesis_url = ...)".into());
+        return Err("genesis_url not set in config.toml testnet profile ([testnet.chain] genesis_url = ...)".into());
     }
     tracing::info!("  Genesis URL: {}", genesis_url);
-    println!("banp");
+
     // ── 5. Build LB var set ───────────────────────────────────────────────────
     let sdl_lb = config
         .load_sdl("testnet-lb.yml")
@@ -256,7 +246,7 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
         };
         // ── Pass 2: Resume — load saved state and accept lease ───────────────
         let pa = args
-            .provider_a
+            .provider
             .as_deref()
             .ok_or("--resume requires --provider-a")?;
 
@@ -277,6 +267,7 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
             .clone()
             .to_state("testnet-lb", &effective_password)
             .map_err(|e| -> Box<dyn Error> { e.into() })?;
+
         DeploymentWorkflow::<AkashClient>::select_provider(&mut state_lb, pa)
             .map_err(|e| -> Box<dyn Error> { e.into() })?;
 
@@ -538,7 +529,7 @@ pub async fn cmd_testnet_deploy(args: &TestnetDeployArgs) -> Result<(), Box<dyn 
 }
 
 fn build_testnet_lb_vars(
-    config: &OLineConfig,
+    config: &TomlConfig,
     chain_id: &str,
     genesis_url: &str,
     ssh_pubkey: &str,

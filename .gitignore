@@ -9,9 +9,10 @@
 data/*.lz4
 data/*.tar.*
 data/*.zst
-
+*/.checksums
 */node-data
 node-data
+.hermes
 node_modules
 
 deploy-config.json

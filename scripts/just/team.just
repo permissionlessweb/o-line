@@ -1,28 +1,28 @@
 # ── Team Management ──────────────────────────────────────────────────────────
 
-team-sync:
-	bash scripts/team-sync.sh
+gen-team-sync:
+	bash scripts/gen/gen-team-sync.sh
 
-team-list:
-	bash scripts/gen/team-list.sh
+gen-team-list:
+	bash scripts/gen/gen-team-list.sh
 
-team-tools:
-	bash scripts/gen/team-tools.sh
+gen-team-tools:
+	bash scripts/gen/gen-team-tools.sh
 
-team-gen spec='oline-tools.yml':
-	bash scripts/gen/team-gen.sh $spec
+gen-team spec='oline-tools.yml':
+	bash scripts/gen/gen-team.sh $spec
 
 team-status:
-	echo "Use 'just team-list' for status"
+	echo "Use 'just gen-team-list' for status"
 
 team-clean:
 	rm -rf .team/ .claude/skills/ .opencode/agents/ gen-tools/
 
-team-update:
-	bash scripts/team-update.sh
+gen-team-update:
+	bash scripts/gen-team-update.sh
 
 team-docs team='special-teams':
-	bash scripts/gen/team-gen.sh {{team}}
+	bash scripts/gen/gen-team.sh {{team}}
 
 # ── Documentation & Tools Generation ────────────────────────────────────────
 
@@ -30,13 +30,13 @@ team-docs team='special-teams':
 # Depends on `release` so we always introspect the same optimized binary
 # that `just install` ships (unified via OLINE_BIN in gen-docs.py).
 gen-docs: release
-	python3 scripts/docs/gen-docs.py
+	python3 scripts/gen/gen-docs.py
 
 gen-tools:
 	#!/usr/bin/env bash
 	set -e
 	echo "==> Generating o-line tools from CLI reference"
-	python3 scripts/docs/gen-tools.py --verbose
+	python3 scripts/gen/gen-tools.py --verbose
 	echo "==> o-line tools generated in .team/tools/"
 	echo "   - oline_tools.json (OpenAI tool schemas)"
 	echo "   - oline_executor.py (Python executor)"
@@ -44,7 +44,7 @@ gen-tools:
 # Generate Mermaid diagrams from trailmark code graph analysis.
 # Requires: trailmark in .venv, trailofbits/skills plugin installed.
 gen-diagrams threshold='15':
-	bash scripts/docs/gen-diagrams.sh --threshold {{threshold}}
+	bash scripts/gen/gen-diagrams.sh --threshold {{threshold}}
 
 # Run trailmark structural analysis (blast radius, taint, complexity).
 trailmark-analyze:

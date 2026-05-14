@@ -1,11 +1,12 @@
 pub mod context;
-pub mod phases;
+pub mod oline;
 pub mod step;
+pub use oline::*;
 
 use crate::deployer::OLineDeployer;
 use akash_deploy_rs::DeployError;
 use context::{OLineContext, PhaseResult};
-use phases::{a, b, c, e, parallel};
+
 use std::io::{BufRead, Lines};
 use step::{DeployPhase, NodeTarget, OLineStep, PeerTarget};
 
@@ -62,36 +63,36 @@ impl OLineWorkflow {
         use OLineStep::*;
         match self.step.clone() {
             // ── Phase A ───────────────────────────────────────────────────────
-            Deploy(DeployPhase::SpecialTeams) => a::deploy_special_teams(self, lines).await,
-            UpdateDns(DeployPhase::SpecialTeams) => a::update_dns(self).await,
-            PushFiles(NodeTarget::Snapshot) => a::push_files_snapshot(self).await,
-            SignalStart(NodeTarget::Snapshot) => a::signal_snapshot_start(self).await,
+            Deploy(DeployPhase::SpecialTeams) => deploy_special_teams(self, lines).await,
+            UpdateDns(DeployPhase::SpecialTeams) => update_dns(self).await,
+            PushFiles(NodeTarget::Snapshot) => push_files_snapshot(self).await,
+            SignalStart(NodeTarget::Snapshot) => signal_snapshot_start(self).await,
             WaitPeer {
                 target: PeerTarget::Snapshot,
                 boot_wait_secs,
-            } => a::wait_snapshot_peer(self, boot_wait_secs).await,
-            PushFiles(NodeTarget::Seed) => a::push_files_seed(self).await,
-            SignalStart(NodeTarget::Seed) => a::signal_seed_start(self).await,
-            PushFiles(NodeTarget::Minio) => a::push_files_minio(self).await,
+            } => wait_snapshot_peer(self, boot_wait_secs).await,
+            PushFiles(NodeTarget::Seed) => push_files_seed(self).await,
+            SignalStart(NodeTarget::Seed) => signal_seed_start(self).await,
+            PushFiles(NodeTarget::Minio) => push_files_minio(self).await,
             WaitPeer {
                 target: PeerTarget::Seed,
                 boot_wait_secs,
-            } => a::wait_seed_peer(self, boot_wait_secs).await,
+            } => wait_seed_peer(self, boot_wait_secs).await,
             // ── Phase B ───────────────────────────────────────────────────────
-            Deploy(DeployPhase::Tackles) => b::deploy_tackles(self, lines).await,
+            Deploy(DeployPhase::Tackles) => deploy_tackles(self, lines).await,
             WaitPeer {
                 target: PeerTarget::LeftTackle,
                 boot_wait_secs,
-            } => b::wait_left_tackle(self, boot_wait_secs).await,
+            } => wait_left_tackle(self, boot_wait_secs).await,
             WaitPeer {
                 target: PeerTarget::RightTackle,
                 boot_wait_secs,
-            } => b::wait_right_tackle(self, boot_wait_secs).await,
+            } => wait_right_tackle(self, boot_wait_secs).await,
             // ── Phase C ───────────────────────────────────────────────────────
-            Deploy(DeployPhase::Forwards) => c::deploy_forwards(self, lines).await,
+            Deploy(DeployPhase::Forwards) => deploy_forwards(self, lines).await,
             // ── Phase E ───────────────────────────────────────────────────────
-            Deploy(DeployPhase::Relayer) => e::deploy_relayer(self, lines).await,
-            UpdateDns(DeployPhase::Relayer) => e::update_dns_relayer(self).await,
+            Deploy(DeployPhase::Relayer) => deploy_relayer(self, lines).await,
+            UpdateDns(DeployPhase::Relayer) => update_dns_relayer(self).await,
             // ── Terminal ──────────────────────────────────────────────────────
             Summary => {
                 self.print_summary();
@@ -100,19 +101,17 @@ impl OLineWorkflow {
             }
             Complete => Ok(StepResult::Complete),
             // ── Parallel deployment path ───────────────────────────────────────
-            FundChildAccounts => parallel::fund_child_accounts(self).await,
-            DeployAllUnits => parallel::deploy_all_units(self, lines).await,
-            SelectAllProviders => parallel::select_all_providers(self, lines).await,
-            UpdateAllDns => parallel::update_all_dns(self).await,
+            FundChildAccounts => oline::fund_child_accounts(self).await,
+            DeployAllUnits => oline::deploy_all_units(self, lines).await,
+            SelectAllProviders => oline::select_all_providers(self, lines).await,
+            UpdateAllDns => oline::update_all_dns(self).await,
             WaitSnapshotReady { timeout_secs } => {
-                parallel::wait_snapshot_ready(self, timeout_secs).await
+                oline::wait_snapshot_ready(self, timeout_secs).await
             }
-            DistributeSnapshot => parallel::distribute_snapshot(self).await,
-            SignalAllNodes => parallel::signal_all_nodes(self).await,
-            InjectPeers => parallel::inject_peers(self).await,
-            WaitAllPeers { boot_wait_secs } => {
-                parallel::wait_all_peers(self, boot_wait_secs).await
-            }
+            DistributeSnapshot => oline::distribute_snapshot(self).await,
+            SignalAllNodes => oline::signal_all_nodes(self).await,
+            InjectPeers => oline::inject_peers(self).await,
+            WaitAllPeers { boot_wait_secs } => oline::wait_all_peers(self, boot_wait_secs).await,
             // Unreachable combinations (e.g. UpdateDns(Tackles)) are compile-guarded
             // by the phase files only ever setting valid next-step transitions.
             _ => unreachable!("unexpected step combination: {:?}", self.step),
@@ -183,16 +182,41 @@ impl OLineWorkflow {
 
         let a_vars = &self.ctx.a_vars;
         let get = |k: &str| a_vars.get(k).map(|s| s.as_str()).unwrap_or("");
-        out.push("  ┌── Public Endpoints ──────────────────────────────────────────────────".to_string());
+        out.push(
+            "  ┌── Public Endpoints ──────────────────────────────────────────────────".to_string(),
+        );
         for (label, rpc, api, grpc, p2p, p2p_port) in [
-            ("Snapshot", "RPC_D_SNAP", "API_D_SNAP", "GRPC_D_SNAP", "P2P_D_SNAP", "P2P_P_SNAP"),
-            ("Seed    ", "RPC_D_SEED", "API_D_SEED", "GRPC_D_SEED", "P2P_D_SEED", "P2P_P_SEED"),
+            (
+                "Snapshot",
+                "RPC_D_SNAP",
+                "API_D_SNAP",
+                "GRPC_D_SNAP",
+                "P2P_D_SNAP",
+                "P2P_P_SNAP",
+            ),
+            (
+                "Seed    ",
+                "RPC_D_SEED",
+                "API_D_SEED",
+                "GRPC_D_SEED",
+                "P2P_D_SEED",
+                "P2P_P_SEED",
+            ),
         ] {
-            let (rpc_d, api_d, grpc_d, p2p_d, p2p_p) = (get(rpc), get(api), get(grpc), get(p2p), get(p2p_port));
-            if !rpc_d.is_empty() { out.push(format!("  │  {} RPC:   https://{}", label, rpc_d)); }
-            if !api_d.is_empty() { out.push(format!("  │  {} API:   https://{}", label, api_d)); }
-            if !grpc_d.is_empty() { out.push(format!("  │  {} gRPC:  {}", label, grpc_d)); }
-            if !p2p_d.is_empty() { out.push(format!("  │  {} P2P:   {}:{}", label, p2p_d, p2p_p)); }
+            let (rpc_d, api_d, grpc_d, p2p_d, p2p_p) =
+                (get(rpc), get(api), get(grpc), get(p2p), get(p2p_port));
+            if !rpc_d.is_empty() {
+                out.push(format!("  │  {} RPC:   https://{}", label, rpc_d));
+            }
+            if !api_d.is_empty() {
+                out.push(format!("  │  {} API:   https://{}", label, api_d));
+            }
+            if !grpc_d.is_empty() {
+                out.push(format!("  │  {} gRPC:  {}", label, grpc_d));
+            }
+            if !p2p_d.is_empty() {
+                out.push(format!("  │  {} P2P:   {}:{}", label, p2p_d, p2p_p));
+            }
         }
         let metadata_url = get("SNAPSHOT_METADATA_URL");
         let dl_domain = get("SNAPSHOT_DOWNLOAD_DOMAIN");
@@ -203,7 +227,9 @@ impl OLineWorkflow {
         if !dl_domain.is_empty() {
             out.push(format!("  │  MinIO download:    https://{}", dl_domain));
         }
-        out.push("  └──────────────────────────────────────────────────────────────────────".to_string());
+        out.push(
+            "  └──────────────────────────────────────────────────────────────────────".to_string(),
+        );
         out
     }
 

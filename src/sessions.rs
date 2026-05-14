@@ -147,17 +147,28 @@ impl OLineSession {
         let short_id = &hex[..6.min(hex.len())];
         let id = format!("oline-{}-{}", date_stamp(now), short_id);
         Self {
-            id,
+            id: id.clone(),
             funding,
             master_address: master_address.to_string(),
             chain_id: chain_id.to_string(),
             accounts: Vec::new(),
             deployments: Vec::new(),
-            ssh_key_path: String::new(),
+            ssh_key_path: format!("{}/ssh-key", id),
             created_at: now,
             updated_at: now,
             authz: None,
         }
+    }
+
+    /// Absolute path to the ephemeral SSH private key for this session.
+    /// Convention: ~/.oline/sessions/<session-id>/ssh-key
+    pub fn ssh_key_path_buf(&self) -> PathBuf {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".oline")
+            .join("sessions")
+            .join(&self.id)
+            .join("ssh-key")
     }
 
     /// Touch the `updated_at` timestamp.

@@ -9,9 +9,9 @@ pub mod deployer;
 pub mod dns;
 pub mod error;
 pub mod firewall;
-pub mod keys;
 #[cfg(feature = "interface")]
 pub mod interface;
+pub mod keys;
 pub mod log_persistence;
 pub mod nodes;
 pub mod providers;
@@ -20,33 +20,32 @@ pub mod runtime;
 pub mod sessions;
 pub mod sites;
 pub mod snapshots;
-pub mod templates;
 pub mod testing;
-pub mod toml_config;
 pub mod tui;
 pub mod vpn;
 pub mod workflow;
 
 pub use cmd::{
     deploy::{
-        cmd_bootstrap_private,cmd_manage,cmd_manage_deployments,BootstrapArgs,DeployArgs,
-        EncryptArgs,ManageArgs,ManageSubcommand,
+        cmd_bootstrap_private, cmd_manage, cmd_manage_deployments, BootstrapArgs, DeployArgs,
+        EncryptArgs, ManageArgs, ManageSubcommand,
     },
-    dns::{cmd_dns,DnsArgs},
-    endpoints::{cmd_endpoints,EndpointsArgs},
+    dns::{cmd_dns, DnsArgs},
+    endpoints::{cmd_endpoints, EndpointsArgs},
     // firewall::{cmd_firewall,FirewallArgs},
-    init::{cmd_init,InitArgs},
-    node::{cmd_node,NodeArgs},
-    providers::{cmd_providers,ProvidersArgs},
-    proxy::{cmd_proxy,ProxyArgs},
-    refresh::{cmd_refresh,RefreshArgs},
-    registry::{cmd_registry,RegistryArgs},
-    relayer::{cmd_relayer,RelayerArgs},
-    sdl::{cmd_generate_sdl,SdlArgs},
-    sites::{cmd_sites,SitesArgs},
-    test::{cmd_test_grpc,cmd_test_s3,TestGrpcArgs,TestS3Args},
-    testnet::{cmd_testnet_deploy,TestnetDeployArgs},
-    vpn::{cmd_vpn,VpnArgs},
+    init::{cmd_init, InitArgs},
+    node::{cmd_node, NodeArgs},
+    providers::{cmd_providers, ProvidersArgs},
+    proxy::{cmd_proxy, ProxyArgs},
+    refresh::{cmd_refresh, RefreshArgs},
+    registry::{cmd_registry, RegistryArgs},
+    relayer::{cmd_relayer, RelayerArgs},
+    sdl::{cmd_generate_sdl, SdlArgs},
+    sites::{cmd_sites, SitesArgs},
+    test::{cmd_test_grpc, cmd_test_s3, TestGrpcArgs, TestS3Args},
+    testnet::{cmd_testnet_deploy, TestnetDeployArgs},
+    vpn::{cmd_vpn, VpnArgs},
 };
+pub use config::TomlConfig;
 
 pub const MAX_RETRIES: u16 = 30;

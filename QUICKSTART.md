@@ -1,6 +1,6 @@
 # O-Line Quickstart
 
-Deploy a complete Terp Network sentry array — snapshot node, seed node, MinIO storage, left/right tackles, and left/right forwards — all in a single command on Akash Network.
+Quickly deploy a complete Terp Network sentry array — snapshot node, seed node, MinIO storage, left/right tackles, and left/right forwards — all in a single command on Akash Network.
 
 ```
                           ┌─────────────────────────────────────┐
@@ -28,172 +28,58 @@ Fund it with at least **80 AKT** — approximately 10 AKT per deployment unit.
 
 ---
 
-## Install
+## Quickstart
+
+Initialize your deployment config and render SDL templates in a few minutes.
 
 ```bash
+# 1. Clone and build
 git clone https://github.com/permissionlessweb/o-line
 cd o-line
 cargo install --path .
+
+# 2. Initialize config (creates ~/.oline/config.yml)
+oline init --list-templates   # see available presets
+oline init --template dev     # choose a template (e.g. 'dev', 'mainnet', 'staging')
+
+# 3. Review and customize ~/.oline/config.yml
+# All fields are documented with comments. Required fields are marked 【required】.
+
+# 4. Render SDL for a specific phase (skip --template if config.yml is already set)
+oline sdl --phase c --template dev
+
+# 5. Deploy (uses .env for secrets — encrypt first)
+oline encrypt                  # prompts for mnemonic, writes encrypted blob to .env
+oline deploy --phase c         # deploys Phase C: left+right forward nodes
 ```
 
-The `oline` binary is now in `~/.cargo/bin/oline`.
-
----
-
-## Step 1 — Copy and fill in `.env`
+For the full deployment pipeline (all phases), run:
 
 ```bash
-cp .env.example .env
+oline deploy                # deploys all phases in parallel
+oline deploy --sequential   # legacy: phases A → B → C → E one at a time
 ```
 
-Open `.env` and fill in the sections below. Required fields are marked **`★`**.
+### Where things go
 
-### Akash Network
+| What | Path |
+|------|------|
+| YAML config (initializer) | `~/.oline/config.yml` |
+| Deploy config (JSON) | `~/.oline/deploy-config.json` |
+| Encrypted mnemonic | `.env` (project root) |
+| SSH keys & TLS certs | `$SECRETS_PATH` or `secrets/` |
+| SDL templates | `templates/sdls/{a,b,c,e}/` |
 
-```env
-# ★ Akash endpoints (defaults usually work)
-OLINE_RPC_ENDPOINT=https://rpc.akashnet.net:443
-OLINE_GRPC_ENDPOINT=https://grpc.akashnet.net:443
-```
+### Source of truth — config fields definition
 
-### Cloudflare DNS  ★ required
+All field definitions live in one place. When you need to find a variable's type, default, or whether it's secret, **go directly to the source**:
 
-```env
-OLINE_CF_API_TOKEN=<your Cloudflare API token with Zone:Edit permissions>
-OLINE_CF_ZONE_ID=<your zone ID — found in Cloudflare dashboard → Overview → right sidebar>
-```
-
-### Your Validator Peer  ★ recommended
-
-```env
-# Peer ID of your home/private validator so tackles connect to it directly.
-OLINE_VALIDATOR_PEER_ID=<nodeid>@<host>:<port>
-```
-
-### Node Subdomains  ★ required for each node you want publicly accessible
-
-Pick subdomains on your Cloudflare-managed domain.
-`oline` creates the CNAME records automatically — you only need to choose the names.
-
-**Phase A — Special Teams (snapshot + seed)**
-
-```env
-# Snapshot node
-RPC_D_SNAP=statesync.terp.network
-P2P_D_SNAP=statesync-peer.terp.network
-# Optional — leave blank to skip
-API_D_SNAP=
-GRPC_D_SNAP=
-
-# Seed node
-RPC_D_SEED=seed-rpc.terp.network
-P2P_D_SEED=seed.terp.network
-API_D_SEED=
-GRPC_D_SEED=
-```
-
-**Phase B — Tackles (sentry nodes that face your validator)**
-
-```env
-RPC_D_TL=tackle-l.terp.network
-P2P_D_TL=tackle-l-peer.terp.network
-RPC_D_TR=tackle-r.terp.network
-P2P_D_TR=tackle-r-peer.terp.network
-```
-
-**Phase C — Forwards (public-facing RPC/API/gRPC)**
-
-```env
-RPC_D_FL=rpc-l.terp.network
-API_D_FL=api-l.terp.network
-GRPC_D_FL=grpc-l.terp.network
-P2P_D_FL=rpc-l-peer.terp.network
-
-RPC_D_FR=rpc-r.terp.network
-API_D_FR=api-r.terp.network
-GRPC_D_FR=grpc-r.terp.network
-P2P_D_FR=rpc-r-peer.terp.network
-```
-
-**Ports** — leave at defaults unless your chain uses non-standard ports:
-
-```env
-RPC_P_SNAP=26657
-P2P_P_SNAP=26656
-# ... (all PORT_* vars default to standard Cosmos ports)
-```
-
-### Snapshot Bootstrap
-
-```env
-# Where nodes download state snapshots on first boot.
-# Defaults point to itrocket.net public snapshots for terpnetwork — change if needed.
-OLINE_SNAP_STATE_URL=https://server-4.itrocket.net/mainnet/terp/.current_state.json
-OLINE_SNAP_BASE_URL=https://server-4.itrocket.net/mainnet/terp/
-```
-
-### Secrets directory
-
-```env
-# Local directory where the deployer saves SSH keys and TLS certs.
-SECRETS_PATH=secrets
-```
-
-Create it:
-
-```bash
-mkdir -p secrets
-```
+- **`src/toml_config.rs:1393`** — `pub const CONFIG_FIELDS: &[ConfigField]` — the single source of truth. Every field (path, description, is_secret flag) is defined here. This is what `oline init` uses to generate `~/.oline/config.yml`.
+- **`src/toml_config.rs:1705`** — `pub const SECRET_PATHS: &[&str]` — list of secret fields.
+- **`src/config.rs:47`** — `pub fn oline_config_dir() -> PathBuf` — defines the `~/.oline` home directory.
 
 ---
-
-## Step 2 — Encrypt your mnemonic
-
-`oline` never stores your mnemonic in plaintext. It encrypts it with AES-256-GCM
-(password-derived with Argon2id) and stores the ciphertext in `.env`.
-
-```bash
-oline encrypt
-```
-
-You will be prompted for:
-1. Your Akash deployer **mnemonic** (24 words)
-2. An **encryption password** (you choose; required again for each deploy)
-
-The encrypted blob is written to `OLINE_ENCRYPTED_MNEMONIC=` in `.env`.
-
----
-
-## Step 3 — Deploy the full array
-
-```bash
-oline deploy
-```
-
-You will be prompted once for your **encryption password**, then the parallel deployment begins automatically.
-
-### What happens
-
-```
-FundChildAccounts     HD-derive 8 child accounts (one per node), fund from master
-DeployAllUnits        Broadcast CreateDeployment for all 8 units simultaneously
-SelectAllProviders    For each unit: display bids, you pick a provider (interactive)
-UpdateAllDns          Create/update all Cloudflare CNAME records in parallel
-WaitSnapshotReady     Poll snapshot node RPC until synced and catching_up=false
-DistributeSnapshot    Fetch archive from snapshot node, push to all 6 sentry nodes
-SignalAllNodes        Push TLS certs via SFTP, fire OLINE_PHASE=start on all nodes
-InjectPeers           SSH-push discovered peer IDs to tackles/forwards
-WaitAllPeers          Poll all node RPCs until each has at least one peer
-Summary               Print DSEQs, endpoints, SSH access instructions
-Complete
-```
-
-**Provider selection** pauses at `SelectAllProviders` — one at a time, in sequence.
-For each unit, `oline` displays available bids sorted by price and waits for you to type
-a number to accept. All other steps are fully automated.
-
----
-
+    
 ## Step 4 — SSH into any node
 
 After deployment completes, `oline` prints an SSH command for each node.

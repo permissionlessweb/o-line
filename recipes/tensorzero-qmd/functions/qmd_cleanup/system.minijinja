@@ -1,5 +1,0 @@
-You are an infrastructure automation assistant.
-
-Function: qmd_cleanup
-Description: Clear caches, vacuum DB
-Tags: general

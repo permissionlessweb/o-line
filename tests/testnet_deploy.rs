@@ -26,13 +26,13 @@
 /// just test testnet deploy            # full Akash deploy (requires infra)
 /// just test testnet all               # everything
 /// ```
-use o_line_sdl::config::{build_config_from_env, OLineConfig};
+use o_line_sdl::{config::build_config_from_env, TomlConfig};
 use std::collections::HashMap;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Build a minimal OLineConfig from env + defaults for template rendering tests.
-fn test_config() -> OLineConfig {
+/// Build a minimal TomlConfig from env + defaults for template rendering tests.
+fn test_config() -> TomlConfig {
     // Set minimum required env vars for template rendering
     std::env::set_var("OMNIBUS_IMAGE", "ghcr.io/akash-network/cosmos-omnibus:test");
     std::env::set_var("SSH_P", "22");
@@ -43,7 +43,7 @@ fn test_config() -> OLineConfig {
 }
 
 /// Build testnet Phase A vars (subset of what build_testnet_a_vars does, without SSH keygen).
-fn test_a_vars(config: &OLineConfig) -> HashMap<String, String> {
+fn test_a_vars(config: &TomlConfig) -> HashMap<String, String> {
     let mut vars = config.to_sdl_vars();
     vars.insert("VALIDATOR_SVC".into(), "testnet-a-validator".into());
     vars.insert("SNAPSHOT_SVC".into(), "testnet-a-snapshot".into());
@@ -80,7 +80,7 @@ fn test_a_vars(config: &OLineConfig) -> HashMap<String, String> {
 }
 
 /// Build testnet Phase B vars for template rendering.
-fn test_b_vars(config: &OLineConfig) -> HashMap<String, String> {
+fn test_b_vars(config: &TomlConfig) -> HashMap<String, String> {
     let mut vars = config.to_sdl_vars();
     vars.insert("LT_SVC".into(), "oline-b-left-tackle".into());
     vars.insert("RT_SVC".into(), "oline-b-right-tackle".into());
@@ -101,7 +101,7 @@ fn test_b_vars(config: &OLineConfig) -> HashMap<String, String> {
 }
 
 /// Build testnet Phase C vars for template rendering.
-fn test_c_vars(config: &OLineConfig) -> HashMap<String, String> {
+fn test_c_vars(config: &TomlConfig) -> HashMap<String, String> {
     let mut vars = config.to_sdl_vars();
     vars.insert("LF_SVC".into(), "oline-c-left-forward".into());
     vars.insert("RF_SVC".into(), "oline-c-right-forward".into());
@@ -245,8 +245,16 @@ fn test_testnet_sdl_render_phase_b() {
         .iter()
         .filter_map(|v| v.as_str().map(|s| s.to_string()))
         .collect();
-    for required_prefix in ["RPC_DOMAIN=", "RPC_P=", "API_D=", "API_P=",
-                            "P2P_D=", "P2P_P=", "GRPC_P=", "GRPC_D="] {
+    for required_prefix in [
+        "RPC_DOMAIN=",
+        "RPC_P=",
+        "API_D=",
+        "API_P=",
+        "P2P_D=",
+        "P2P_P=",
+        "GRPC_P=",
+        "GRPC_D=",
+    ] {
         assert!(
             rt_env_str.iter().any(|e| e.starts_with(required_prefix)),
             "right tackle missing env var starting with '{}'",

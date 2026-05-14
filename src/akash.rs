@@ -11,12 +11,13 @@
 //!   1. Add an `Fd` entry to the relevant `*_FD` constant in `lib.rs`.
 //!   2. Reference `${fd.ev}` in the SDL template.
 //!   Done — no code change needed here.
-use crate::config::OLineConfig;
+
 use crate::crypto::{
     ensure_ssh_key_encrypted, gen_ssh_key, generate_credential, S3_KEY, S3_SECRET,
 };
+use crate::TomlConfig;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ── Statesync trust param auto-fetch ─────────────────────────────────────────
 
@@ -175,8 +176,8 @@ pub fn inject_p2p_nodeport(
 /// `config.to_sdl_vars()` injects all FD-backed vars (chain, image, ports,
 /// domains, snapshot settings, …).  Only computed/generated vars are explicit.
 pub async fn build_phase_a_vars(
-    config: &OLineConfig,
-    secrets_path: &str,
+    config: &TomlConfig,
+    session_key_path: &Path,
     password: &str,
 ) -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
     let mut vars = config.to_sdl_vars();
@@ -188,9 +189,8 @@ pub async fn build_phase_a_vars(
     // ── Random monikers ───────────────────────────────────────────────────────
     vars.insert("SNAPSHOT_MONIKER".into(), generate_credential(12));
     vars.insert("SEED_MONIKER".into(), generate_credential(12));
-    // ── SSH keypair (shared by snapshot + seed + minio for SFTP cert delivery) ─
-    // Reuse existing key if present; generate fresh otherwise. Stored encrypted.
-    let key_path: PathBuf = format!("{}/oline-parallel-key", secrets_path).into();
+    // ── SSH keypair (session-scoped; one key per deployment session) ───────────
+    let key_path = session_key_path.to_path_buf();
     let ssh_key = ensure_ssh_key_encrypted(&key_path, password)?;
     vars.insert("SSH_PUBKEY".into(), ssh_key.public_key().to_string());
     vars.insert(
@@ -292,7 +292,7 @@ pub async fn build_phase_a_vars(
 }
 
 /// Phase B: Left & Right Tackles.
-pub fn build_phase_b_vars(config: &OLineConfig) -> HashMap<String, String> {
+pub fn build_phase_b_vars(config: &TomlConfig) -> HashMap<String, String> {
     let mut vars = config.to_sdl_vars();
 
     // ── Static service names ──────────────────────────────────────────────────
@@ -376,7 +376,7 @@ pub fn build_phase_b_vars(config: &OLineConfig) -> HashMap<String, String> {
 }
 
 /// Phase C: Left & Right Forwards.
-pub fn build_phase_c_vars(config: &OLineConfig) -> HashMap<String, String> {
+pub fn build_phase_c_vars(config: &TomlConfig) -> HashMap<String, String> {
     let mut vars = config.to_sdl_vars();
 
     // ── Static service names ──────────────────────────────────────────────────
@@ -463,7 +463,7 @@ pub fn build_phase_c_vars(config: &OLineConfig) -> HashMap<String, String> {
 }
 
 /// Phase E: IBC Relayer.
-pub fn build_phase_rly_vars(config: &OLineConfig) -> HashMap<String, String> {
+pub fn build_phase_rly_vars(config: &TomlConfig) -> HashMap<String, String> {
     let mut vars = config.to_sdl_vars();
 
     // ── SSH key for cert delivery (bootstrap) ─────────────────────────────────
@@ -491,7 +491,7 @@ pub fn build_phase_rly_vars(config: &OLineConfig) -> HashMap<String, String> {
 
 /// Phase G: Standalone MinIO-IPFS Gateway for static website hosting.
 pub fn build_ipfs_site_vars(
-    config: &OLineConfig,
+    config: &TomlConfig,
     gateway_domain: &str,
     bucket: &str,
 ) -> HashMap<String, String> {
@@ -562,7 +562,7 @@ pub fn build_ipfs_site_vars(
 }
 
 /// Phase F: Argus Indexer.
-pub fn build_phase_f_vars(config: &OLineConfig) -> HashMap<String, String> {
+pub fn build_phase_f_vars(config: &TomlConfig) -> HashMap<String, String> {
     let mut vars = config.to_sdl_vars();
 
     // ── Random moniker ────────────────────────────────────────────────────────

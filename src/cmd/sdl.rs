@@ -1,13 +1,7 @@
 use akash_deploy_rs::AkashBackend;
 
 use crate::{
-    akash::*,
-    authz::*,
-    cli::*,
-    config::*,
-    crypto::decrypt_mnemonic,
-    deployer::OLineDeployer,
-    toml_config::{TomlConfig, CONFIG_FIELDS},
+    akash::*, authz::*, cli::*, config::*, crypto::decrypt_mnemonic, deployer::OLineDeployer,
     with_examples,
 };
 use std::{
@@ -239,10 +233,10 @@ pub async fn cmd_generate_sdl(
             .map_err(|e| format!("Cannot read '{}': {}", cfg_path, e))?;
         let deploy_config: DeployConfig =
             serde_json::from_str(&raw).map_err(|e| format!("Invalid deploy-config.json: {}", e))?;
-        // Rebuild OLineConfig from deploy-config values + env overrides
+        // Rebuild TomlConfig from deploy-config values + env overrides
         let mut toml_cfg = TomlConfig::from_defaults();
         for field in CONFIG_FIELDS {
-            let env_var = crate::toml_config::env_key(field.path);
+            let env_var = crate::config::env_key(field.path);
             if let Some(saved) = deploy_config.config.get(&env_var) {
                 if !saved.is_empty() {
                     toml_cfg.set_value(field.path, saved.clone());
@@ -259,8 +253,7 @@ pub async fn cmd_generate_sdl(
             }
         }
         toml_cfg.apply_env_overrides();
-        let cfg = OLineConfig::from_toml(&toml_cfg, String::new());
-        cfg
+        TomlConfig::from_toml(&toml_cfg, String::new())
     } else {
         // Interactive collection
         let saved = if has_saved_config() {
@@ -296,7 +289,7 @@ pub async fn cmd_generate_sdl(
                 };
                 toml_cfg.set_value(field.path, value);
             }
-            OLineConfig::from_toml(&toml_cfg, String::new())
+            TomlConfig::from_toml(&toml_cfg, String::new())
         };
         cfg
     };
@@ -322,9 +315,9 @@ pub async fn cmd_generate_sdl(
     };
 
     let mut rendered_files: Vec<(&str, String)> = Vec::new();
-    let secrets = crate::config::oline_config_dir()
-        .to_string_lossy()
-        .into_owned();
+    let secrets_dir = crate::config::oline_config_dir();
+    // Non-session context: fall back to a legacy path under oline config dir.
+    let fallback_key_path = secrets_dir.join("oline-parallel-key");
 
     // Phase A generates SSH keys — prompt for encryption password
     let key_password = if matches!(phase.as_str(), "a" | "all") {
@@ -335,7 +328,7 @@ pub async fn cmd_generate_sdl(
 
     match phase.as_str() {
         "a" => {
-            let vars = build_phase_a_vars(&config, &secrets, &key_password).await?;
+            let vars = build_phase_a_vars(&config, &fallback_key_path, &key_password).await?;
             rendered_files.push((
                 "a.yml",
                 render("Phase A: Kickoff Special Teams", &sdl_a, &vars)?,
@@ -365,7 +358,7 @@ pub async fn cmd_generate_sdl(
         }
         "all" => {
             let (a, b, c, e, f) = (
-                build_phase_a_vars(&config, &secrets, &key_password).await?,
+                build_phase_a_vars(&config, &fallback_key_path, &key_password).await?,
                 build_phase_b_vars(&config),
                 build_phase_c_vars(&config),
                 build_phase_rly_vars(&config),
