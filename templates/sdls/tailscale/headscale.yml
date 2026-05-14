@@ -45,7 +45,7 @@ services:
                 listen_addr: 0.0.0.0:8080
                 metrics_listen_addr: 0.0.0.0:9090
                 grpc_listen_addr: 0.0.0.0:50443
-                grpc_allow_insecure: true
+                grpc_allow_insecure: false
                 noise:
                   private_key_path: /var/lib/headscale/noise_private.key
                 prefixes:
@@ -82,7 +82,7 @@ services:
                       - 1.1.1.1
                       - 1.0.0.1
                 unix_socket: /var/run/headscale/headscale.sock
-                unix_socket_permission: "0770"
+                unix_socket_permission: "0700"
                 log:
                   level: info
                 policy:
@@ -115,15 +115,15 @@ services:
                   echo "=== Creating admin user ==="
                   /ko-app/headscale users create admin
                   echo "=== Creating preauth key (reusable, 10yr expiry) ==="
-                  /ko-app/headscale preauthkeys create --user admin --reusable --expiration 87600h
+                  /ko-app/headscale preauthkeys create --user admin --reusable --expiration 710h
                 fi
 
-                echo "=== Existing users ==="
-                /ko-app/headscale users list
-                echo "=== API key for remote management ==="
-                /ko-app/headscale apikeys create --expiration 87600h
-                echo "=== Preauth keys ==="
-                /ko-app/headscale preauthkeys list --user admin
+                # echo "=== Existing users ==="
+                # /ko-app/headscale users list
+                # echo "=== API key for remote management ==="
+                /ko-app/headscale apikeys create --expiration 710h
+                # echo "=== Preauth keys ==="
+                # /ko-app/headscale preauthkeys list --user admin
 
                 # Wait for headscale process
                 wait $HEADSCALE_PID
@@ -141,16 +141,16 @@ services:
               proto: udp
               to:
                   - global: true
-            # gRPC API — remote control via headscale CLI from another machine
-            - port: 50443
-              as: 50443
-              to:
-                  - global: true
-            # Metrics — internal only, expose if monitoring is needed
-            - port: 9090
-              as: 9090
-              to:
-                  - global: true
+            # # gRPC API — remote control via headscale CLI from another machine
+            # - port: 50443
+            #   as: 50443
+            #   to:
+            #       - global: true
+            # # Metrics — internal only, expose if monitoring is needed
+            # - port: 9090
+            #   as: 9090
+            #   to:
+            #       - global: true
         env:
             - HEADSCALE_DOMAIN=${HEADSCALE_DOMAIN}
             - HEADSCALE_BASE_DOMAIN=${HEADSCALE_BASE_DOMAIN}
